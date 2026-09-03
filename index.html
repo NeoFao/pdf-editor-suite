@@ -113,12 +113,14 @@
     <!-- Lado Derecho: Deshacer / Rehacer, Zoom y Guardar PDF -->
     <div class="flex items-center gap-1.5 sm:gap-2">
       <!-- Deshacer / Rehacer -->
-      <div class="hidden sm:flex items-center bg-slate-900 rounded-lg p-0.5 border border-slate-800 text-xs">
-        <button id="btn-undo" class="px-2 py-1 hover:text-white text-slate-400 disabled:opacity-30" title="Deshacer (Ctrl + Z)">
-          <i class="fa-solid fa-rotate-left"></i>
+      <div class="flex items-center bg-slate-900 rounded-lg p-0.5 border border-slate-800 text-xs shadow-sm">
+        <button id="btn-undo" class="px-2.5 py-1 hover:text-white text-slate-300 flex items-center gap-1.5 transition-colors" title="Deshacer (Ctrl + Z)">
+          <i class="fa-solid fa-rotate-left text-indigo-400"></i>
+          <span class="hidden md:inline text-[11px] font-medium">Deshacer</span>
         </button>
-        <button id="btn-redo" class="px-2 py-1 hover:text-white text-slate-400 disabled:opacity-30" title="Rehacer (Ctrl + Y)">
-          <i class="fa-solid fa-rotate-right"></i>
+        <button id="btn-redo" class="px-2.5 py-1 hover:text-white text-slate-300 flex items-center gap-1.5 transition-colors" title="Rehacer (Ctrl + Y)">
+          <i class="fa-solid fa-rotate-right text-indigo-400"></i>
+          <span class="hidden md:inline text-[11px] font-medium">Rehacer</span>
         </button>
       </div>
 
@@ -181,6 +183,15 @@
       
       <!-- CONTENIDO TAB 1: EDITAR & ANOTAR -->
       <div id="ribbon-sec-edit" class="ribbon-content-section flex items-center gap-1.5">
+        <button class="ribbon-btn" id="btn-ribbon-undo" title="Deshacer última acción (Ctrl + Z)">
+          <i class="fa-solid fa-rotate-left text-indigo-400"></i>
+          <span>Deshacer</span>
+        </button>
+        <button class="ribbon-btn" id="btn-ribbon-redo" title="Rehacer última acción (Ctrl + Y)">
+          <i class="fa-solid fa-rotate-right text-indigo-400"></i>
+          <span>Rehacer</span>
+        </button>
+        <div class="h-6 w-px bg-slate-800 mx-1"></div>
         <button class="ribbon-btn active" data-action="tool" data-tool="select" title="Seleccionar y mover elementos (V)">
           <i class="fa-solid fa-arrow-pointer"></i>
           <span>Cursor</span>

@@ -12,6 +12,7 @@ class UnifiedAcrobatApp {
   constructor() {
     this.renderScale = 1.4; // Alta nitidez visual
     this.renderedPages = new Map(); // pageNum -> { canvas, overlayCanvas, ctx, overlayCtx }
+    window.unifiedApp = this;
   }
 
   init() {
@@ -362,6 +363,36 @@ class UnifiedAcrobatApp {
           ctx.fill();
         }
       } else if (tool === 'text') {
+        // 1. Comprobar si el clic cayó sobre o dentro de un bloque de texto existente
+        const elementsUnderCursor = document.elementsFromPoint(e.clientX, e.clientY);
+        const textBlockEl = elementsUnderCursor.find(el => el.classList?.contains('acrobat-text-block') || el.closest?.('.acrobat-text-block'));
+        if (textBlockEl) {
+          const actualBlock = textBlockEl.classList?.contains('acrobat-text-block') ? textBlockEl : textBlockEl.closest('.acrobat-text-block');
+          const content = actualBlock.querySelector('.text-block-content');
+          if (content) {
+            this.activateLiveTextEditing(actualBlock, content);
+            return;
+          }
+        }
+
+        // 2. Comprobar proximidad a bloques de texto de esta página (tolerancia inteligente de 14px)
+        const pageObj = this.renderedPages.get(pageNum);
+        if (pageObj && pageObj.wrapper) {
+          const pageBlocks = pageObj.wrapper.querySelectorAll('.acrobat-text-block');
+          for (const b of pageBlocks) {
+            const bRect = b.getBoundingClientRect();
+            if (e.clientX >= bRect.left - 12 && e.clientX <= bRect.right + 12 &&
+                e.clientY >= bRect.top - 8 && e.clientY <= bRect.bottom + 8) {
+              const content = b.querySelector('.text-block-content');
+              if (content) {
+                this.activateLiveTextEditing(b, content);
+                return;
+              }
+            }
+          }
+        }
+
+        // 3. Solo si no hay texto existente en esa zona, crear cuadro de texto libre
         const rect = canvas.getBoundingClientRect();
         const cssCoords = {
           x: e.clientX - rect.left,
@@ -421,32 +452,34 @@ class UnifiedAcrobatApp {
 
       if (tool === 'pencil' || tool === 'highlighter') {
         if (path.length > 1) {
-          pageAnn.strokes.push({
+          const stroke = {
             tool: tool,
             points: [...path],
             color: tool === 'highlighter' ? (window.docState.properties.highlighterColor || '#facc15') : window.docState.properties.color,
             lineWidth: tool === 'highlighter' ? window.docState.properties.highlighterWidth * this.renderScale : window.docState.properties.lineWidth * this.renderScale,
             alpha: tool === 'highlighter' ? 0.35 : window.docState.properties.opacity
-          });
-          window.docState.pushUndo({ type: 'draw', pageNum });
+          };
+          pageAnn.strokes.push(stroke);
+          window.docState.pushUndo({ type: 'stroke', pageNum, stroke });
         }
       } else if (tool === 'eraser') {
         if (path.length > 0) {
-          pageAnn.strokes.push({
+          const stroke = {
             tool: 'pencil',
             points: [...path],
             color: '#ffffff',
             lineWidth: 26 * this.renderScale,
             alpha: 1.0
-          });
-          window.docState.pushUndo({ type: 'draw', pageNum });
+          };
+          pageAnn.strokes.push(stroke);
+          window.docState.pushUndo({ type: 'stroke', pageNum, stroke });
           window.showToast('Contenido borrado.', 'info');
         }
       } else if (tool === 'rect') {
         if (path.length > 1) {
           const start = path[0];
           const end = path[path.length - 1];
-          pageAnn.strokes.push({
+          const stroke = {
             tool: 'rect',
             x: Math.min(start.x, end.x),
             y: Math.min(start.y, end.y),
@@ -454,8 +487,9 @@ class UnifiedAcrobatApp {
             height: Math.abs(end.y - start.y),
             color: window.docState.properties.color,
             lineWidth: window.docState.properties.lineWidth * this.renderScale
-          });
-          window.docState.pushUndo({ type: 'draw', pageNum });
+          };
+          pageAnn.strokes.push(stroke);
+          window.docState.pushUndo({ type: 'stroke', pageNum, stroke });
         }
       }
 
@@ -563,6 +597,21 @@ class UnifiedAcrobatApp {
     const deleteBtn = block.querySelector('.text-btn-delete');
     let hasBeenMoved = false;
 
+    // Prevenir que eventos pointerdown traspasen al canvas inferior
+    block.addEventListener('pointerdown', (e) => {
+      const tool = window.docState.activeTool;
+      if (tool === 'text' || tool === 'select' || tool === 'eraser') {
+        e.stopPropagation();
+      }
+    });
+
+    contentEl.addEventListener('pointerdown', (e) => {
+      const tool = window.docState.activeTool;
+      if (tool === 'text' || tool === 'select' || tool === 'eraser') {
+        e.stopPropagation();
+      }
+    });
+
     // 1. Clic para editar o borrar
     contentEl.addEventListener('click', (e) => {
       const tool = window.docState.activeTool;
@@ -570,7 +619,16 @@ class UnifiedAcrobatApp {
       // Si la herramienta es el Borrador, borrar este texto inmediatamente
       if (tool === 'eraser') {
         e.stopPropagation();
-        this.maskOriginalText(pageNum, meta);
+        const maskStroke = this.maskOriginalText(pageNum, meta);
+        window.docState.pushUndo({
+          type: 'delete_text',
+          pageNum,
+          blockId: block.id,
+          blockHtml: block.outerHTML,
+          textLayerId: `acrobat-text-layer-${pageNum}`,
+          meta,
+          maskStroke
+        });
         block.remove();
         window.showToast('Texto eliminado del documento.', 'info');
         return;
@@ -579,19 +637,7 @@ class UnifiedAcrobatApp {
       if (tool !== 'text' && tool !== 'select') return;
 
       e.stopPropagation();
-      if (contentEl.isContentEditable) return;
-
-      // Entrar en modo edición interactivo
-      block.classList.add('editing');
-      contentEl.contentEditable = 'true';
-      contentEl.style.color = window.docState.properties.textColor || window.docState.properties.color || '#0f172a';
-
-      contentEl.focus();
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(contentEl);
-      sel.removeAllRanges();
-      sel.addRange(range);
+      this.activateLiveTextEditing(block, contentEl);
     });
 
     contentEl.addEventListener('keydown', (e) => {
@@ -608,9 +654,12 @@ class UnifiedAcrobatApp {
       const pageAnn = window.docState.initPageAnnotations(pageNum);
 
       if (currentText !== meta.str) {
+        const wasModifiedBefore = block.classList.contains('modified');
         block.classList.add('modified');
 
         const existingIdx = pageAnn.texts.findIndex(t => t.id === block.id);
+        const oldText = existingIdx >= 0 ? pageAnn.texts[existingIdx].text : meta.str;
+
         const record = {
           id: block.id,
           isReplacement: true,
@@ -631,8 +680,16 @@ class UnifiedAcrobatApp {
           pageAnn.texts[existingIdx] = record;
         } else {
           pageAnn.texts.push(record);
-          window.docState.pushUndo({ type: 'text', pageNum });
         }
+
+        window.docState.pushUndo({
+          type: 'edit_text',
+          pageNum,
+          blockId: block.id,
+          oldText: oldText,
+          newText: currentText,
+          wasModified: wasModifiedBefore
+        });
 
         window.showToast('Texto modificado en la hoja.', 'success');
       }
@@ -641,7 +698,16 @@ class UnifiedAcrobatApp {
     // 2. Botón para eliminar texto (tapa con parche blanco en el PDF)
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      this.maskOriginalText(pageNum, meta);
+      const maskStroke = this.maskOriginalText(pageNum, meta);
+      window.docState.pushUndo({
+        type: 'delete_text',
+        pageNum,
+        blockId: block.id,
+        blockHtml: block.outerHTML,
+        textLayerId: `acrobat-text-layer-${pageNum}`,
+        meta,
+        maskStroke
+      });
       block.remove();
       window.showToast('Texto eliminado del documento.', 'info');
     });
@@ -700,8 +766,17 @@ class UnifiedAcrobatApp {
           pageAnn.texts[existingIdx] = record;
         } else {
           pageAnn.texts.push(record);
-          window.docState.pushUndo({ type: 'text', pageNum });
         }
+
+        window.docState.pushUndo({
+          type: 'move_text',
+          pageNum,
+          blockId: block.id,
+          oldLeft: initialLeft,
+          oldTop: initialTop,
+          newLeft: finalLeft,
+          newTop: finalTop
+        });
 
         window.showToast('Texto movido a nueva posición.', 'success');
       };
@@ -711,10 +786,28 @@ class UnifiedAcrobatApp {
     });
   }
 
+  activateLiveTextEditing(block, contentEl) {
+    if (!block || !contentEl) return;
+    if (contentEl.isContentEditable) return;
+
+    block.classList.add('editing');
+    contentEl.contentEditable = 'true';
+    contentEl.style.color = window.docState.properties.textColor || window.docState.properties.color || '#0f172a';
+
+    contentEl.focus();
+    try {
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(contentEl);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } catch(err){}
+  }
+
   maskOriginalText(pageNum, meta) {
     const pageAnn = window.docState.initPageAnnotations(pageNum);
     // Añade un rectángulo blanco sólido para tapar el texto original
-    pageAnn.strokes.push({
+    const maskStroke = {
       tool: 'rect',
       x: (meta.left - 2) * this.renderScale,
       y: (meta.top - 1) * this.renderScale,
@@ -723,11 +816,13 @@ class UnifiedAcrobatApp {
       color: '#ffffff',
       isMask: true,
       fill: true
-    });
+    };
+    pageAnn.strokes.push(maskStroke);
     this.redrawPageAnnotations(pageNum);
+    return maskStroke;
   }
 
-  insertInlineTextBox(pageNum, cssCoords) {
+  insertInlineTextBox(pageNum, cssCoords, prefilledText = '') {
     const pageObj = this.renderedPages.get(pageNum);
     if (!pageObj) return;
 
@@ -741,17 +836,22 @@ class UnifiedAcrobatApp {
     box.style.fontSize = `${window.docState.properties.fontSize || 16}px`;
     box.style.color = window.docState.properties.textColor || window.docState.properties.color || '#0f172a';
 
+    const defaultText = prefilledText || 'Escribe aquí...';
+
     box.innerHTML = `
       <div class="text-block-toolbar">
         <span class="text-btn-drag" title="Arrastrar para mover"><i class="fa-solid fa-arrows-up-down-left-right"></i></span>
         <span class="text-btn-delete" title="Eliminar cuadro"><i class="fa-solid fa-trash-can"></i></span>
       </div>
-      <div class="interactive-text-content" contenteditable="true" spellcheck="false">Escribe aquí...</div>
+      <div class="interactive-text-content" contenteditable="true" spellcheck="false">${defaultText}</div>
     `;
 
     const contentEl = box.querySelector('.interactive-text-content');
     const dragBtn = box.querySelector('.text-btn-drag');
     const deleteBtn = box.querySelector('.text-btn-delete');
+
+    // Prevenir fuga de pointerdown al canvas
+    box.addEventListener('pointerdown', (e) => e.stopPropagation());
 
     // Permitir editar en cualquier momento al hacer clic
     contentEl.addEventListener('click', (e) => {
@@ -795,15 +895,28 @@ class UnifiedAcrobatApp {
         pageAnn.texts[existingIdx] = record;
       } else {
         pageAnn.texts.push(record);
-        window.docState.pushUndo({ type: 'text', pageNum });
+        window.docState.pushUndo({
+          type: 'add_text',
+          pageNum,
+          boxId: box.id,
+          record
+        });
       }
     });
 
     // Eliminar
     deleteBtn.addEventListener('click', (e) => {
       e.stopPropagation();
-      box.remove();
       const pageAnn = window.docState.initPageAnnotations(pageNum);
+      const rec = pageAnn.texts.find(t => t.id === box.id);
+      window.docState.pushUndo({
+        type: 'delete_box',
+        pageNum,
+        boxId: box.id,
+        boxHtml: box.outerHTML,
+        record: rec
+      });
+      box.remove();
       pageAnn.texts = pageAnn.texts.filter(t => t.id !== box.id);
       window.showToast('Cuadro de texto eliminado.', 'info');
     });
@@ -840,6 +953,16 @@ class UnifiedAcrobatApp {
           pageAnn.texts[existingIdx].x = finalLeft * this.renderScale;
           pageAnn.texts[existingIdx].y = finalTop * this.renderScale;
         }
+
+        window.docState.pushUndo({
+          type: 'move_box',
+          pageNum,
+          boxId: box.id,
+          oldLeft: initialLeft,
+          oldTop: initialTop,
+          newLeft: finalLeft,
+          newTop: finalTop
+        });
       };
 
       document.addEventListener('mousemove', onMouseMove);
@@ -848,16 +971,20 @@ class UnifiedAcrobatApp {
 
     wrapper.appendChild(box);
 
-    // Foco automático con cursor al instante
-    setTimeout(() => {
-      box.classList.add('editing');
-      contentEl.focus();
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(contentEl);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }, 20);
+    // Foco automático con cursor al instante si es nuevo
+    if (!prefilledText) {
+      setTimeout(() => {
+        box.classList.add('editing');
+        contentEl.focus();
+        try {
+          const sel = window.getSelection();
+          const range = document.createRange();
+          range.selectNodeContents(contentEl);
+          sel.removeAllRanges();
+          sel.addRange(range);
+        } catch(err){}
+      }, 20);
+    }
   }
 
   redrawPageAnnotations(pageNum) {
@@ -1403,6 +1530,276 @@ class UnifiedAcrobatApp {
 
     // Guardar PDF
     document.getElementById('btn-save-pdf')?.addEventListener('click', () => this.exportAndDownloadPDF());
+
+    // Conectar Botones Deshacer y Rehacer (Barra superior y Ribbon)
+    document.getElementById('btn-undo')?.addEventListener('click', () => this.undo());
+    document.getElementById('btn-redo')?.addEventListener('click', () => this.redo());
+    document.getElementById('btn-ribbon-undo')?.addEventListener('click', () => this.undo());
+    document.getElementById('btn-ribbon-redo')?.addEventListener('click', () => this.redo());
+
+    window.docState.on('historyChanged', () => this.updateUndoRedoButtons());
+    this.updateUndoRedoButtons();
+  }
+
+  undo() {
+    const state = window.docState;
+    if (!state.undoStack || state.undoStack.length === 0) {
+      window.showToast('No hay más acciones para deshacer.', 'info');
+      return;
+    }
+
+    const action = state.undoStack.pop();
+    state.redoStack.push(action);
+
+    switch (action.type) {
+      case 'stroke': {
+        const pageAnn = state.annotations[action.pageNum];
+        if (pageAnn && pageAnn.strokes) {
+          const idx = pageAnn.strokes.lastIndexOf(action.stroke);
+          if (idx !== -1) pageAnn.strokes.splice(idx, 1);
+          else pageAnn.strokes.pop();
+          this.redrawPageAnnotations(action.pageNum);
+        }
+        break;
+      }
+      case 'draw': {
+        const pageAnn = state.annotations[action.pageNum];
+        if (pageAnn && pageAnn.strokes && pageAnn.strokes.length > 0) {
+          const popped = pageAnn.strokes.pop();
+          action.stroke = popped;
+          this.redrawPageAnnotations(action.pageNum);
+        }
+        break;
+      }
+      case 'add_text': {
+        const el = document.getElementById(action.boxId);
+        if (el) el.remove();
+        const pageAnn = state.annotations[action.pageNum];
+        if (pageAnn) {
+          pageAnn.texts = pageAnn.texts.filter(t => t.id !== action.boxId);
+        }
+        break;
+      }
+      case 'delete_box': {
+        if (action.record) {
+          this.insertInlineTextBox(action.pageNum, { x: action.record.boxX, y: action.record.boxY }, action.record.text);
+        }
+        break;
+      }
+      case 'edit_text': {
+        const block = document.getElementById(action.blockId);
+        if (block) {
+          const content = block.querySelector('.text-block-content');
+          if (content) content.innerText = action.oldText;
+          if (!action.wasModified) block.classList.remove('modified');
+        }
+        const pageAnn = state.annotations[action.pageNum];
+        if (pageAnn) {
+          const t = pageAnn.texts.find(x => x.id === action.blockId);
+          if (t) {
+            if (!action.wasModified) {
+              pageAnn.texts = pageAnn.texts.filter(x => x.id !== action.blockId);
+            } else {
+              t.text = action.oldText;
+            }
+          }
+        }
+        break;
+      }
+      case 'move_text': {
+        const block = document.getElementById(action.blockId);
+        if (block) {
+          block.style.left = `${action.oldLeft}px`;
+          block.style.top = `${action.oldTop}px`;
+        }
+        const pageAnn = state.annotations[action.pageNum];
+        if (pageAnn) {
+          const t = pageAnn.texts.find(x => x.id === action.blockId);
+          if (t) {
+            t.boxX = action.oldLeft;
+            t.boxY = action.oldTop;
+            t.x = action.oldLeft * this.renderScale;
+            t.y = action.oldTop * this.renderScale;
+          }
+        }
+        break;
+      }
+      case 'move_box': {
+        const box = document.getElementById(action.boxId);
+        if (box) {
+          box.style.left = `${action.oldLeft}px`;
+          box.style.top = `${action.oldTop}px`;
+        }
+        const pageAnn = state.annotations[action.pageNum];
+        if (pageAnn) {
+          const t = pageAnn.texts.find(x => x.id === action.boxId);
+          if (t) {
+            t.boxX = action.oldLeft;
+            t.boxY = action.oldTop;
+            t.x = action.oldLeft * this.renderScale;
+            t.y = action.oldTop * this.renderScale;
+          }
+        }
+        break;
+      }
+      case 'delete_text': {
+        // Restaurar el texto y quitar la máscara blanca
+        const pageAnn = state.annotations[action.pageNum];
+        if (pageAnn && action.maskStroke) {
+          pageAnn.strokes = pageAnn.strokes.filter(s => s !== action.maskStroke);
+          this.redrawPageAnnotations(action.pageNum);
+        }
+        if (action.blockHtml && action.textLayerId) {
+          const layer = document.getElementById(action.textLayerId);
+          if (layer) {
+            const temp = document.createElement('div');
+            temp.innerHTML = action.blockHtml;
+            const newBlock = temp.firstElementChild;
+            if (newBlock) {
+              layer.appendChild(newBlock);
+              this.setupLiveTextBlock(newBlock, action.meta, action.pageNum);
+            }
+          }
+        }
+        break;
+      }
+      case 'stamp': {
+        const el = document.getElementById(action.stampId);
+        if (el) el.remove();
+        const pageAnn = state.annotations[action.pageNum];
+        if (pageAnn) {
+          pageAnn.stamps = pageAnn.stamps.filter(s => s.id !== action.stampId);
+        }
+        break;
+      }
+    }
+
+    this.updateUndoRedoButtons();
+    window.showToast('Acción deshecha (Ctrl+Z)', 'info');
+  }
+
+  redo() {
+    const state = window.docState;
+    if (!state.redoStack || state.redoStack.length === 0) {
+      window.showToast('No hay más acciones para rehacer.', 'info');
+      return;
+    }
+
+    const action = state.redoStack.pop();
+    state.undoStack.push(action);
+
+    switch (action.type) {
+      case 'stroke':
+      case 'draw': {
+        if (action.stroke) {
+          const pageAnn = state.initPageAnnotations(action.pageNum);
+          pageAnn.strokes.push(action.stroke);
+          this.redrawPageAnnotations(action.pageNum);
+        }
+        break;
+      }
+      case 'add_text': {
+        if (action.record) {
+          this.insertInlineTextBox(action.pageNum, { x: action.record.boxX, y: action.record.boxY }, action.record.text);
+        }
+        break;
+      }
+      case 'delete_box': {
+        const el = document.getElementById(action.boxId);
+        if (el) el.remove();
+        const pageAnn = state.annotations[action.pageNum];
+        if (pageAnn) {
+          pageAnn.texts = pageAnn.texts.filter(t => t.id !== action.boxId);
+        }
+        break;
+      }
+      case 'edit_text': {
+        const block = document.getElementById(action.blockId);
+        if (block) {
+          const content = block.querySelector('.text-block-content');
+          if (content) content.innerText = action.newText;
+          block.classList.add('modified');
+        }
+        const pageAnn = state.annotations[action.pageNum];
+        if (pageAnn) {
+          const t = pageAnn.texts.find(x => x.id === action.blockId);
+          if (t) t.text = action.newText;
+        }
+        break;
+      }
+      case 'move_text': {
+        const block = document.getElementById(action.blockId);
+        if (block) {
+          block.style.left = `${action.newLeft}px`;
+          block.style.top = `${action.newTop}px`;
+        }
+        const pageAnn = state.annotations[action.pageNum];
+        if (pageAnn) {
+          const t = pageAnn.texts.find(x => x.id === action.blockId);
+          if (t) {
+            t.boxX = action.newLeft;
+            t.boxY = action.newTop;
+            t.x = action.newLeft * this.renderScale;
+            t.y = action.newTop * this.renderScale;
+          }
+        }
+        break;
+      }
+      case 'move_box': {
+        const box = document.getElementById(action.boxId);
+        if (box) {
+          box.style.left = `${action.newLeft}px`;
+          box.style.top = `${action.newTop}px`;
+        }
+        const pageAnn = state.annotations[action.pageNum];
+        if (pageAnn) {
+          const t = pageAnn.texts.find(x => x.id === action.boxId);
+          if (t) {
+            t.boxX = action.newLeft;
+            t.boxY = action.newTop;
+            t.x = action.newLeft * this.renderScale;
+            t.y = action.newTop * this.renderScale;
+          }
+        }
+        break;
+      }
+      case 'delete_text': {
+        const block = document.getElementById(action.blockId);
+        if (block) block.remove();
+        if (action.maskStroke) {
+          const pageAnn = state.initPageAnnotations(action.pageNum);
+          pageAnn.strokes.push(action.maskStroke);
+          this.redrawPageAnnotations(action.pageNum);
+        }
+        break;
+      }
+    }
+
+    this.updateUndoRedoButtons();
+    window.showToast('Acción rehecha (Ctrl+Y)', 'info');
+  }
+
+  updateUndoRedoButtons() {
+    const state = window.docState;
+    const canUndo = Boolean(state.undoStack && state.undoStack.length > 0);
+    const canRedo = Boolean(state.redoStack && state.redoStack.length > 0);
+
+    const undoBtns = [document.getElementById('btn-undo'), document.getElementById('btn-ribbon-undo')];
+    const redoBtns = [document.getElementById('btn-redo'), document.getElementById('btn-ribbon-redo')];
+
+    undoBtns.forEach(btn => {
+      if (!btn) return;
+      btn.disabled = !canUndo;
+      btn.style.opacity = canUndo ? '1' : '0.4';
+      btn.style.cursor = canUndo ? 'pointer' : 'not-allowed';
+    });
+
+    redoBtns.forEach(btn => {
+      if (!btn) return;
+      btn.disabled = !canRedo;
+      btn.style.opacity = canRedo ? '1' : '0.4';
+      btn.style.cursor = canRedo ? 'pointer' : 'not-allowed';
+    });
   }
 
   closeFileDropdown() {
@@ -1712,19 +2109,37 @@ class UnifiedAcrobatApp {
 
   setupKeyboardShortcuts() {
     window.addEventListener('keydown', (e) => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      const activeEl = document.activeElement;
+      const isTextInput = activeEl && (
+        activeEl.tagName === 'INPUT' ||
+        activeEl.tagName === 'TEXTAREA' ||
+        (activeEl.isContentEditable && !e.ctrlKey && !e.metaKey)
+      );
 
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-        e.preventDefault();
-        // Deshacer
-      } else if (e.key === 'v' || e.key === 'V') {
-        window.docState.setTool('select');
-      } else if (e.key === 'p' || e.key === 'P') {
-        window.docState.setTool('pencil');
-      } else if (e.key === 't' || e.key === 'T') {
-        window.docState.setTool('text');
-      } else if (e.key === 'u' || e.key === 'U') {
-        window.docState.setTool('highlighter');
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        if (!activeEl || !activeEl.isContentEditable) {
+          e.preventDefault();
+          if (e.shiftKey) {
+            this.redo();
+          } else {
+            this.undo();
+          }
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        if (!activeEl || !activeEl.isContentEditable) {
+          e.preventDefault();
+          this.redo();
+        }
+      } else if (!isTextInput) {
+        if (e.key === 'v' || e.key === 'V') {
+          window.docState.setTool('select');
+        } else if (e.key === 'p' || e.key === 'P') {
+          window.docState.setTool('pencil');
+        } else if (e.key === 't' || e.key === 'T') {
+          window.docState.setTool('text');
+        } else if (e.key === 'u' || e.key === 'U') {
+          window.docState.setTool('highlighter');
+        }
       }
     });
   }

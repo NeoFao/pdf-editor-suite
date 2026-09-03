@@ -107,6 +107,18 @@ class DocumentState {
     this.redoStack = []; // limpiar redo al hacer nueva acción
     this.emit('historyChanged', { canUndo: true, canRedo: false });
   }
+
+  undo() {
+    if (window.unifiedApp && typeof window.unifiedApp.undo === 'function') {
+      window.unifiedApp.undo();
+    }
+  }
+
+  redo() {
+    if (window.unifiedApp && typeof window.unifiedApp.redo === 'function') {
+      window.unifiedApp.redo();
+    }
+  }
 }
 
 window.docState = new DocumentState();
