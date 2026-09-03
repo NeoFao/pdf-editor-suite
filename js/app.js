@@ -588,6 +588,7 @@ class UnifiedAcrobatApp {
 
   buildInteractiveTextLayer(textLayer, textContent, viewport, pageNum) {
     if (!textContent || !textContent.items) return;
+    textLayer.innerHTML = ''; // Prevenir duplicados
 
     const scale = this.renderScale;
     const lines = this.groupTextItemsIntoLines(textContent.items, viewport, scale);
@@ -649,8 +650,8 @@ class UnifiedAcrobatApp {
 
       overlay?.remove();
 
-      // Extraer todas las líneas detectadas por OCR de forma limpia e independiente
-      const allLines = [];
+      // 1. Extraer todas las líneas detectadas por OCR de forma limpia
+      const rawLines = [];
       if (ret.data && ret.data.blocks) {
         for (const b of ret.data.blocks) {
           if (b.paragraphs) {
@@ -659,7 +660,11 @@ class UnifiedAcrobatApp {
                 for (const l of p.lines) {
                   const clean = l.text ? l.text.trim() : '';
                   if (clean && l.bbox) {
-                    allLines.push({ str: clean, bbox: l.bbox });
+                    rawLines.push({
+                      str: clean,
+                      bbox: l.bbox,
+                      height: l.bbox.y1 - l.bbox.y0
+                    });
                   }
                 }
               }
@@ -667,29 +672,72 @@ class UnifiedAcrobatApp {
           }
         }
       }
-      if (allLines.length === 0 && ret.data && ret.data.lines) {
+      if (rawLines.length === 0 && ret.data && ret.data.lines) {
         for (const l of ret.data.lines) {
           const clean = l.text ? l.text.trim() : '';
-          if (clean && l.bbox) allLines.push({ str: clean, bbox: l.bbox });
+          if (clean && l.bbox) rawLines.push({ str: clean, bbox: l.bbox, height: l.bbox.y1 - l.bbox.y0 });
         }
       }
 
-      if (allLines.length === 0) {
+      if (rawLines.length === 0) {
         textLayer.dataset.isScanned = 'empty';
         return;
       }
+
+      // 2. Agrupar líneas adyacentes en párrafos naturales (Modelo Adobe Acrobat Pro)
+      const paragraphs = [];
+      let currentP = null;
+
+      for (const line of rawLines) {
+        if (!currentP) {
+          currentP = {
+            lines: [line],
+            text: line.str,
+            bbox: { ...line.bbox }
+          };
+          continue;
+        }
+
+        const lastLine = currentP.lines[currentP.lines.length - 1];
+        const lineGap = line.bbox.y0 - lastLine.bbox.y1;
+        const avgHeight = (line.height + lastLine.height) / 2;
+        const isCloseVertically = lineGap >= -4 && lineGap <= avgHeight * 1.5;
+        const isSimilarIndent = Math.abs(line.bbox.x0 - currentP.bbox.x0) <= 32;
+
+        if (isCloseVertically && isSimilarIndent) {
+          currentP.lines.push(line);
+          currentP.text += '\n' + line.str;
+          currentP.bbox.x0 = Math.min(currentP.bbox.x0, line.bbox.x0);
+          currentP.bbox.y0 = Math.min(currentP.bbox.y0, line.bbox.y0);
+          currentP.bbox.x1 = Math.max(currentP.bbox.x1, line.bbox.x1);
+          currentP.bbox.y1 = Math.max(currentP.bbox.y1, line.bbox.y1);
+        } else {
+          paragraphs.push(currentP);
+          currentP = {
+            lines: [line],
+            text: line.str,
+            bbox: { ...line.bbox }
+          };
+        }
+      }
+      if (currentP) paragraphs.push(currentP);
+
+      // Limpiar capa para evitar bloques duplicados
+      textLayer.innerHTML = '';
 
       const pageW = parseFloat(pageWrapper.style.width) || (canvas.width / this.renderScale);
       const pageH = parseFloat(pageWrapper.style.height) || (canvas.height / this.renderScale);
       const scaleX = pageW / canvas.width;
       const scaleY = pageH / canvas.height;
 
-      allLines.forEach((line, idx) => {
-        const left = Math.max(0, Math.round(line.bbox.x0 * scaleX));
-        const top = Math.max(0, Math.round(line.bbox.y0 * scaleY));
-        const width = Math.max(20, Math.round((line.bbox.x1 - line.bbox.x0) * scaleX));
-        const height = Math.max(14, Math.round((line.bbox.y1 - line.bbox.y0) * scaleY));
-        const fontSize = Math.max(11, Math.round(height * 0.78));
+      paragraphs.forEach((p, idx) => {
+        const left = Math.max(0, Math.round(p.bbox.x0 * scaleX));
+        const top = Math.max(0, Math.round(p.bbox.y0 * scaleY));
+        const width = Math.max(24, Math.round((p.bbox.x1 - p.bbox.x0) * scaleX));
+        const height = Math.max(16, Math.round((p.bbox.y1 - p.bbox.y0) * scaleY));
+        const lineCount = p.lines.length;
+        const singleLineH = height / lineCount;
+        const fontSize = Math.max(12, Math.round(singleLineH * 0.76));
 
         const block = document.createElement('div');
         block.className = 'acrobat-text-block';
@@ -697,18 +745,19 @@ class UnifiedAcrobatApp {
         block.dataset.pageNum = pageNum;
         block.style.left = `${left}px`;
         block.style.top = `${top}px`;
-        block.style.width = `${width + 4}px`;
-        block.style.minHeight = `${height}px`;
+        block.style.width = `${width + 8}px`;
+        block.style.minHeight = `${height + 2}px`;
         block.style.fontSize = `${fontSize}px`;
+        block.style.lineHeight = '1.35';
         block.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
         block.innerHTML = `
           <span class="acrobat-drag-handle" title="Arrastrar para mover (Acrobat style)"><i class="fa-solid fa-grip-vertical"></i></span>
           <span class="acrobat-delete-btn" title="Eliminar"><i class="fa-solid fa-xmark"></i></span>
-          <div class="text-block-content" spellcheck="false">${line.str}</div>
+          <div class="text-block-content" spellcheck="false">${p.text}</div>
         `;
 
-        const meta = { str: line.str, left, top, width, height, fontSize };
+        const meta = { str: p.text, left, top, width, height, fontSize };
         block.dataset.meta = JSON.stringify(meta);
         this.setupLiveTextBlock(block, meta, pageNum);
         textLayer.appendChild(block);
@@ -932,6 +981,14 @@ class UnifiedAcrobatApp {
     if (!block || !contentEl) return;
     if (contentEl.isContentEditable) return;
 
+    // Desactivar cualquier otro bloque que estuviese en edición
+    document.querySelectorAll('.acrobat-text-block.editing').forEach(b => {
+      if (b !== block) {
+        const c = b.querySelector('.text-block-content');
+        if (c) c.blur();
+      }
+    });
+
     // 1. Enmascarar el fondo original debajo con parche blanco para que NUNCA haya texto duplicado
     const pageNum = parseInt(block.dataset.pageNum, 10) || 1;
     let meta = null;
@@ -967,13 +1024,13 @@ class UnifiedAcrobatApp {
 
   maskOriginalText(pageNum, meta) {
     const pageAnn = window.docState.initPageAnnotations(pageNum);
-    // Añade un rectángulo blanco sólido para tapar el texto original
+    // Añade un rectángulo blanco sólido para tapar el texto original con margen de cobertura
     const maskStroke = {
       tool: 'rect',
-      x: (meta.left - 2) * this.renderScale,
-      y: (meta.top - 1) * this.renderScale,
-      width: (meta.width + 8) * this.renderScale,
-      height: (meta.height + 4) * this.renderScale,
+      x: Math.max(0, (meta.left - 3) * this.renderScale),
+      y: Math.max(0, (meta.top - 2) * this.renderScale),
+      width: (meta.width + 12) * this.renderScale,
+      height: (meta.height + 6) * this.renderScale,
       color: '#ffffff',
       isMask: true,
       fill: true
