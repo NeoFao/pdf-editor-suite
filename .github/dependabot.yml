@@ -1,0 +1,18 @@
+version: 2
+updates:
+  # Escaneo y actualización de dependencias de npm
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    reviewers:
+      - "NeoFao"
+
+  # Escaneo y actualización de GitHub Actions
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    reviewers:
+      - "NeoFao"

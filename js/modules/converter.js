@@ -485,9 +485,10 @@ class ConverterModule {
       return match;
     });
 
-    // Parsear Markdown con marked.js
+    // Parsear Markdown con marked.js y sanitizar contra XSS
     if (window.marked) {
-      preview.innerHTML = window.marked.parse(content);
+      const rawHtml = window.marked.parse(content);
+      preview.innerHTML = window.sanitizeHTML ? window.sanitizeHTML(rawHtml) : rawHtml;
 
       // Resaltado de sintaxis en bloques de código
       if (window.hljs) {

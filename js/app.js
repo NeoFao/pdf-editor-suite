@@ -119,6 +119,15 @@ class UnifiedAcrobatApp {
   }
 
   async handleFile(file) {
+    if (!file) return;
+
+    // Validación del lado del cliente: Tamaño máximo para prevenir saturación de memoria RAM
+    const MAX_FILE_SIZE = 150 * 1024 * 1024; // 150 MB límite seguro
+    if (file.size > MAX_FILE_SIZE) {
+      window.showToast('El archivo seleccionado supera el límite de seguridad (150 MB).', 'warning');
+      return;
+    }
+
     const fileName = file.name.toLowerCase();
 
     if (fileName.endsWith('.docx')) {
@@ -1758,7 +1767,8 @@ class UnifiedAcrobatApp {
         try { return window.katex.renderToString(expr.trim(), { displayMode: false, throwOnError: false }); } catch(e){ return m; }
       });
       if (window.marked && preview) {
-        preview.innerHTML = window.marked.parse(val);
+        const parsedHtml = window.marked.parse(val);
+        preview.innerHTML = window.sanitizeHTML(parsedHtml);
         if (window.hljs) {
           preview.querySelectorAll('pre code').forEach(el => window.hljs.highlightElement(el));
         }
@@ -1818,7 +1828,33 @@ console.log("PDF Editor WebAssembly");
   }
 }
 
-// Helpers globales
+// Sanitizador de HTML en el cliente para prevenir XSS
+window.sanitizeHTML = function(dirtyHtml) {
+  if (!dirtyHtml || typeof dirtyHtml !== 'string') return '';
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(dirtyHtml, 'text/html');
+
+  // Eliminar etiquetas que ejecutan scripts o cargan contenido externo no autorizado
+  const bannedTags = ['script', 'iframe', 'object', 'embed', 'form', 'base', 'link', 'meta', 'applet'];
+  bannedTags.forEach(tag => {
+    doc.querySelectorAll(tag).forEach(el => el.remove());
+  });
+
+  // Eliminar atributos peligrosos como eventos on* y javascript:
+  doc.querySelectorAll('*').forEach(el => {
+    Array.from(el.attributes).forEach(attr => {
+      const name = attr.name.toLowerCase();
+      const val = attr.value.trim().toLowerCase();
+      if (name.startsWith('on') || val.startsWith('javascript:') || (name === 'href' && val.startsWith('data:text/html'))) {
+        el.removeAttribute(attr.name);
+      }
+    });
+  });
+
+  return doc.body.innerHTML;
+};
+
+// Helpers globales con protección XSS
 window.showToast = function(msg, type = 'info') {
   const c = document.getElementById('toast-container');
   if (!c) return;
@@ -1830,7 +1866,9 @@ window.showToast = function(msg, type = 'info') {
     warning: 'fa-triangle-exclamation text-amber-400',
     info: 'fa-circle-info text-cyan-400'
   };
-  t.innerHTML = `<i class="fa-solid ${icons[type] || icons.info}"></i><span>${msg}</span>`;
+  t.innerHTML = `<i class="fa-solid ${icons[type] || icons.info}"></i><span></span>`;
+  const span = t.querySelector('span');
+  if (span) span.textContent = String(msg || '');
   c.appendChild(t);
   setTimeout(() => {
     t.style.opacity = '0';
