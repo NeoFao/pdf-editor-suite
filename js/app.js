@@ -293,8 +293,14 @@ class UnifiedAcrobatApp {
         if (textContent && textContent.items && textContent.items.length > 0) {
           this.buildInteractiveTextLayer(textLayer, textContent, viewport, pageNum);
         } else {
-          // Documento escaneado / basado en imagen detectado (como 30-mensaje-equipo-congelacion.pdf)
-          this.setupScannedPageLiveText(pageNum, pageWrapper, textLayer);
+          // Documento escaneado / imagen: activar Texto Vivo automáticamente de forma 100% nativa
+          textLayer.dataset.isScanned = 'processing';
+          if (pageNum === 1) {
+            await this.convertScannedPageToLiveText(pageNum, pageWrapper, textLayer, null, pdfCanvas);
+          } else {
+            // Páginas subsiguientes en segundo plano
+            this.convertScannedPageToLiveText(pageNum, pageWrapper, textLayer, null, pdfCanvas);
+          }
         }
       } catch (textErr) {
         console.warn(`No se pudo extraer capa de texto en pág ${pageNum}:`, textErr);
@@ -371,7 +377,12 @@ class UnifiedAcrobatApp {
         const pageObj = this.renderedPages.get(pageNum);
         const textLayer = pageObj?.wrapper?.querySelector('.acrobat-text-layer');
 
-        // 0. Si la página es escaneada y aún no tiene Texto Vivo, iniciar OCR de inmediato
+        // 0. Si la página aún está procesando Texto Vivo, esperar
+        if (textLayer && textLayer.dataset.isScanned === 'processing') {
+          window.showToast('Activando Texto Vivo en el documento, espera un segundo...', 'info');
+          return;
+        }
+
         if (textLayer && textLayer.children.length === 0 && textLayer.dataset.isScanned === 'true') {
           this.convertScannedPageToLiveText(pageNum, pageObj.wrapper, textLayer, { clientX: e.clientX, clientY: e.clientY });
           return;
@@ -608,62 +619,39 @@ class UnifiedAcrobatApp {
   /* ==================== 2.2 MOTOR OCR A TEXTO VIVO PARA PÁGINAS ESCANEADAS ==================== */
 
   setupScannedPageLiveText(pageNum, pageWrapper, textLayer) {
-    textLayer.dataset.isScanned = 'true';
-
-    // Banner flotante invitando a convertir la página escaneada a Texto Vivo editable
-    const banner = document.createElement('div');
-    banner.className = 'scanned-ocr-banner glass-panel';
-    banner.id = `scanned-banner-${pageNum}`;
-    banner.innerHTML = `
-      <div class="flex items-center gap-2.5">
-        <div class="w-8 h-8 rounded-lg bg-indigo-600/30 flex items-center justify-center text-indigo-400">
-          <i class="fa-solid fa-wand-magic-sparkles text-sm"></i>
-        </div>
-        <div>
-          <span class="font-bold text-white text-xs block">Documento escaneado detectado</span>
-          <span class="text-slate-400 text-[11px]">Haz clic para hacer todo el texto modificable y editable</span>
-        </div>
-      </div>
-      <button class="btn-convert-scanned-live px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition-all cursor-pointer">
-        <i class="fa-solid fa-pen-to-square"></i> Activar Texto Vivo (OCR)
-      </button>
-    `;
-
-    banner.querySelector('.btn-convert-scanned-live')?.addEventListener('click', (e) => {
-      e.stopPropagation();
-      this.convertScannedPageToLiveText(pageNum, pageWrapper, textLayer);
-    });
-
-    pageWrapper.appendChild(banner);
+    // Si se llama, ejecuta la conversión de inmediato y sin esperas
+    this.convertScannedPageToLiveText(pageNum, pageWrapper, textLayer);
   }
 
-  async convertScannedPageToLiveText(pageNum, pageWrapper, textLayer, targetClickCoords = null) {
-    const pageObj = this.renderedPages.get(pageNum);
-    if (!pageObj || !pageObj.pdfCanvas) return;
+  async convertScannedPageToLiveText(pageNum, pageWrapper, textLayer, targetClickCoords = null, passedCanvas = null) {
+    const canvas = passedCanvas || this.renderedPages.get(pageNum)?.pdfCanvas;
+    if (!canvas) return;
 
-    // Remover banner flotante si existe
-    document.getElementById(`scanned-banner-${pageNum}`)?.remove();
+    textLayer.dataset.isScanned = 'processing';
 
-    // Mostrar overlay de carga sobre la página
-    const overlay = document.createElement('div');
-    overlay.className = 'scanned-ocr-loading-overlay';
-    overlay.innerHTML = `
-      <div class="w-10 h-10 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3"></div>
-      <span class="font-semibold text-sm text-white">Reconociendo y convirtiendo texto escaneado...</span>
-      <span class="text-xs text-slate-400 mt-1">Generando bloques de Texto Vivo estilo Acrobat Pro (WASM)</span>
-    `;
-    pageWrapper.appendChild(overlay);
+    // Mostrar overlay de carga sutil sobre la página
+    let overlay = pageWrapper.querySelector('.scanned-ocr-loading-overlay');
+    if (!overlay) {
+      overlay = document.createElement('div');
+      overlay.className = 'scanned-ocr-loading-overlay';
+      overlay.innerHTML = `
+        <div class="w-10 h-10 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+        <span class="font-semibold text-sm text-white">Activando Texto Vivo en el documento...</span>
+        <span class="text-xs text-slate-400 mt-1">Haciendo todas las líneas editables directamente en la hoja</span>
+      `;
+      pageWrapper.appendChild(overlay);
+    }
 
     try {
       const lang = document.getElementById('select-ocr-lang')?.value || 'spa+eng';
       const worker = await Tesseract.createWorker(lang, 1);
-      const ret = await worker.recognize(pageObj.pdfCanvas);
+      const ret = await worker.recognize(canvas);
       await worker.terminate();
 
       overlay.remove();
 
       if (!ret.data || !ret.data.lines || ret.data.lines.length === 0) {
-        window.showToast('No se detectó texto claro en la página.', 'warning');
+        textLayer.dataset.isScanned = 'empty';
         return;
       }
 
@@ -701,7 +689,6 @@ class UnifiedAcrobatApp {
       });
 
       textLayer.dataset.isScanned = 'ready';
-      window.showToast('¡Texto escaneado convertido a Texto Vivo! Ya puedes hacer clic en cualquier texto para modificarlo.', 'success');
 
       // Si el usuario había hecho clic en un punto específico, activar edición en la línea más cercana
       if (targetClickCoords) {
@@ -720,8 +707,7 @@ class UnifiedAcrobatApp {
       }
     } catch (ocrErr) {
       overlay.remove();
-      console.error('Error en OCR de página escaneada:', ocrErr);
-      window.showToast('Error al reconocer texto: ' + ocrErr.message, 'error');
+      console.error('Error en activación automática de Texto Vivo:', ocrErr);
     }
   }
 
