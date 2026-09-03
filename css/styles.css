@@ -1,0 +1,472 @@
+/* ==========================================================================
+   PDF Editor - Espacio de Trabajo Unificado Todo-en-Uno (Estilo Adobe Acrobat Pro)
+   Paleta oscura contemporánea, diseño de 3 columnas, ribbon interactivo y zoom
+   ========================================================================== */
+
+:root {
+  --bg-workspace: #0b0f19;
+  --bg-sidebar: #0f172a;
+  --bg-ribbon: #111827;
+  --bg-panel: rgba(17, 24, 39, 0.85);
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-accent: rgba(99, 102, 241, 0.4);
+  --accent-indigo: #6366f1;
+  --accent-cyan: #06b6d4;
+  --accent-emerald: #10b981;
+  --accent-amber: #f59e0b;
+  --accent-rose: #f43f5e;
+  --text-main: #f1f5f9;
+  --text-muted: #94a3b8;
+}
+
+/* Reset y base */
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background-color: var(--bg-workspace);
+  color: var(--text-main);
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+}
+
+/* Scrollbars personalizados */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(15, 23, 42, 0.5);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.4);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.7);
+}
+
+/* Paneles Glassmorphism */
+.glass-panel {
+  background: var(--bg-panel);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid var(--border-subtle);
+}
+
+.glass-ribbon {
+  background: rgba(17, 24, 39, 0.95);
+  backdrop-filter: blur(18px);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* Botones de Ribbon estilo Acrobat */
+.ribbon-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0.35rem 0.6rem;
+  border-radius: 0.5rem;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 500;
+  transition: all 0.15s ease;
+  cursor: pointer;
+  border: 1px solid transparent;
+  min-width: 44px;
+}
+
+.ribbon-btn i {
+  font-size: 1rem;
+  margin-bottom: 0.2rem;
+}
+
+.ribbon-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-main);
+}
+
+.ribbon-btn.active {
+  background: rgba(99, 102, 241, 0.2);
+  color: #a5b4fc;
+  border-color: rgba(99, 102, 241, 0.4);
+  box-shadow: 0 0 10px rgba(99, 102, 241, 0.15);
+}
+
+.ribbon-tab {
+  padding: 0.5rem 1rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  border-bottom: 2px solid transparent;
+  transition: all 0.15s ease;
+  cursor: pointer;
+}
+
+.ribbon-tab:hover {
+  color: var(--text-main);
+}
+
+.ribbon-tab.active {
+  color: #818cf8;
+  border-bottom-color: #6366f1;
+}
+
+/* Área de Dropzone de Bienvenida (Acrobat Empty State) */
+.welcome-dropzone {
+  border: 2px dashed rgba(99, 102, 241, 0.3);
+  background: radial-gradient(circle at center, rgba(30, 41, 59, 0.4), rgba(15, 23, 42, 0.8));
+  transition: all 0.25s ease;
+}
+
+.welcome-dropzone.dragover {
+  border-color: var(--accent-indigo);
+  background: radial-gradient(circle at center, rgba(99, 102, 241, 0.15), rgba(15, 23, 42, 0.9));
+  transform: scale(1.008);
+}
+
+/* Visor central del documento y Zoom */
+.document-viewport {
+  position: relative;
+  overflow: auto;
+  background: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 24px 24px;
+  height: calc(100vh - 108px);
+  width: 100%;
+  flex: 1 1 auto;
+}
+
+.zoom-stage {
+  transform-origin: top center;
+  transition: transform 0.12s ease-out;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 1.5rem;
+  gap: 1.5rem;
+  min-width: 100%;
+}
+
+@media (max-width: 767px) {
+  .zoom-stage {
+    padding: 0.75rem 0.25rem;
+    gap: 1rem;
+  }
+}
+
+/* Contenedor de página individual */
+.acrobat-page-wrapper {
+  position: relative;
+  background: white;
+  box-shadow: 0 12px 35px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);
+  border-radius: 4px;
+  user-select: none;
+}
+
+.acrobat-page-canvas {
+  display: block;
+  border-radius: 4px;
+}
+
+.acrobat-overlay-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  touch-action: none;
+}
+
+/* Cuadro de texto editable interactivo */
+.interactive-text-box {
+  position: absolute;
+  min-width: 60px;
+  min-height: 24px;
+  border: 1px dashed rgba(99, 102, 241, 0.6);
+  padding: 2px 6px;
+  outline: none;
+  cursor: text;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 3px;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+}
+
+.interactive-text-box:focus {
+  border-color: #6366f1;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.3);
+}
+
+/* Sello de firma y estampas */
+.stamp-overlay {
+  position: absolute;
+  border: 2px dashed #6366f1;
+  background: rgba(99, 102, 241, 0.06);
+  cursor: move;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+}
+
+.stamp-overlay img {
+  pointer-events: none;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.stamp-handle-resize {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  background: #6366f1;
+  border: 2px solid white;
+  border-radius: 50%;
+  right: -6px;
+  bottom: -6px;
+  cursor: se-resize;
+}
+
+.stamp-handle-delete {
+  position: absolute;
+  top: -10px;
+  right: -10px;
+  width: 22px;
+  height: 22px;
+  background: #f43f5e;
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+}
+
+/* Panel de Miniaturas Izquierdo */
+.thumbnail-strip {
+  width: 220px;
+  background: rgba(15, 23, 42, 0.98);
+  border-right: 1px solid var(--border-subtle);
+  overflow-y: auto;
+  height: calc(100vh - 108px);
+  transition: width 0.25s ease, transform 0.25s ease;
+}
+
+.thumbnail-strip.collapsed {
+  width: 0;
+  transform: translateX(-100%);
+  overflow: hidden;
+  border-right: none;
+}
+
+/* Modo Responsive en Pantallas Móviles (< 1024px) */
+@media (max-width: 1023px) {
+  .thumbnail-strip {
+    position: fixed;
+    top: 106px;
+    left: 0;
+    bottom: 0;
+    height: calc(100vh - 106px);
+    width: 240px;
+    z-index: 50;
+    box-shadow: 12px 0 35px rgba(0, 0, 0, 0.85);
+    transform: translateX(-100%);
+  }
+
+  .thumbnail-strip.open-mobile {
+    transform: translateX(0) !important;
+    width: 240px !important;
+  }
+}
+
+.thumb-item {
+  position: relative;
+  border-radius: 6px;
+  border: 2px solid transparent;
+  background: rgba(30, 41, 59, 0.4);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  user-select: none;
+}
+
+.thumb-item:hover {
+  background: rgba(30, 41, 59, 0.8);
+  border-color: rgba(99, 102, 241, 0.3);
+}
+
+.thumb-item.active {
+  border-color: var(--accent-indigo);
+  background: rgba(99, 102, 241, 0.15);
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.25);
+}
+
+.thumb-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  display: flex;
+  gap: 2px;
+}
+
+.thumb-item:hover .thumb-actions {
+  opacity: 1;
+}
+
+.thumb-action-btn {
+  background: rgba(15, 23, 42, 0.85);
+  color: #cbd5e1;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+}
+
+.thumb-action-btn:hover {
+  background: var(--accent-indigo);
+  color: white;
+}
+
+/* Panel Lateral Derecho (Propiedades) */
+.properties-panel {
+  width: 260px;
+  background: rgba(15, 23, 42, 0.98);
+  border-left: 1px solid var(--border-subtle);
+  overflow-y: auto;
+  height: calc(100vh - 108px);
+  transition: width 0.25s ease, transform 0.25s ease;
+}
+
+.properties-panel.collapsed {
+  width: 0;
+  transform: translateX(100%);
+  overflow: hidden;
+  border-left: none;
+}
+
+@media (max-width: 1023px) {
+  .properties-panel {
+    position: fixed;
+    top: 106px;
+    right: 0;
+    bottom: 0;
+    height: calc(100vh - 106px);
+    width: 270px;
+    z-index: 50;
+    box-shadow: -12px 0 35px rgba(0, 0, 0, 0.85);
+    transform: translateX(100%);
+  }
+
+  .properties-panel.open-mobile {
+    transform: translateX(0) !important;
+    width: 270px !important;
+  }
+}
+
+/* Muestras de color rápido */
+.color-swatch {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform 0.15s ease;
+}
+
+.color-swatch:hover {
+  transform: scale(1.15);
+}
+
+.color-swatch.active {
+  border-color: white;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.5);
+}
+
+/* Badges y animaciones */
+.badge-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: #34d399;
+  background-color: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 9999px;
+}
+
+.badge-active::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background-color: #10b981;
+}
+
+/* Notificaciones Toast */
+#toast-container {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.toast {
+  pointer-events: auto;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(12px);
+  animation: toast-in 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.toast-success {
+  background: rgba(6, 78, 59, 0.95);
+  color: #6ee7b7;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+.toast-error {
+  background: rgba(136, 19, 55, 0.95);
+  color: #fca5a5;
+  border: 1px solid rgba(244, 63, 94, 0.3);
+}
+
+.toast-info {
+  background: rgba(30, 58, 138, 0.95);
+  color: #93c5fd;
+  border: 1px solid rgba(96, 165, 250, 0.3);
+}
+
+.toast-warning {
+  background: rgba(120, 53, 15, 0.95);
+  color: #fde68a;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(15px); }
+  to { opacity: 1; transform: translateY(0); }
+}

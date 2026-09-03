@@ -1,0 +1,27 @@
+{
+  "name": "pdf-editor-suite",
+  "version": "1.0.0",
+  "description": "Suite Integral de Edición y Manipulación de PDF en el navegador (Client-Side WebAssembly)",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "build": "tailwindcss -i ./css/input.css -o ./css/tailwind.min.css --minify",
+    "build:css": "tailwindcss -i ./css/input.css -o ./css/tailwind.min.css --minify"
+  },
+  "keywords": [
+    "pdf",
+    "pdf-editor",
+    "pdf-lib",
+    "tesseract-ocr",
+    "docx-preview",
+    "webassembly",
+    "client-side"
+  ],
+  "author": "PDF Editor Team",
+  "license": "MIT",
+  "dependencies": {
+    "pdf-lib": "^1.17.1",
+    "tailwindcss": "^3.4.1"
+  }
+}

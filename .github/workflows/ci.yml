@@ -1,0 +1,41 @@
+name: CI & Security Audit
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-verify:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout del repositorio
+      uses: actions/checkout@v4
+
+    - name: Configurar Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    - name: Instalar dependencias
+      run: npm ci
+
+    - name: Compilar Tailwind CSS
+      run: npm run build
+
+    - name: Verificación de sintaxis de JavaScript
+      run: |
+        node --check js/app.js
+        node --check js/state.js
+        node --check js/modules/organizer.js
+        node --check js/modules/annotator.js
+        node --check js/modules/compressor.js
+        node --check js/modules/scanner.js
+        node --check js/modules/converter.js
+        node --check server.js
+
+    - name: Auditoría de seguridad de dependencias
+      run: npm audit --audit-level=high || true
