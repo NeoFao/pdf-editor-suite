@@ -280,6 +280,20 @@ class UnifiedAcrobatApp {
       // Renderizar página del PDF
       await page.render({ canvasContext: pdfCtx, viewport: viewport }).promise;
 
+      // Capa de texto interactiva extraída directamente del PDF para edición in-place estilo Acrobat
+      const textLayer = document.createElement('div');
+      textLayer.className = 'acrobat-text-layer';
+      textLayer.id = `acrobat-text-layer-${pageNum}`;
+      textLayer.style.width = `${cssWidth}px`;
+      textLayer.style.height = `${cssHeight}px`;
+
+      try {
+        const textContent = await page.getTextContent();
+        this.buildInteractiveTextLayer(textLayer, textContent, viewport, pageNum);
+      } catch (textErr) {
+        console.warn(`No se pudo extraer capa de texto en pág ${pageNum}:`, textErr);
+      }
+
       // Canvas superior interactivo (anotaciones, trazos y firmas)
       const overlayCanvas = document.createElement('canvas');
       overlayCanvas.className = 'acrobat-overlay-canvas';
@@ -291,6 +305,7 @@ class UnifiedAcrobatApp {
       const overlayCtx = overlayCanvas.getContext('2d');
 
       pageWrapper.appendChild(pdfCanvas);
+      pageWrapper.appendChild(textLayer);
       pageWrapper.appendChild(overlayCanvas);
       stage.appendChild(pageWrapper);
 
@@ -339,8 +354,12 @@ class UnifiedAcrobatApp {
         path = [coords];
         canvas.setPointerCapture(e.pointerId);
       } else if (tool === 'text') {
-        const coords = getCoords(e);
-        this.promptInsertText(pageNum, coords);
+        const rect = canvas.getBoundingClientRect();
+        const cssCoords = {
+          x: e.clientX - rect.left,
+          y: e.clientY - rect.top
+        };
+        this.insertInlineTextBox(pageNum, cssCoords);
       }
     };
 
@@ -413,23 +432,211 @@ class UnifiedAcrobatApp {
     };
   }
 
-  promptInsertText(pageNum, coords) {
-    const textInput = prompt('Escribe el texto que deseas insertar:');
-    if (!textInput || textInput.trim() === '') return;
+  /* ==================== 2.1 EDICIÓN DIRECTA EN HOJA (ACROBAT & PDF AGILE STYLE) ==================== */
 
-    const pageAnn = window.docState.initPageAnnotations(pageNum);
-    pageAnn.texts.push({
-      id: 'txt_' + Math.random().toString(36).substring(2, 7),
-      text: textInput,
-      x: coords.x,
-      y: coords.y,
-      color: window.docState.properties.textColor || window.docState.properties.color,
-      size: (window.docState.properties.fontSize || 16) * this.renderScale,
-      font: window.docState.properties.fontFamily || 'Arial, sans-serif'
+  buildInteractiveTextLayer(textLayer, textContent, viewport, pageNum) {
+    if (!textContent || !textContent.items) return;
+
+    for (let idx = 0; idx < textContent.items.length; idx++) {
+      const item = textContent.items[idx];
+      if (!item.str || item.str.trim() === '') continue;
+
+      const tx = item.transform[4];
+      const ty = item.transform[5];
+      const fontHeight = Math.hypot(item.transform[2], item.transform[3]) || 12;
+
+      // Coordenadas convertidas mediante la matriz de proyección del viewport
+      const [vx, vy] = viewport.convertToViewportPoint(tx, ty);
+
+      // Conversión a coordenadas visuales CSS de la página
+      const scale = this.renderScale;
+      const left = Math.max(0, Math.round(vx / scale));
+      const top = Math.max(0, Math.round((vy - (fontHeight * viewport.scale)) / scale));
+      const width = Math.max(16, Math.round((item.width * viewport.scale) / scale));
+      const height = Math.max(14, Math.round((fontHeight * viewport.scale) / scale) + 2);
+      const fontSize = Math.max(10, Math.round(fontHeight));
+
+      const span = document.createElement('div');
+      span.className = 'acrobat-text-span';
+      span.id = `txt-span-${pageNum}-${idx}`;
+      span.innerText = item.str;
+      span.title = 'Haz clic para modificar este texto';
+      span.setAttribute('data-original-text', item.str);
+      span.setAttribute('data-page', pageNum);
+      span.style.left = `${left}px`;
+      span.style.top = `${top}px`;
+      span.style.width = `${width}px`;
+      span.style.minHeight = `${height}px`;
+      span.style.fontSize = `${fontSize}px`;
+      span.style.fontFamily = window.docState.properties.fontFamily || 'Arial, sans-serif';
+
+      this.makeInlineTextEditable(span, pageNum, {
+        spanId: span.id,
+        originalText: item.str,
+        left,
+        top,
+        width,
+        height,
+        fontSize
+      });
+
+      textLayer.appendChild(span);
+    }
+  }
+
+  makeInlineTextEditable(span, pageNum, meta) {
+    span.addEventListener('click', (e) => {
+      const tool = window.docState.activeTool;
+      // Permitir edición al hacer clic con la herramienta Texto o Selección
+      if (tool !== 'text' && tool !== 'select') return;
+
+      e.stopPropagation();
+      if (span.isContentEditable) return;
+
+      // Activar edición interactiva directamente sobre el papel
+      span.contentEditable = 'true';
+      span.classList.add('editing-inline');
+      span.style.color = window.docState.properties.textColor || window.docState.properties.color || '#0f172a';
+
+      // Posicionar cursor para editar al instante
+      span.focus();
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(span);
+      sel.removeAllRanges();
+      sel.addRange(range);
     });
 
-    window.docState.pushUndo({ type: 'text', pageNum });
-    this.redrawPageAnnotations(pageNum);
+    span.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        span.blur();
+      } else if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        span.blur();
+      }
+    });
+
+    span.addEventListener('blur', () => {
+      span.contentEditable = 'false';
+      span.classList.remove('editing-inline');
+
+      const currentText = span.innerText;
+      const pageAnn = window.docState.initPageAnnotations(pageNum);
+
+      if (currentText !== meta.originalText) {
+        span.classList.add('modified');
+
+        const existingIdx = pageAnn.texts.findIndex(t => t.spanId === meta.spanId);
+        const editRecord = {
+          id: 'edit_' + meta.spanId,
+          spanId: meta.spanId,
+          isReplacement: true,
+          originalText: meta.originalText,
+          text: currentText,
+          boxX: meta.left,
+          boxY: meta.top,
+          boxW: meta.width,
+          boxH: meta.height,
+          x: meta.left * this.renderScale,
+          y: (meta.top + (meta.height / 2)) * this.renderScale,
+          size: meta.fontSize * this.renderScale,
+          font: window.docState.properties.fontFamily || 'Arial, sans-serif',
+          color: window.docState.properties.textColor || window.docState.properties.color || '#000000'
+        };
+
+        if (existingIdx >= 0) {
+          pageAnn.texts[existingIdx] = editRecord;
+        } else {
+          pageAnn.texts.push(editRecord);
+        }
+
+        window.docState.pushUndo({ type: 'text', pageNum });
+        window.showToast('Texto modificado en la hoja.', 'success');
+      }
+    });
+  }
+
+  insertInlineTextBox(pageNum, cssCoords) {
+    const pageObj = this.renderedPages.get(pageNum);
+    if (!pageObj) return;
+
+    const wrapper = pageObj.wrapper;
+    const box = document.createElement('div');
+    box.className = 'interactive-text-box';
+    box.id = 'txtbox_' + Math.random().toString(36).substring(2, 9);
+    box.contentEditable = 'true';
+    box.style.left = `${Math.max(10, Math.round(cssCoords.x))}px`;
+    box.style.top = `${Math.max(10, Math.round(cssCoords.y))}px`;
+    box.style.fontFamily = window.docState.properties.fontFamily || 'Arial, sans-serif';
+    box.style.fontSize = `${window.docState.properties.fontSize || 16}px`;
+    box.style.color = window.docState.properties.textColor || window.docState.properties.color || '#0f172a';
+    box.innerText = 'Escribe aquí...';
+
+    // Botón para eliminar el cuadro de texto libre
+    const delBtn = document.createElement('div');
+    delBtn.className = 'text-box-delete-btn';
+    delBtn.title = 'Eliminar';
+    delBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+    box.appendChild(delBtn);
+
+    delBtn.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      box.remove();
+      const pageAnn = window.docState.initPageAnnotations(pageNum);
+      pageAnn.texts = pageAnn.texts.filter(t => t.id !== box.id);
+      window.showToast('Cuadro de texto eliminado.', 'info');
+    });
+
+    wrapper.appendChild(box);
+
+    // Foco automático con cursor parpadeante sin ventanas emergentes
+    setTimeout(() => {
+      box.focus();
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(box);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }, 20);
+
+    box.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') box.blur();
+    });
+
+    box.addEventListener('blur', () => {
+      const text = box.innerText.trim();
+      if (!text || text === 'Escribe aquí...') {
+        box.remove();
+        return;
+      }
+
+      const pageAnn = window.docState.initPageAnnotations(pageNum);
+      const existingIdx = pageAnn.texts.findIndex(t => t.id === box.id);
+      const left = parseFloat(box.style.left) || 0;
+      const top = parseFloat(box.style.top) || 0;
+
+      const record = {
+        id: box.id,
+        isReplacement: false,
+        text: text,
+        boxX: left,
+        boxY: top,
+        boxW: box.offsetWidth,
+        boxH: box.offsetHeight,
+        x: left * this.renderScale,
+        y: top * this.renderScale,
+        size: (window.docState.properties.fontSize || 16) * this.renderScale,
+        font: window.docState.properties.fontFamily || 'Arial, sans-serif',
+        color: box.style.color || '#000000'
+      };
+
+      if (existingIdx >= 0) {
+        pageAnn.texts[existingIdx] = record;
+      } else {
+        pageAnn.texts.push(record);
+        window.docState.pushUndo({ type: 'text', pageNum });
+      }
+    });
   }
 
   redrawPageAnnotations(pageNum) {
@@ -835,19 +1042,39 @@ class UnifiedAcrobatApp {
           pdfPage.drawImage(embeddedStrokes, { x: 0, y: 0, width: pdfW, height: pdfH });
         }
 
-        // 2. Incrustación de textos libres
+        // 2. Incrustación de textos (reemplazos in-place y nuevos textos libres)
         if (pageAnn.texts.length > 0) {
           for (const t of pageAnn.texts) {
-            // Dibujamos texto vectorial en canvas superpuesto o drawText
+            // Si es un reemplazo de texto existente, tapar el texto original con un rectángulo blanco limpio
+            if (t.isReplacement) {
+              const rX = (t.boxX || 0) * scaleFactorX;
+              const rW = ((t.boxW || 40) + 4) * scaleFactorX;
+              const rH = ((t.boxH || 14) + 4) * scaleFactorY;
+              // En coordenadas PDF, el origen (0,0) está en la esquina inferior izquierda
+              const rY = pdfH - ((t.boxY || 0) * scaleFactorY) - rH;
+
+              pdfPage.drawRectangle({
+                x: Math.max(0, rX - 2),
+                y: Math.max(0, rY),
+                width: rW + 4,
+                height: rH + 2,
+                color: PDFLib.rgb(1, 1, 1),
+                borderWidth: 0
+              });
+            }
+
+            // Dibujamos el nuevo texto nítido en canvas de alta resolución
             const textCanvas = document.createElement('canvas');
             textCanvas.width = pdfW * 2;
             textCanvas.height = pdfH * 2;
             const tCtx = textCanvas.getContext('2d');
             tCtx.scale(2, 2);
             tCtx.font = `${(t.size / this.renderScale) * scaleFactorY}px ${t.font}`;
-            tCtx.fillStyle = t.color;
-            tCtx.textBaseline = 'middle';
-            tCtx.fillText(t.text, (t.x / this.renderScale) * scaleFactorX, (t.y / this.renderScale) * scaleFactorY);
+            tCtx.fillStyle = t.color || '#000000';
+            tCtx.textBaseline = 'top';
+            const posX = (t.boxX !== undefined ? t.boxX : (t.x / this.renderScale)) * scaleFactorX;
+            const posY = (t.boxY !== undefined ? t.boxY : (t.y / this.renderScale)) * scaleFactorY;
+            tCtx.fillText(t.text, posX, posY);
 
             const txtBytes = await fetch(textCanvas.toDataURL('image/png')).then(r => r.arrayBuffer());
             const embeddedTxt = await pdfDoc.embedPng(txtBytes);
@@ -1157,6 +1384,11 @@ class UnifiedAcrobatApp {
   }
 
   updateCursorMode(tool) {
+    const stage = document.getElementById('pdf-render-stage');
+    stage?.classList.remove('tool-mode-text', 'tool-mode-select');
+    if (tool === 'text') stage?.classList.add('tool-mode-text');
+    if (tool === 'select') stage?.classList.add('tool-mode-select');
+
     const overlays = document.querySelectorAll('.acrobat-overlay-canvas');
     overlays.forEach(c => {
       if (tool === 'pencil' || tool === 'highlighter' || tool === 'rect') {
