@@ -290,7 +290,12 @@ class UnifiedAcrobatApp {
 
       try {
         const textContent = await page.getTextContent();
-        this.buildInteractiveTextLayer(textLayer, textContent, viewport, pageNum);
+        if (textContent && textContent.items && textContent.items.length > 0) {
+          this.buildInteractiveTextLayer(textLayer, textContent, viewport, pageNum);
+        } else {
+          // Documento escaneado / basado en imagen detectado (como 30-mensaje-equipo-congelacion.pdf)
+          this.setupScannedPageLiveText(pageNum, pageWrapper, textLayer);
+        }
       } catch (textErr) {
         console.warn(`No se pudo extraer capa de texto en pág ${pageNum}:`, textErr);
       }
@@ -363,6 +368,15 @@ class UnifiedAcrobatApp {
           ctx.fill();
         }
       } else if (tool === 'text') {
+        const pageObj = this.renderedPages.get(pageNum);
+        const textLayer = pageObj?.wrapper?.querySelector('.acrobat-text-layer');
+
+        // 0. Si la página es escaneada y aún no tiene Texto Vivo, iniciar OCR de inmediato
+        if (textLayer && textLayer.children.length === 0 && textLayer.dataset.isScanned === 'true') {
+          this.convertScannedPageToLiveText(pageNum, pageObj.wrapper, textLayer, { clientX: e.clientX, clientY: e.clientY });
+          return;
+        }
+
         // 1. Comprobar si el clic cayó sobre o dentro de un bloque de texto existente
         const elementsUnderCursor = document.elementsFromPoint(e.clientX, e.clientY);
         const textBlockEl = elementsUnderCursor.find(el => el.classList?.contains('acrobat-text-block') || el.closest?.('.acrobat-text-block'));
@@ -375,14 +389,13 @@ class UnifiedAcrobatApp {
           }
         }
 
-        // 2. Comprobar proximidad a bloques de texto de esta página (tolerancia inteligente de 14px)
-        const pageObj = this.renderedPages.get(pageNum);
+        // 2. Comprobar proximidad amplia a bloques de texto de esta página (tolerancia de 16px)
         if (pageObj && pageObj.wrapper) {
           const pageBlocks = pageObj.wrapper.querySelectorAll('.acrobat-text-block');
           for (const b of pageBlocks) {
             const bRect = b.getBoundingClientRect();
-            if (e.clientX >= bRect.left - 12 && e.clientX <= bRect.right + 12 &&
-                e.clientY >= bRect.top - 8 && e.clientY <= bRect.bottom + 8) {
+            if (e.clientX >= bRect.left - 16 && e.clientX <= bRect.right + 16 &&
+                e.clientY >= bRect.top - 12 && e.clientY <= bRect.bottom + 12) {
               const content = b.querySelector('.text-block-content');
               if (content) {
                 this.activateLiveTextEditing(b, content);
@@ -394,9 +407,10 @@ class UnifiedAcrobatApp {
 
         // 3. Solo si no hay texto existente en esa zona, crear cuadro de texto libre
         const rect = canvas.getBoundingClientRect();
+        const zoom = window.docState.zoom || 1.0;
         const cssCoords = {
-          x: e.clientX - rect.left,
-          y: e.clientY - rect.top
+          x: (e.clientX - rect.left) / zoom,
+          y: (e.clientY - rect.top) / zoom
         };
         this.insertInlineTextBox(pageNum, cssCoords);
       }
@@ -589,6 +603,126 @@ class UnifiedAcrobatApp {
       this.setupLiveTextBlock(block, line, pageNum);
       textLayer.appendChild(block);
     });
+  }
+
+  /* ==================== 2.2 MOTOR OCR A TEXTO VIVO PARA PÁGINAS ESCANEADAS ==================== */
+
+  setupScannedPageLiveText(pageNum, pageWrapper, textLayer) {
+    textLayer.dataset.isScanned = 'true';
+
+    // Banner flotante invitando a convertir la página escaneada a Texto Vivo editable
+    const banner = document.createElement('div');
+    banner.className = 'scanned-ocr-banner glass-panel';
+    banner.id = `scanned-banner-${pageNum}`;
+    banner.innerHTML = `
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 rounded-lg bg-indigo-600/30 flex items-center justify-center text-indigo-400">
+          <i class="fa-solid fa-wand-magic-sparkles text-sm"></i>
+        </div>
+        <div>
+          <span class="font-bold text-white text-xs block">Documento escaneado detectado</span>
+          <span class="text-slate-400 text-[11px]">Haz clic para hacer todo el texto modificable y editable</span>
+        </div>
+      </div>
+      <button class="btn-convert-scanned-live px-3.5 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs flex items-center gap-1.5 shadow-md shadow-indigo-600/30 transition-all cursor-pointer">
+        <i class="fa-solid fa-pen-to-square"></i> Activar Texto Vivo (OCR)
+      </button>
+    `;
+
+    banner.querySelector('.btn-convert-scanned-live')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.convertScannedPageToLiveText(pageNum, pageWrapper, textLayer);
+    });
+
+    pageWrapper.appendChild(banner);
+  }
+
+  async convertScannedPageToLiveText(pageNum, pageWrapper, textLayer, targetClickCoords = null) {
+    const pageObj = this.renderedPages.get(pageNum);
+    if (!pageObj || !pageObj.pdfCanvas) return;
+
+    // Remover banner flotante si existe
+    document.getElementById(`scanned-banner-${pageNum}`)?.remove();
+
+    // Mostrar overlay de carga sobre la página
+    const overlay = document.createElement('div');
+    overlay.className = 'scanned-ocr-loading-overlay';
+    overlay.innerHTML = `
+      <div class="w-10 h-10 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+      <span class="font-semibold text-sm text-white">Reconociendo y convirtiendo texto escaneado...</span>
+      <span class="text-xs text-slate-400 mt-1">Generando bloques de Texto Vivo estilo Acrobat Pro (WASM)</span>
+    `;
+    pageWrapper.appendChild(overlay);
+
+    try {
+      const lang = document.getElementById('select-ocr-lang')?.value || 'spa+eng';
+      const worker = await Tesseract.createWorker(lang, 1);
+      const ret = await worker.recognize(pageObj.pdfCanvas);
+      await worker.terminate();
+
+      overlay.remove();
+
+      if (!ret.data || !ret.data.lines || ret.data.lines.length === 0) {
+        window.showToast('No se detectó texto claro en la página.', 'warning');
+        return;
+      }
+
+      ret.data.lines.forEach((line, idx) => {
+        const cleanStr = line.text?.trim();
+        if (!cleanStr) return;
+
+        const left = Math.round(line.bbox.x0 / this.renderScale);
+        const top = Math.round(line.bbox.y0 / this.renderScale);
+        const width = Math.max(20, Math.round((line.bbox.x1 - line.bbox.x0) / this.renderScale));
+        const height = Math.max(14, Math.round((line.bbox.y1 - line.bbox.y0) / this.renderScale));
+        const fontSize = Math.max(11, Math.round(height * 0.76));
+
+        const block = document.createElement('div');
+        block.className = 'acrobat-text-block';
+        block.id = `block-scanned-${pageNum}-${idx}`;
+        block.style.left = `${left}px`;
+        block.style.top = `${top}px`;
+        block.style.width = `${width + 8}px`;
+        block.style.minHeight = `${height}px`;
+        block.style.fontSize = `${fontSize}px`;
+        block.style.fontFamily = 'Arial, sans-serif';
+
+        block.innerHTML = `
+          <div class="text-block-toolbar">
+            <span class="text-btn-drag" title="Arrastrar para mover texto"><i class="fa-solid fa-arrows-up-down-left-right"></i></span>
+            <span class="text-btn-delete" title="Borrar este texto"><i class="fa-solid fa-trash-can"></i></span>
+          </div>
+          <div class="text-block-content" spellcheck="false">${cleanStr}</div>
+        `;
+
+        const meta = { str: cleanStr, left, top, width, height, fontSize };
+        this.setupLiveTextBlock(block, meta, pageNum);
+        textLayer.appendChild(block);
+      });
+
+      textLayer.dataset.isScanned = 'ready';
+      window.showToast('¡Texto escaneado convertido a Texto Vivo! Ya puedes hacer clic en cualquier texto para modificarlo.', 'success');
+
+      // Si el usuario había hecho clic en un punto específico, activar edición en la línea más cercana
+      if (targetClickCoords) {
+        const blocks = textLayer.querySelectorAll('.acrobat-text-block');
+        for (const b of blocks) {
+          const r = b.getBoundingClientRect();
+          if (targetClickCoords.clientX >= r.left - 16 && targetClickCoords.clientX <= r.right + 16 &&
+              targetClickCoords.clientY >= r.top - 12 && targetClickCoords.clientY <= r.bottom + 12) {
+            const content = b.querySelector('.text-block-content');
+            if (content) {
+              this.activateLiveTextEditing(b, content);
+              break;
+            }
+          }
+        }
+      }
+    } catch (ocrErr) {
+      overlay.remove();
+      console.error('Error en OCR de página escaneada:', ocrErr);
+      window.showToast('Error al reconocer texto: ' + ocrErr.message, 'error');
+    }
   }
 
   setupLiveTextBlock(block, meta, pageNum) {
