@@ -188,104 +188,154 @@ body {
   left: 0;
   width: 100%;
   height: 100%;
-  z-index: 15;
+  z-index: 25;
   pointer-events: none;
   overflow: hidden;
 }
 
-.acrobat-text-span {
+/* Bloque de Texto Vivo (Adobe Acrobat & PDF Agile style) */
+.acrobat-text-block {
   position: absolute;
   pointer-events: auto;
   cursor: text;
-  white-space: pre;
-  transform-origin: 0% 0%;
-  line-height: 1.15;
-  color: transparent; /* Transparente para superponer con precisión matemática sobre el canvas */
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.25;
+  color: transparent; /* Transparente en reposo para mostrar el canvas nítido debajo */
+  background: transparent;
   user-select: text;
   box-sizing: border-box;
-  transition: background 0.12s ease, outline 0.12s ease;
+  border-radius: 3px;
+  transition: outline 0.1s ease, background-color 0.1s ease;
+  z-index: 26;
 }
 
-/* Resaltado estilo Acrobat Pro al pasar el cursor en modo Texto o Selección */
-.tool-mode-text .acrobat-text-span:hover,
-.tool-mode-select .acrobat-text-span:hover {
+/* Resaltado Acrobat al pasar el ratón */
+.tool-mode-text .acrobat-text-block:hover,
+.tool-mode-select .acrobat-text-block:hover {
   outline: 1.5px dashed #4f46e5;
-  background: rgba(99, 102, 241, 0.1);
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.tool-mode-eraser .acrobat-text-block:hover {
+  outline: 1.5px dashed #ef4444;
+  background: rgba(239, 68, 68, 0.15);
+  cursor: pointer;
+}
+
+/* Barra de herramientas flotante del bloque de texto (mover y borrar) */
+.text-block-toolbar {
+  position: absolute;
+  top: -24px;
+  left: 0;
+  display: none;
+  align-items: center;
+  gap: 3px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  border-radius: 4px;
+  padding: 1px 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 70;
+  pointer-events: auto;
+  user-select: none;
+}
+
+.acrobat-text-block:hover .text-block-toolbar,
+.acrobat-text-block.editing .text-block-toolbar,
+.acrobat-text-block.selected .text-block-toolbar,
+.interactive-text-box:hover .text-block-toolbar,
+.interactive-text-box.editing .text-block-toolbar {
+  display: flex;
+}
+
+.text-btn-drag {
+  cursor: grab;
+  color: #94a3b8;
+  padding: 1px 4px;
+  font-size: 11px;
   border-radius: 2px;
+}
+.text-btn-drag:hover {
+  color: #ffffff;
+  background: #334155;
+}
+.text-btn-drag:active {
+  cursor: grabbing;
+}
+
+.text-btn-delete {
+  cursor: pointer;
+  color: #f87171;
+  padding: 1px 4px;
+  font-size: 11px;
+  border-radius: 2px;
+}
+.text-btn-delete:hover {
+  color: #ffffff;
+  background: #ef4444;
 }
 
 /* Modo edición activa in-place con cursor parpadeante */
-.acrobat-text-span.editing-inline {
+.acrobat-text-block.editing {
   color: #0f172a !important;
   background: #ffffff !important;
   outline: 2px solid #4f46e5 !important;
-  box-shadow: 0 4px 15px rgba(79, 70, 229, 0.3), 0 1px 3px rgba(0,0,0,0.2) !important;
-  z-index: 50 !important;
-  border-radius: 3px !important;
+  box-shadow: 0 4px 16px rgba(79, 70, 229, 0.35), 0 1px 4px rgba(0,0,0,0.15) !important;
+  z-index: 55 !important;
   padding: 1px 4px !important;
   caret-color: #4f46e5 !important;
-  min-width: 24px;
 }
 
-/* Texto modificado que tapa el texto impreso original debajo */
-.acrobat-text-span.modified {
+/* Texto que ha sido modificado en su posición */
+.acrobat-text-block.modified {
   color: #0f172a !important;
   background: #ffffff !important;
-  z-index: 20 !important;
-  outline: 1px dashed rgba(99, 102, 241, 0.5);
-  border-radius: 2px;
-  padding: 0 2px;
+  z-index: 28 !important;
+  outline: 1px dashed rgba(99, 102, 241, 0.6);
+  padding: 1px 3px;
 }
 
-.acrobat-text-span.modified:hover {
+.acrobat-text-block.moved {
+  color: #0f172a !important;
+  background: transparent !important;
+  z-index: 35 !important;
   outline: 1.5px dashed #4f46e5;
+  padding: 1px 3px;
 }
 
-/* Cuadro de texto editable interactivo para nueva escritura libre */
+/* Cuadro de texto añadido (Escritura Libre) - Fondo 100% transparente */
 .interactive-text-box {
   position: absolute;
   min-width: 80px;
-  min-height: 26px;
+  min-height: 24px;
   border: 1.5px dashed #4f46e5;
-  padding: 3px 8px;
+  padding: 2px 6px;
   outline: none;
   cursor: text;
-  background: #ffffff;
+  background: transparent !important; /* Fondo transparente a petición del usuario */
   color: #0f172a;
-  border-radius: 4px;
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.25), 0 0 0 2px rgba(99, 102, 241, 0.25);
-  z-index: 50;
+  border-radius: 3px;
+  z-index: 45;
   caret-color: #4f46e5;
   user-select: text;
+  box-sizing: border-box;
 }
 
-.interactive-text-box:focus {
-  border-color: #4338ca;
-  box-shadow: 0 4px 18px rgba(79, 70, 229, 0.4), 0 0 0 3px rgba(99, 102, 241, 0.3);
+.interactive-text-box:hover {
+  border-color: #6366f1;
 }
 
-.text-box-delete-btn {
-  position: absolute;
-  top: -9px;
-  right: -9px;
-  width: 20px;
-  height: 20px;
-  background: #ef4444;
-  color: white;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  cursor: pointer;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-  z-index: 55;
-  transition: transform 0.12s ease;
+.interactive-text-box.editing {
+  outline: none;
+  border: 2px solid #4f46e5;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.25);
+  background: transparent !important;
 }
 
-.text-box-delete-btn:hover {
-  transform: scale(1.15);
-  background: #dc2626;
+/* Cursor para la herramienta Borrador */
+.tool-mode-eraser .acrobat-overlay-canvas {
+  cursor: crosshair;
 }
 
 /* Sello de firma y estampas */

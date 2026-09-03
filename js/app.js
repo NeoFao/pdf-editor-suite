@@ -305,8 +305,8 @@ class UnifiedAcrobatApp {
       const overlayCtx = overlayCanvas.getContext('2d');
 
       pageWrapper.appendChild(pdfCanvas);
-      pageWrapper.appendChild(textLayer);
       pageWrapper.appendChild(overlayCanvas);
+      pageWrapper.appendChild(textLayer);
       stage.appendChild(pageWrapper);
 
       this.renderedPages.set(pageNum, {
@@ -348,11 +348,19 @@ class UnifiedAcrobatApp {
 
     canvas.onpointerdown = (e) => {
       const tool = window.docState.activeTool;
-      if (tool === 'pencil' || tool === 'highlighter' || tool === 'rect') {
+      if (tool === 'pencil' || tool === 'highlighter' || tool === 'rect' || tool === 'eraser') {
         isDrawing = true;
         const coords = getCoords(e);
         path = [coords];
         canvas.setPointerCapture(e.pointerId);
+
+        if (tool === 'eraser') {
+          // Trazo inicial del borrador
+          ctx.beginPath();
+          ctx.arc(coords.x, coords.y, 14 * this.renderScale, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+        }
       } else if (tool === 'text') {
         const rect = canvas.getBoundingClientRect();
         const cssCoords = {
@@ -388,6 +396,18 @@ class UnifiedAcrobatApp {
           ctx.lineJoin = 'round';
         }
         ctx.stroke();
+      } else if (tool === 'eraser') {
+        // Borrador físico (Tipp-Ex) que borra trazos o contenido impreso del documento
+        ctx.beginPath();
+        const prev = path[path.length - 2];
+        ctx.moveTo(prev.x, prev.y);
+        ctx.lineTo(coords.x, coords.y);
+        ctx.strokeStyle = '#ffffff';
+        ctx.globalAlpha = 1.0;
+        ctx.lineWidth = 26 * this.renderScale;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.stroke();
       }
     };
 
@@ -409,6 +429,18 @@ class UnifiedAcrobatApp {
             alpha: tool === 'highlighter' ? 0.35 : window.docState.properties.opacity
           });
           window.docState.pushUndo({ type: 'draw', pageNum });
+        }
+      } else if (tool === 'eraser') {
+        if (path.length > 0) {
+          pageAnn.strokes.push({
+            tool: 'pencil',
+            points: [...path],
+            color: '#ffffff',
+            lineWidth: 26 * this.renderScale,
+            alpha: 1.0
+          });
+          window.docState.pushUndo({ type: 'draw', pageNum });
+          window.showToast('Contenido borrado.', 'info');
         }
       } else if (tool === 'rect') {
         if (path.length > 1) {
@@ -432,128 +464,267 @@ class UnifiedAcrobatApp {
     };
   }
 
-  /* ==================== 2.1 EDICIÓN DIRECTA EN HOJA (ACROBAT & PDF AGILE STYLE) ==================== */
+  /* ==================== 2.1 MOTOR DE TEXTO VIVO (ACROBAT & PDF AGILE STYLE) ==================== */
 
-  buildInteractiveTextLayer(textLayer, textContent, viewport, pageNum) {
-    if (!textContent || !textContent.items) return;
+  groupTextItemsIntoLines(items, viewport, scale) {
+    if (!items || items.length === 0) return [];
 
-    for (let idx = 0; idx < textContent.items.length; idx++) {
-      const item = textContent.items[idx];
-      if (!item.str || item.str.trim() === '') continue;
-
+    const converted = items.filter(it => it.str && it.str.trim() !== '').map((item, originalIndex) => {
       const tx = item.transform[4];
       const ty = item.transform[5];
       const fontHeight = Math.hypot(item.transform[2], item.transform[3]) || 12;
-
-      // Coordenadas convertidas mediante la matriz de proyección del viewport
       const [vx, vy] = viewport.convertToViewportPoint(tx, ty);
 
-      // Conversión a coordenadas visuales CSS de la página
-      const scale = this.renderScale;
       const left = Math.max(0, Math.round(vx / scale));
       const top = Math.max(0, Math.round((vy - (fontHeight * viewport.scale)) / scale));
-      const width = Math.max(16, Math.round((item.width * viewport.scale) / scale));
+      const width = Math.max(12, Math.round((item.width * viewport.scale) / scale));
       const height = Math.max(14, Math.round((fontHeight * viewport.scale) / scale) + 2);
-      const fontSize = Math.max(10, Math.round(fontHeight));
+      const fontSize = Math.max(11, Math.round(fontHeight));
 
-      const span = document.createElement('div');
-      span.className = 'acrobat-text-span';
-      span.id = `txt-span-${pageNum}-${idx}`;
-      span.innerText = item.str;
-      span.title = 'Haz clic para modificar este texto';
-      span.setAttribute('data-original-text', item.str);
-      span.setAttribute('data-page', pageNum);
-      span.style.left = `${left}px`;
-      span.style.top = `${top}px`;
-      span.style.width = `${width}px`;
-      span.style.minHeight = `${height}px`;
-      span.style.fontSize = `${fontSize}px`;
-      span.style.fontFamily = window.docState.properties.fontFamily || 'Arial, sans-serif';
-
-      this.makeInlineTextEditable(span, pageNum, {
-        spanId: span.id,
-        originalText: item.str,
+      return {
+        originalIndex,
+        str: item.str,
         left,
         top,
         width,
         height,
-        fontSize
-      });
+        fontSize,
+        fontName: item.fontName || 'Arial, sans-serif'
+      };
+    });
 
-      textLayer.appendChild(span);
+    converted.sort((a, b) => {
+      if (Math.abs(a.top - b.top) > 5) return a.top - b.top;
+      return a.left - b.left;
+    });
+
+    const lines = [];
+    let currentLine = null;
+
+    for (const item of converted) {
+      if (!currentLine) {
+        currentLine = { ...item, items: [item] };
+        continue;
+      }
+
+      const isSameRow = Math.abs(item.top - currentLine.top) <= 5;
+      const isAdjacent = (item.left - (currentLine.left + currentLine.width)) <= 32;
+
+      if (isSameRow && isAdjacent) {
+        const spaceNeeded = (item.left > (currentLine.left + currentLine.width + 2)) && !currentLine.str.endsWith(' ') && !item.str.startsWith(' ');
+        currentLine.str += (spaceNeeded ? ' ' : '') + item.str;
+        currentLine.width = (item.left + item.width) - currentLine.left;
+        currentLine.height = Math.max(currentLine.height, item.height);
+        currentLine.fontSize = Math.max(currentLine.fontSize, item.fontSize);
+        currentLine.items.push(item);
+      } else {
+        lines.push(currentLine);
+        currentLine = { ...item, items: [item] };
+      }
     }
+
+    if (currentLine) lines.push(currentLine);
+    return lines;
   }
 
-  makeInlineTextEditable(span, pageNum, meta) {
-    span.addEventListener('click', (e) => {
+  buildInteractiveTextLayer(textLayer, textContent, viewport, pageNum) {
+    if (!textContent || !textContent.items) return;
+
+    const scale = this.renderScale;
+    const lines = this.groupTextItemsIntoLines(textContent.items, viewport, scale);
+
+    lines.forEach((line, idx) => {
+      const block = document.createElement('div');
+      block.className = 'acrobat-text-block';
+      block.id = `block-${pageNum}-${idx}`;
+      block.style.left = `${line.left}px`;
+      block.style.top = `${line.top}px`;
+      block.style.width = `${line.width + 6}px`;
+      block.style.minHeight = `${line.height}px`;
+      block.style.fontSize = `${line.fontSize}px`;
+      block.style.fontFamily = window.docState.properties.fontFamily || 'Arial, sans-serif';
+
+      block.innerHTML = `
+        <div class="text-block-toolbar">
+          <span class="text-btn-drag" title="Arrastrar para mover texto"><i class="fa-solid fa-arrows-up-down-left-right"></i></span>
+          <span class="text-btn-delete" title="Borrar este texto"><i class="fa-solid fa-trash-can"></i></span>
+        </div>
+        <div class="text-block-content" spellcheck="false">${line.str}</div>
+      `;
+
+      this.setupLiveTextBlock(block, line, pageNum);
+      textLayer.appendChild(block);
+    });
+  }
+
+  setupLiveTextBlock(block, meta, pageNum) {
+    const contentEl = block.querySelector('.text-block-content');
+    const dragBtn = block.querySelector('.text-btn-drag');
+    const deleteBtn = block.querySelector('.text-btn-delete');
+    let hasBeenMoved = false;
+
+    // 1. Clic para editar o borrar
+    contentEl.addEventListener('click', (e) => {
       const tool = window.docState.activeTool;
-      // Permitir edición al hacer clic con la herramienta Texto o Selección
+
+      // Si la herramienta es el Borrador, borrar este texto inmediatamente
+      if (tool === 'eraser') {
+        e.stopPropagation();
+        this.maskOriginalText(pageNum, meta);
+        block.remove();
+        window.showToast('Texto eliminado del documento.', 'info');
+        return;
+      }
+
       if (tool !== 'text' && tool !== 'select') return;
 
       e.stopPropagation();
-      if (span.isContentEditable) return;
+      if (contentEl.isContentEditable) return;
 
-      // Activar edición interactiva directamente sobre el papel
-      span.contentEditable = 'true';
-      span.classList.add('editing-inline');
-      span.style.color = window.docState.properties.textColor || window.docState.properties.color || '#0f172a';
+      // Entrar en modo edición interactivo
+      block.classList.add('editing');
+      contentEl.contentEditable = 'true';
+      contentEl.style.color = window.docState.properties.textColor || window.docState.properties.color || '#0f172a';
 
-      // Posicionar cursor para editar al instante
-      span.focus();
+      contentEl.focus();
       const sel = window.getSelection();
       const range = document.createRange();
-      range.selectNodeContents(span);
+      range.selectNodeContents(contentEl);
       sel.removeAllRanges();
       sel.addRange(range);
     });
 
-    span.addEventListener('keydown', (e) => {
+    contentEl.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
-        span.blur();
-      } else if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        span.blur();
+        contentEl.blur();
       }
     });
 
-    span.addEventListener('blur', () => {
-      span.contentEditable = 'false';
-      span.classList.remove('editing-inline');
+    contentEl.addEventListener('blur', () => {
+      contentEl.contentEditable = 'false';
+      block.classList.remove('editing');
 
-      const currentText = span.innerText;
+      const currentText = contentEl.innerText.trim();
       const pageAnn = window.docState.initPageAnnotations(pageNum);
 
-      if (currentText !== meta.originalText) {
-        span.classList.add('modified');
+      if (currentText !== meta.str) {
+        block.classList.add('modified');
 
-        const existingIdx = pageAnn.texts.findIndex(t => t.spanId === meta.spanId);
-        const editRecord = {
-          id: 'edit_' + meta.spanId,
-          spanId: meta.spanId,
+        const existingIdx = pageAnn.texts.findIndex(t => t.id === block.id);
+        const record = {
+          id: block.id,
           isReplacement: true,
-          originalText: meta.originalText,
+          originalText: meta.str,
           text: currentText,
-          boxX: meta.left,
-          boxY: meta.top,
-          boxW: meta.width,
-          boxH: meta.height,
-          x: meta.left * this.renderScale,
-          y: (meta.top + (meta.height / 2)) * this.renderScale,
+          boxX: parseFloat(block.style.left) || meta.left,
+          boxY: parseFloat(block.style.top) || meta.top,
+          boxW: block.offsetWidth || meta.width,
+          boxH: block.offsetHeight || meta.height,
+          x: (parseFloat(block.style.left) || meta.left) * this.renderScale,
+          y: (parseFloat(block.style.top) || meta.top) * this.renderScale,
           size: meta.fontSize * this.renderScale,
           font: window.docState.properties.fontFamily || 'Arial, sans-serif',
           color: window.docState.properties.textColor || window.docState.properties.color || '#000000'
         };
 
         if (existingIdx >= 0) {
-          pageAnn.texts[existingIdx] = editRecord;
+          pageAnn.texts[existingIdx] = record;
         } else {
-          pageAnn.texts.push(editRecord);
+          pageAnn.texts.push(record);
+          window.docState.pushUndo({ type: 'text', pageNum });
         }
 
-        window.docState.pushUndo({ type: 'text', pageNum });
         window.showToast('Texto modificado en la hoja.', 'success');
       }
     });
+
+    // 2. Botón para eliminar texto (tapa con parche blanco en el PDF)
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.maskOriginalText(pageNum, meta);
+      block.remove();
+      window.showToast('Texto eliminado del documento.', 'info');
+    });
+
+    // 3. Arrastrar y mover texto libremente por la página (Drag and Drop estilo Acrobat)
+    dragBtn.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+
+      const startMouseX = e.clientX;
+      const startMouseY = e.clientY;
+      const initialLeft = parseFloat(block.style.left) || meta.left;
+      const initialTop = parseFloat(block.style.top) || meta.top;
+
+      // Al iniciar el primer movimiento, tapar el texto original con parche blanco
+      if (!hasBeenMoved) {
+        this.maskOriginalText(pageNum, meta);
+        hasBeenMoved = true;
+        block.classList.add('moved');
+      }
+
+      const onMouseMove = (moveEv) => {
+        const dx = moveEv.clientX - startMouseX;
+        const dy = moveEv.clientY - startMouseY;
+        block.style.left = `${Math.round(initialLeft + dx)}px`;
+        block.style.top = `${Math.round(initialTop + dy)}px`;
+      };
+
+      const onMouseUp = () => {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+
+        // Guardar nueva posición
+        const pageAnn = window.docState.initPageAnnotations(pageNum);
+        const existingIdx = pageAnn.texts.findIndex(t => t.id === block.id);
+        const finalLeft = parseFloat(block.style.left);
+        const finalTop = parseFloat(block.style.top);
+
+        const record = {
+          id: block.id,
+          isReplacement: true,
+          originalText: meta.str,
+          text: contentEl.innerText.trim(),
+          boxX: finalLeft,
+          boxY: finalTop,
+          boxW: block.offsetWidth || meta.width,
+          boxH: block.offsetHeight || meta.height,
+          x: finalLeft * this.renderScale,
+          y: finalTop * this.renderScale,
+          size: meta.fontSize * this.renderScale,
+          font: window.docState.properties.fontFamily || 'Arial, sans-serif',
+          color: window.docState.properties.textColor || window.docState.properties.color || '#000000'
+        };
+
+        if (existingIdx >= 0) {
+          pageAnn.texts[existingIdx] = record;
+        } else {
+          pageAnn.texts.push(record);
+          window.docState.pushUndo({ type: 'text', pageNum });
+        }
+
+        window.showToast('Texto movido a nueva posición.', 'success');
+      };
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+  }
+
+  maskOriginalText(pageNum, meta) {
+    const pageAnn = window.docState.initPageAnnotations(pageNum);
+    // Añade un rectángulo blanco sólido para tapar el texto original
+    pageAnn.strokes.push({
+      tool: 'rect',
+      x: (meta.left - 2) * this.renderScale,
+      y: (meta.top - 1) * this.renderScale,
+      width: (meta.width + 8) * this.renderScale,
+      height: (meta.height + 4) * this.renderScale,
+      color: '#ffffff',
+      isMask: true,
+      fill: true
+    });
+    this.redrawPageAnnotations(pageNum);
   }
 
   insertInlineTextBox(pageNum, cssCoords) {
@@ -564,49 +735,39 @@ class UnifiedAcrobatApp {
     const box = document.createElement('div');
     box.className = 'interactive-text-box';
     box.id = 'txtbox_' + Math.random().toString(36).substring(2, 9);
-    box.contentEditable = 'true';
     box.style.left = `${Math.max(10, Math.round(cssCoords.x))}px`;
     box.style.top = `${Math.max(10, Math.round(cssCoords.y))}px`;
     box.style.fontFamily = window.docState.properties.fontFamily || 'Arial, sans-serif';
     box.style.fontSize = `${window.docState.properties.fontSize || 16}px`;
     box.style.color = window.docState.properties.textColor || window.docState.properties.color || '#0f172a';
-    box.innerText = 'Escribe aquí...';
 
-    // Botón para eliminar el cuadro de texto libre
-    const delBtn = document.createElement('div');
-    delBtn.className = 'text-box-delete-btn';
-    delBtn.title = 'Eliminar';
-    delBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
-    box.appendChild(delBtn);
+    box.innerHTML = `
+      <div class="text-block-toolbar">
+        <span class="text-btn-drag" title="Arrastrar para mover"><i class="fa-solid fa-arrows-up-down-left-right"></i></span>
+        <span class="text-btn-delete" title="Eliminar cuadro"><i class="fa-solid fa-trash-can"></i></span>
+      </div>
+      <div class="interactive-text-content" contenteditable="true" spellcheck="false">Escribe aquí...</div>
+    `;
 
-    delBtn.addEventListener('mousedown', (e) => {
+    const contentEl = box.querySelector('.interactive-text-content');
+    const dragBtn = box.querySelector('.text-btn-drag');
+    const deleteBtn = box.querySelector('.text-btn-delete');
+
+    // Permitir editar en cualquier momento al hacer clic
+    contentEl.addEventListener('click', (e) => {
       e.stopPropagation();
-      box.remove();
-      const pageAnn = window.docState.initPageAnnotations(pageNum);
-      pageAnn.texts = pageAnn.texts.filter(t => t.id !== box.id);
-      window.showToast('Cuadro de texto eliminado.', 'info');
+      contentEl.contentEditable = 'true';
+      box.classList.add('editing');
+      contentEl.focus();
     });
 
-    wrapper.appendChild(box);
-
-    // Foco automático con cursor parpadeante sin ventanas emergentes
-    setTimeout(() => {
-      box.focus();
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(box);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    }, 20);
-
-    box.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') box.blur();
-    });
-
-    box.addEventListener('blur', () => {
-      const text = box.innerText.trim();
+    contentEl.addEventListener('blur', () => {
+      box.classList.remove('editing');
+      const text = contentEl.innerText.trim();
       if (!text || text === 'Escribe aquí...') {
         box.remove();
+        const pageAnn = window.docState.initPageAnnotations(pageNum);
+        pageAnn.texts = pageAnn.texts.filter(t => t.id !== box.id);
         return;
       }
 
@@ -637,6 +798,66 @@ class UnifiedAcrobatApp {
         window.docState.pushUndo({ type: 'text', pageNum });
       }
     });
+
+    // Eliminar
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      box.remove();
+      const pageAnn = window.docState.initPageAnnotations(pageNum);
+      pageAnn.texts = pageAnn.texts.filter(t => t.id !== box.id);
+      window.showToast('Cuadro de texto eliminado.', 'info');
+    });
+
+    // Mover cuadro libremente
+    dragBtn.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      e.preventDefault();
+
+      const startMouseX = e.clientX;
+      const startMouseY = e.clientY;
+      const initialLeft = parseFloat(box.style.left) || 0;
+      const initialTop = parseFloat(box.style.top) || 0;
+
+      const onMouseMove = (moveEv) => {
+        const dx = moveEv.clientX - startMouseX;
+        const dy = moveEv.clientY - startMouseY;
+        box.style.left = `${Math.round(initialLeft + dx)}px`;
+        box.style.top = `${Math.round(initialTop + dy)}px`;
+      };
+
+      const onMouseUp = () => {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+
+        const pageAnn = window.docState.initPageAnnotations(pageNum);
+        const existingIdx = pageAnn.texts.findIndex(t => t.id === box.id);
+        const finalLeft = parseFloat(box.style.left);
+        const finalTop = parseFloat(box.style.top);
+
+        if (existingIdx >= 0) {
+          pageAnn.texts[existingIdx].boxX = finalLeft;
+          pageAnn.texts[existingIdx].boxY = finalTop;
+          pageAnn.texts[existingIdx].x = finalLeft * this.renderScale;
+          pageAnn.texts[existingIdx].y = finalTop * this.renderScale;
+        }
+      };
+
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup', onMouseUp);
+    });
+
+    wrapper.appendChild(box);
+
+    // Foco automático con cursor al instante
+    setTimeout(() => {
+      box.classList.add('editing');
+      contentEl.focus();
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(contentEl);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }, 20);
   }
 
   redrawPageAnnotations(pageNum) {
@@ -667,10 +888,15 @@ class UnifiedAcrobatApp {
           ctx.stroke();
         }
       } else if (s.tool === 'rect') {
-        ctx.beginPath();
-        ctx.strokeStyle = s.color;
-        ctx.lineWidth = s.lineWidth;
-        ctx.strokeRect(s.x, s.y, s.width, s.height);
+        if (s.fill || s.isMask) {
+          ctx.fillStyle = s.color || '#ffffff';
+          ctx.fillRect(s.x, s.y, s.width, s.height);
+        } else {
+          ctx.beginPath();
+          ctx.strokeStyle = s.color;
+          ctx.lineWidth = s.lineWidth;
+          ctx.strokeRect(s.x, s.y, s.width, s.height);
+        }
       }
       ctx.restore();
     });
@@ -1024,15 +1250,25 @@ class UnifiedAcrobatApp {
                 offCtx.stroke();
               }
             } else if (s.tool === 'rect') {
-              offCtx.beginPath();
-              offCtx.strokeStyle = s.color;
-              offCtx.lineWidth = (s.lineWidth / this.renderScale) * scaleFactorX;
-              offCtx.strokeRect(
-                (s.x / this.renderScale) * scaleFactorX,
-                (s.y / this.renderScale) * scaleFactorY,
-                (s.width / this.renderScale) * scaleFactorX,
-                (s.height / this.renderScale) * scaleFactorY
-              );
+              if (s.fill || s.isMask) {
+                offCtx.fillStyle = s.color || '#ffffff';
+                offCtx.fillRect(
+                  (s.x / this.renderScale) * scaleFactorX,
+                  (s.y / this.renderScale) * scaleFactorY,
+                  (s.width / this.renderScale) * scaleFactorX,
+                  (s.height / this.renderScale) * scaleFactorY
+                );
+              } else {
+                offCtx.beginPath();
+                offCtx.strokeStyle = s.color;
+                offCtx.lineWidth = (s.lineWidth / this.renderScale) * scaleFactorX;
+                offCtx.strokeRect(
+                  (s.x / this.renderScale) * scaleFactorX,
+                  (s.y / this.renderScale) * scaleFactorY,
+                  (s.width / this.renderScale) * scaleFactorX,
+                  (s.height / this.renderScale) * scaleFactorY
+                );
+              }
             }
             offCtx.restore();
           });
@@ -1385,13 +1621,14 @@ class UnifiedAcrobatApp {
 
   updateCursorMode(tool) {
     const stage = document.getElementById('pdf-render-stage');
-    stage?.classList.remove('tool-mode-text', 'tool-mode-select');
+    stage?.classList.remove('tool-mode-text', 'tool-mode-select', 'tool-mode-eraser');
     if (tool === 'text') stage?.classList.add('tool-mode-text');
     if (tool === 'select') stage?.classList.add('tool-mode-select');
+    if (tool === 'eraser') stage?.classList.add('tool-mode-eraser');
 
     const overlays = document.querySelectorAll('.acrobat-overlay-canvas');
     overlays.forEach(c => {
-      if (tool === 'pencil' || tool === 'highlighter' || tool === 'rect') {
+      if (tool === 'pencil' || tool === 'highlighter' || tool === 'rect' || tool === 'eraser') {
         c.style.cursor = 'crosshair';
       } else if (tool === 'text') {
         c.style.cursor = 'text';
