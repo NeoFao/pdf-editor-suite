@@ -596,21 +596,21 @@ class UnifiedAcrobatApp {
       const block = document.createElement('div');
       block.className = 'acrobat-text-block';
       block.id = `block-${pageNum}-${idx}`;
+      block.dataset.pageNum = pageNum;
       block.style.left = `${line.left}px`;
       block.style.top = `${line.top}px`;
       block.style.width = `${line.width + 6}px`;
       block.style.minHeight = `${line.height}px`;
       block.style.fontSize = `${line.fontSize}px`;
-      block.style.fontFamily = window.docState.properties.fontFamily || 'Arial, sans-serif';
+      block.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
       block.innerHTML = `
-        <div class="text-block-toolbar">
-          <span class="text-btn-drag" title="Arrastrar para mover texto"><i class="fa-solid fa-arrows-up-down-left-right"></i></span>
-          <span class="text-btn-delete" title="Borrar este texto"><i class="fa-solid fa-trash-can"></i></span>
-        </div>
+        <span class="acrobat-drag-handle" title="Arrastrar para mover (Acrobat style)"><i class="fa-solid fa-grip-vertical"></i></span>
+        <span class="acrobat-delete-btn" title="Eliminar"><i class="fa-solid fa-xmark"></i></span>
         <div class="text-block-content" spellcheck="false">${line.str}</div>
       `;
 
+      block.dataset.meta = JSON.stringify(line);
       this.setupLiveTextBlock(block, line, pageNum);
       textLayer.appendChild(block);
     });
@@ -619,7 +619,6 @@ class UnifiedAcrobatApp {
   /* ==================== 2.2 MOTOR OCR A TEXTO VIVO PARA PÁGINAS ESCANEADAS ==================== */
 
   setupScannedPageLiveText(pageNum, pageWrapper, textLayer) {
-    // Si se llama, ejecuta la conversión de inmediato y sin esperas
     this.convertScannedPageToLiveText(pageNum, pageWrapper, textLayer);
   }
 
@@ -645,45 +644,72 @@ class UnifiedAcrobatApp {
     try {
       const lang = document.getElementById('select-ocr-lang')?.value || 'spa+eng';
       const worker = await Tesseract.createWorker(lang, 1);
-      const ret = await worker.recognize(canvas);
+      const ret = await worker.recognize(canvas, {}, { blocks: true });
       await worker.terminate();
 
-      overlay.remove();
+      overlay?.remove();
 
-      if (!ret.data || !ret.data.lines || ret.data.lines.length === 0) {
+      // Extraer todas las líneas detectadas por OCR de forma limpia e independiente
+      const allLines = [];
+      if (ret.data && ret.data.blocks) {
+        for (const b of ret.data.blocks) {
+          if (b.paragraphs) {
+            for (const p of b.paragraphs) {
+              if (p.lines) {
+                for (const l of p.lines) {
+                  const clean = l.text ? l.text.trim() : '';
+                  if (clean && l.bbox) {
+                    allLines.push({ str: clean, bbox: l.bbox });
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+      if (allLines.length === 0 && ret.data && ret.data.lines) {
+        for (const l of ret.data.lines) {
+          const clean = l.text ? l.text.trim() : '';
+          if (clean && l.bbox) allLines.push({ str: clean, bbox: l.bbox });
+        }
+      }
+
+      if (allLines.length === 0) {
         textLayer.dataset.isScanned = 'empty';
         return;
       }
 
-      ret.data.lines.forEach((line, idx) => {
-        const cleanStr = line.text?.trim();
-        if (!cleanStr) return;
+      const pageW = parseFloat(pageWrapper.style.width) || (canvas.width / this.renderScale);
+      const pageH = parseFloat(pageWrapper.style.height) || (canvas.height / this.renderScale);
+      const scaleX = pageW / canvas.width;
+      const scaleY = pageH / canvas.height;
 
-        const left = Math.round(line.bbox.x0 / this.renderScale);
-        const top = Math.round(line.bbox.y0 / this.renderScale);
-        const width = Math.max(20, Math.round((line.bbox.x1 - line.bbox.x0) / this.renderScale));
-        const height = Math.max(14, Math.round((line.bbox.y1 - line.bbox.y0) / this.renderScale));
-        const fontSize = Math.max(11, Math.round(height * 0.76));
+      allLines.forEach((line, idx) => {
+        const left = Math.max(0, Math.round(line.bbox.x0 * scaleX));
+        const top = Math.max(0, Math.round(line.bbox.y0 * scaleY));
+        const width = Math.max(20, Math.round((line.bbox.x1 - line.bbox.x0) * scaleX));
+        const height = Math.max(14, Math.round((line.bbox.y1 - line.bbox.y0) * scaleY));
+        const fontSize = Math.max(11, Math.round(height * 0.78));
 
         const block = document.createElement('div');
         block.className = 'acrobat-text-block';
         block.id = `block-scanned-${pageNum}-${idx}`;
+        block.dataset.pageNum = pageNum;
         block.style.left = `${left}px`;
         block.style.top = `${top}px`;
-        block.style.width = `${width + 8}px`;
+        block.style.width = `${width + 4}px`;
         block.style.minHeight = `${height}px`;
         block.style.fontSize = `${fontSize}px`;
-        block.style.fontFamily = 'Arial, sans-serif';
+        block.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
         block.innerHTML = `
-          <div class="text-block-toolbar">
-            <span class="text-btn-drag" title="Arrastrar para mover texto"><i class="fa-solid fa-arrows-up-down-left-right"></i></span>
-            <span class="text-btn-delete" title="Borrar este texto"><i class="fa-solid fa-trash-can"></i></span>
-          </div>
-          <div class="text-block-content" spellcheck="false">${cleanStr}</div>
+          <span class="acrobat-drag-handle" title="Arrastrar para mover (Acrobat style)"><i class="fa-solid fa-grip-vertical"></i></span>
+          <span class="acrobat-delete-btn" title="Eliminar"><i class="fa-solid fa-xmark"></i></span>
+          <div class="text-block-content" spellcheck="false">${line.str}</div>
         `;
 
-        const meta = { str: cleanStr, left, top, width, height, fontSize };
+        const meta = { str: line.str, left, top, width, height, fontSize };
+        block.dataset.meta = JSON.stringify(meta);
         this.setupLiveTextBlock(block, meta, pageNum);
         textLayer.appendChild(block);
       });
@@ -706,15 +732,15 @@ class UnifiedAcrobatApp {
         }
       }
     } catch (ocrErr) {
-      overlay.remove();
+      overlay?.remove();
       console.error('Error en activación automática de Texto Vivo:', ocrErr);
     }
   }
 
   setupLiveTextBlock(block, meta, pageNum) {
     const contentEl = block.querySelector('.text-block-content');
-    const dragBtn = block.querySelector('.text-btn-drag');
-    const deleteBtn = block.querySelector('.text-btn-delete');
+    const dragHandle = block.querySelector('.acrobat-drag-handle');
+    const deleteBtn = block.querySelector('.acrobat-delete-btn');
     let hasBeenMoved = false;
 
     // Prevenir que eventos pointerdown traspasen al canvas inferior
@@ -732,32 +758,18 @@ class UnifiedAcrobatApp {
       }
     });
 
-    // 1. Clic para editar o borrar
+    // 1. Clic para editar
     contentEl.addEventListener('click', (e) => {
       const tool = window.docState.activeTool;
-
-      // Si la herramienta es el Borrador, borrar este texto inmediatamente
       if (tool === 'eraser') {
         e.stopPropagation();
-        const maskStroke = this.maskOriginalText(pageNum, meta);
-        window.docState.pushUndo({
-          type: 'delete_text',
-          pageNum,
-          blockId: block.id,
-          blockHtml: block.outerHTML,
-          textLayerId: `acrobat-text-layer-${pageNum}`,
-          meta,
-          maskStroke
-        });
-        block.remove();
-        window.showToast('Texto eliminado del documento.', 'info');
+        this.deleteLiveTextBlock(block, meta, pageNum);
         return;
       }
 
       if (tool !== 'text' && tool !== 'select') return;
-
       e.stopPropagation();
-      this.activateLiveTextEditing(block, contentEl);
+      this.activateLiveTextEditing(block, contentEl, e);
     });
 
     contentEl.addEventListener('keydown', (e) => {
@@ -776,6 +788,7 @@ class UnifiedAcrobatApp {
       if (currentText !== meta.str) {
         const wasModifiedBefore = block.classList.contains('modified');
         block.classList.add('modified');
+        block.style.background = '#ffffff';
 
         const existingIdx = pageAnn.texts.findIndex(t => t.id === block.id);
         const oldText = existingIdx >= 0 ? pageAnn.texts[existingIdx].text : meta.str;
@@ -792,8 +805,8 @@ class UnifiedAcrobatApp {
           x: (parseFloat(block.style.left) || meta.left) * this.renderScale,
           y: (parseFloat(block.style.top) || meta.top) * this.renderScale,
           size: meta.fontSize * this.renderScale,
-          font: window.docState.properties.fontFamily || 'Arial, sans-serif',
-          color: window.docState.properties.textColor || window.docState.properties.color || '#000000'
+          font: window.docState.properties.fontFamily || '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+          color: window.docState.properties.textColor || window.docState.properties.color || '#111827'
         };
 
         if (existingIdx >= 0) {
@@ -812,28 +825,20 @@ class UnifiedAcrobatApp {
         });
 
         window.showToast('Texto modificado en la hoja.', 'success');
+      } else if (!block.classList.contains('modified') && !block.classList.contains('moved')) {
+        // Si no se modificó nada, mantener transparente
+        block.style.background = 'transparent';
       }
     });
 
-    // 2. Botón para eliminar texto (tapa con parche blanco en el PDF)
-    deleteBtn.addEventListener('click', (e) => {
+    // 2. Botón para eliminar (× en la esquina)
+    deleteBtn?.addEventListener('click', (e) => {
       e.stopPropagation();
-      const maskStroke = this.maskOriginalText(pageNum, meta);
-      window.docState.pushUndo({
-        type: 'delete_text',
-        pageNum,
-        blockId: block.id,
-        blockHtml: block.outerHTML,
-        textLayerId: `acrobat-text-layer-${pageNum}`,
-        meta,
-        maskStroke
-      });
-      block.remove();
-      window.showToast('Texto eliminado del documento.', 'info');
+      this.deleteLiveTextBlock(block, meta, pageNum);
     });
 
-    // 3. Arrastrar y mover texto libremente por la página (Drag and Drop estilo Acrobat)
-    dragBtn.addEventListener('mousedown', (e) => {
+    // 3. Arrastrar y mover texto libremente por la página (Drag handle estilo Acrobat)
+    dragHandle?.addEventListener('mousedown', (e) => {
       e.stopPropagation();
       e.preventDefault();
 
@@ -841,17 +846,19 @@ class UnifiedAcrobatApp {
       const startMouseY = e.clientY;
       const initialLeft = parseFloat(block.style.left) || meta.left;
       const initialTop = parseFloat(block.style.top) || meta.top;
+      const zoom = window.docState.zoom || 1.0;
 
       // Al iniciar el primer movimiento, tapar el texto original con parche blanco
       if (!hasBeenMoved) {
         this.maskOriginalText(pageNum, meta);
         hasBeenMoved = true;
         block.classList.add('moved');
+        block.style.background = '#ffffff';
       }
 
       const onMouseMove = (moveEv) => {
-        const dx = moveEv.clientX - startMouseX;
-        const dy = moveEv.clientY - startMouseY;
+        const dx = (moveEv.clientX - startMouseX) / zoom;
+        const dy = (moveEv.clientY - startMouseY) / zoom;
         block.style.left = `${Math.round(initialLeft + dx)}px`;
         block.style.top = `${Math.round(initialTop + dy)}px`;
       };
@@ -878,8 +885,8 @@ class UnifiedAcrobatApp {
           x: finalLeft * this.renderScale,
           y: finalTop * this.renderScale,
           size: meta.fontSize * this.renderScale,
-          font: window.docState.properties.fontFamily || 'Arial, sans-serif',
-          color: window.docState.properties.textColor || window.docState.properties.color || '#000000'
+          font: window.docState.properties.fontFamily || '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
+          color: window.docState.properties.textColor || window.docState.properties.color || '#111827'
         };
 
         if (existingIdx >= 0) {
@@ -906,22 +913,56 @@ class UnifiedAcrobatApp {
     });
   }
 
-  activateLiveTextEditing(block, contentEl) {
+  deleteLiveTextBlock(block, meta, pageNum) {
+    const maskStroke = this.maskOriginalText(pageNum, meta);
+    window.docState.pushUndo({
+      type: 'delete_text',
+      pageNum,
+      blockId: block.id,
+      blockHtml: block.outerHTML,
+      textLayerId: `acrobat-text-layer-${pageNum}`,
+      meta,
+      maskStroke
+    });
+    block.remove();
+    window.showToast('Texto eliminado del documento.', 'info');
+  }
+
+  activateLiveTextEditing(block, contentEl, clickEv = null) {
     if (!block || !contentEl) return;
     if (contentEl.isContentEditable) return;
 
-    block.classList.add('editing');
-    contentEl.contentEditable = 'true';
-    contentEl.style.color = window.docState.properties.textColor || window.docState.properties.color || '#0f172a';
+    // 1. Enmascarar el fondo original debajo con parche blanco para que NUNCA haya texto duplicado
+    const pageNum = parseInt(block.dataset.pageNum, 10) || 1;
+    let meta = null;
+    try { meta = JSON.parse(block.dataset.meta || '{}'); } catch(e){}
 
+    if (!block.dataset.masked && meta && meta.left !== undefined) {
+      this.maskOriginalText(pageNum, meta);
+      block.dataset.masked = 'true';
+    }
+
+    // 2. Fondo blanco sólido opaco sobre el bloque
+    block.classList.add('editing');
+    block.style.background = '#ffffff';
+    block.style.zIndex = '60';
+
+    // 3. Activar edición
+    contentEl.contentEditable = 'true';
+    contentEl.style.color = window.docState.properties.textColor || window.docState.properties.color || '#111827';
     contentEl.focus();
-    try {
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(contentEl);
-      sel.removeAllRanges();
-      sel.addRange(range);
-    } catch(err){}
+
+    // 4. Si no fue un clic directo del ratón, colocar el cursor al final de la línea sin selección azul
+    if (!clickEv) {
+      try {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(contentEl);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      } catch(err){}
+    }
   }
 
   maskOriginalText(pageNum, meta) {
