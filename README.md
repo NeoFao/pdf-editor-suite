@@ -4,11 +4,19 @@ Una suite web moderna, ultrarrápida y 100% interactiva para la edición, manipu
 
 ---
 
-## 🌐 Acceso Público en Producción (Gratis Permanente)
+## 🌐 Enlaces Oficiales
 
-👉 **[https://pdf-editor-suite-lyart.vercel.app](https://pdf-editor-suite-lyart.vercel.app)**
+- **Aplicación Web en Vivo**: 👉 **[https://pdf-editor-suite-lyart.vercel.app](https://pdf-editor-suite-lyart.vercel.app)**
+- **Repositorio en GitHub**: 👉 **[https://github.com/NeoFao/pdf-editor-suite](https://github.com/NeoFao/pdf-editor-suite)**
 
 *Desplegado en la red global de Vercel con HTTPS, cabeceras de seguridad activas y procesamiento 100% en el cliente.*
+
+---
+
+## 🔒 Políticas de Contribución y Seguridad
+Todas las contribuciones externas están sujetas a revisión obligatoria por el propietario (@NeoFao). La rama `main` cuenta con reglas estrictas de protección:
+- Se prohíbe el `git push` directo a `main`.
+- Toda aportación debe realizarse mediante **Pull Request** cumpliendo con la [Guía de Contribución](CONTRIBUTING.md) y la [Política de Seguridad](SECURITY.md).
 
 ---
 
