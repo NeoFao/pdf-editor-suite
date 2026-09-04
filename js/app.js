@@ -31,6 +31,15 @@ class UnifiedAcrobatApp {
       this.applyZoom(zoom);
     });
 
+    // Un único punto de verdad para la herramienta activa: así los atajos de
+    // teclado (V/P/T/U) también actualizan el ribbon y el cursor del visor.
+    window.docState.on('toolChanged', (tool) => {
+      document.querySelectorAll('[data-action="tool"]').forEach(b => {
+        b.classList.toggle('active', b.getAttribute('data-tool') === tool);
+      });
+      this.updateCursorMode(tool);
+    });
+
     console.log('PDF Editor Todo-en-Uno (Acrobat Style) listo en memoria.');
   }
 
@@ -91,7 +100,7 @@ class UnifiedAcrobatApp {
 
     window.addEventListener('drop', async (e) => {
       e.preventDefault();
-      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
         await this.handleFile(e.dataTransfer.files[0]);
       }
     });
@@ -100,6 +109,16 @@ class UnifiedAcrobatApp {
     document.getElementById('menu-open-file')?.addEventListener('click', () => {
       mainFileInput.accept = 'application/pdf,.docx,image/*';
       mainFileInput.click();
+      this.closeFileDropdown();
+    });
+
+    document.getElementById('menu-insert-pdf')?.addEventListener('click', () => {
+      if (!window.docState.hasDocument) {
+        window.showToast('Abre primero un documento para insertar páginas en él.', 'warning');
+        this.closeFileDropdown();
+        return;
+      }
+      this.promptInsertPDF();
       this.closeFileDropdown();
     });
 
@@ -121,6 +140,13 @@ class UnifiedAcrobatApp {
 
   async handleFile(file) {
     if (!file) return;
+
+    // Abrir otro archivo reemplaza el documento en memoria: confirmar antes de
+    // tirar por la borda ediciones que todavía no se han descargado.
+    if (window.docState.hasDocument && this.hasPendingAnnotations() &&
+        !confirm('El documento actual tiene ediciones sin guardar que se perderán. ¿Abrir el nuevo archivo de todos modos?')) {
+      return;
+    }
 
     // Validación del lado del cliente: Tamaño máximo para prevenir saturación de memoria RAM
     const MAX_FILE_SIZE = 150 * 1024 * 1024; // 150 MB límite seguro
@@ -147,6 +173,25 @@ class UnifiedAcrobatApp {
     window.showLoading(true, 'Cargando y procesando documento en memoria RAM...');
     try {
       const state = window.docState;
+
+      // Toda recarga parte de un lienzo limpio. Conservar las anotaciones aquí
+      // hacía que quedaran ancladas a números de página que ya habían cambiado
+      // y que se volvieran a incrustar sobre un PDF donde ya estaban quemadas.
+      state.annotations = {};
+      state.undoStack = [];
+      state.redoStack = [];
+      this.renderedPages.clear();
+      this.activeTextBlock = null;
+      this.stageNaturalSize = null;
+
+      // Liberar el documento anterior: cada getDocument() levanta su propio
+      // worker, y sin destruirlo cada rotación o duplicado dejaba uno vivo
+      // reteniendo el PDF completo en memoria.
+      if (state.pdfJsDoc) {
+        try { await state.pdfJsDoc.destroy(); } catch (e) { /* ya liberado */ }
+        state.pdfJsDoc = null;
+      }
+
       state.buffer = buffer;
       state.name = name || 'Documento.pdf';
       state.size = size || buffer.byteLength;
@@ -171,7 +216,7 @@ class UnifiedAcrobatApp {
 
       // Ocultar bienvenida y mostrar escenario del documento
       document.getElementById('welcome-screen')?.classList.add('hidden');
-      document.getElementById('pdf-render-stage')?.classList.remove('hidden');
+      document.getElementById('pdf-zoom-sizer')?.classList.remove('hidden');
       document.getElementById('doc-title-container')?.classList.remove('hidden');
 
       // Actualizar encabezado e información
@@ -186,14 +231,17 @@ class UnifiedAcrobatApp {
       // Renderizar páginas continuas y miniaturas laterales
       await this.renderDocumentPages();
       await this.generateThumbnails();
+      this.updateUndoRedoButtons();
 
       // Actualizar contador en botón móvil de miniaturas
       const mobileBadge = document.getElementById('mobile-thumb-badge');
       if (mobileBadge) mobileBadge.textContent = state.totalPages;
 
-      // En móviles, ajustar automáticamente el zoom al ancho del dispositivo
+      // En móviles, ajustar el zoom al ancho del dispositivo. Se hace aquí y no
+      // con un setTimeout: las páginas ya tienen su tamaño en px asignado, así
+      // que la medida es válida y el resultado deja de depender del reloj.
       if (window.innerWidth < 768) {
-        setTimeout(() => this.fitToWidth(), 150);
+        this.fitToWidth();
       }
 
       window.showToast(`Documento cargado: ${state.name} (${state.totalPages} págs.)`, 'success');
@@ -220,19 +268,43 @@ class UnifiedAcrobatApp {
   }
 
   closeCurrentDocument() {
-    window.docState.hasDocument = false;
-    window.docState.buffer = null;
-    window.docState.pdfLibDoc = null;
-    window.docState.pdfJsDoc = null;
-    window.docState.pages = [];
-    window.docState.annotations = {};
+    if (this.hasPendingAnnotations() &&
+        !confirm('Hay ediciones sin guardar. ¿Cerrar el documento y descartarlas?')) {
+      return;
+    }
+
+    const state = window.docState;
+    if (state.pdfJsDoc) {
+      try { state.pdfJsDoc.destroy(); } catch (e) { /* ya liberado */ }
+    }
+    state.hasDocument = false;
+    state.buffer = null;
+    state.pdfLibDoc = null;
+    state.pdfJsDoc = null;
+    state.pages = [];
+    state.annotations = {};
+    state.undoStack = [];
+    state.redoStack = [];
+    state.currentPage = 1;
+    state.totalPages = 0;
+    state.name = 'Sin título.pdf';
+    state.size = 0;
+    this.renderedPages.clear();
+    if (this.pageObserver) { this.pageObserver.disconnect(); this.pageObserver = null; }
 
     document.getElementById('welcome-screen')?.classList.remove('hidden');
-    document.getElementById('pdf-render-stage')?.classList.add('hidden');
+    document.getElementById('pdf-zoom-sizer')?.classList.add('hidden');
     document.getElementById('doc-title-container')?.classList.add('hidden');
     document.getElementById('pdf-render-stage').innerHTML = '';
     document.getElementById('thumbnail-list').innerHTML = '';
     document.getElementById('thumb-count-badge').textContent = '0';
+    document.getElementById('label-total-pages').textContent = '0';
+    document.getElementById('input-page-num').value = '1';
+    document.getElementById('info-total-pages').textContent = '0';
+    document.getElementById('info-file-size').textContent = '0 KB';
+    const mobileBadge = document.getElementById('mobile-thumb-badge');
+    if (mobileBadge) mobileBadge.textContent = '0';
+    this.updateUndoRedoButtons();
 
     window.showToast('Documento cerrado.', 'info');
   }
@@ -340,7 +412,43 @@ class UnifiedAcrobatApp {
       this.renderStampsOnPage(pageNum);
     }
 
+    this.stageNaturalSize = null; // el conjunto de páginas cambió
     this.applyZoom(state.zoom);
+    this.observeVisiblePage();
+  }
+
+  /**
+   * Mantiene `currentPage` sincronizado con la página visible en el visor.
+   * Antes sólo se actualizaba al pulsar una miniatura o la paginación, así que
+   * rotar / duplicar / firmar actuaba sobre una página distinta a la que se veía.
+   */
+  observeVisiblePage() {
+    if (this.pageObserver) this.pageObserver.disconnect();
+    const root = document.getElementById('document-viewport');
+    if (!root || !('IntersectionObserver' in window)) return;
+
+    this.pageObserver = new IntersectionObserver((entries) => {
+      let best = null;
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        if (!best || entry.intersectionRatio > best.intersectionRatio) best = entry;
+      }
+      if (!best) return;
+      const pageNum = parseInt(best.target.dataset.page, 10);
+      if (!pageNum || pageNum === window.docState.currentPage) return;
+      window.docState.currentPage = pageNum;
+      this.highlightActivePage(pageNum);
+    }, { root, threshold: [0.25, 0.6] });
+
+    document.querySelectorAll('.acrobat-page-wrapper').forEach(el => this.pageObserver.observe(el));
+  }
+
+  highlightActivePage(pageNum) {
+    const input = document.getElementById('input-page-num');
+    if (input) input.value = pageNum;
+    document.querySelectorAll('.thumb-item').forEach(el => {
+      el.classList.toggle('active', parseInt(el.getAttribute('data-page'), 10) === pageNum);
+    });
   }
 
   attachDrawingToOverlay(canvas, pageNum) {
@@ -470,7 +578,8 @@ class UnifiedAcrobatApp {
     canvas.onpointerup = (e) => {
       if (!isDrawing) return;
       isDrawing = false;
-      try { canvas.releasePointerCapture(e.pointerId); } catch(err){}
+      // El puntero puede haberse liberado ya (p. ej. si el gesto salió de la ventana).
+      try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* captura ya liberada */ }
 
       const tool = window.docState.activeTool;
       const pageAnn = window.docState.initPageAnnotations(pageNum);
@@ -586,6 +695,49 @@ class UnifiedAcrobatApp {
     return lines;
   }
 
+  /**
+   * Crea un bloque de Texto Vivo sin nodos de texto residuales.
+   * Construir el DOM por API (y no con innerHTML indentado) es imprescindible:
+   * los saltos de línea del template se convertían en líneas en blanco reales
+   * bajo `white-space: pre-wrap`, inflando el bloque al entrar en edición.
+   * Además evita inyectar el texto del PDF como HTML.
+   */
+  createTextBlockElement(id, pageNum, meta) {
+    const block = document.createElement('div');
+    block.className = 'acrobat-text-block';
+    block.id = id;
+    block.dataset.pageNum = pageNum;
+    block.style.left = `${meta.left}px`;
+    block.style.top = `${meta.top}px`;
+    block.style.minWidth = `${meta.width + 4}px`;
+    block.style.height = `${meta.height}px`;
+    block.style.lineHeight = `${meta.height}px`;
+    block.style.fontSize = `${meta.fontSize}px`;
+    block.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
+
+    const dragHandle = document.createElement('span');
+    dragHandle.className = 'acrobat-drag-handle';
+    dragHandle.title = 'Arrastrar para mover';
+    dragHandle.innerHTML = '<i class="fa-solid fa-arrows-up-down-left-right"></i>';
+
+    const deleteBtn = document.createElement('span');
+    deleteBtn.className = 'acrobat-delete-btn';
+    deleteBtn.title = 'Eliminar';
+    deleteBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+
+    const content = document.createElement('div');
+    content.className = 'text-block-content';
+    content.spellcheck = false;
+    content.textContent = meta.str;
+
+    block.appendChild(dragHandle);
+    block.appendChild(deleteBtn);
+    block.appendChild(content);
+
+    block.dataset.meta = JSON.stringify(meta);
+    return block;
+  }
+
   buildInteractiveTextLayer(textLayer, textContent, viewport, pageNum) {
     if (!textContent || !textContent.items) return;
     textLayer.innerHTML = ''; // Prevenir duplicados
@@ -594,25 +746,7 @@ class UnifiedAcrobatApp {
     const lines = this.groupTextItemsIntoLines(textContent.items, viewport, scale);
 
     lines.forEach((line, idx) => {
-      const block = document.createElement('div');
-      block.className = 'acrobat-text-block';
-      block.id = `block-${pageNum}-${idx}`;
-      block.dataset.pageNum = pageNum;
-      block.style.left = `${line.left}px`;
-      block.style.top = `${line.top}px`;
-      block.style.width = `${line.width + 4}px`;
-      block.style.height = `${line.height}px`;
-      block.style.lineHeight = `${line.height}px`;
-      block.style.fontSize = `${line.fontSize}px`;
-      block.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
-
-      block.innerHTML = `
-        <span class="acrobat-drag-handle" title="Arrastrar para mover"><i class="fa-solid fa-arrows-up-down-left-right"></i></span>
-        <span class="acrobat-delete-btn" title="Eliminar"><i class="fa-solid fa-xmark"></i></span>
-        <div class="text-block-content" spellcheck="false">${line.str}</div>
-      `;
-
-      block.dataset.meta = JSON.stringify(line);
+      const block = this.createTextBlockElement(`block-${pageNum}-${idx}`, pageNum, line);
       this.setupLiveTextBlock(block, line, pageNum);
       textLayer.appendChild(block);
     });
@@ -636,7 +770,7 @@ class UnifiedAcrobatApp {
       overlay = document.createElement('div');
       overlay.className = 'scanned-ocr-loading-overlay';
       overlay.innerHTML = `
-        <div class="w-10 h-10 border-3 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3"></div>
+        <div class="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-3"></div>
         <span class="font-semibold text-sm text-white">Activando Texto Vivo en el documento...</span>
         <span class="text-xs text-slate-400 mt-1">Haciendo todas las líneas editables directamente en la hoja</span>
       `;
@@ -700,26 +834,8 @@ class UnifiedAcrobatApp {
         const height = Math.max(12, Math.round((line.bbox.y1 - line.bbox.y0) * scaleY));
         const fontSize = Math.max(11, Math.round(height * 0.85));
 
-        const block = document.createElement('div');
-        block.className = 'acrobat-text-block';
-        block.id = `block-scanned-${pageNum}-${idx}`;
-        block.dataset.pageNum = pageNum;
-        block.style.left = `${left}px`;
-        block.style.top = `${top}px`;
-        block.style.width = `${width + 4}px`;
-        block.style.height = `${height}px`;
-        block.style.lineHeight = `${height}px`;
-        block.style.fontSize = `${fontSize}px`;
-        block.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
-
-        block.innerHTML = `
-          <span class="acrobat-drag-handle" title="Arrastrar para mover"><i class="fa-solid fa-arrows-up-down-left-right"></i></span>
-          <span class="acrobat-delete-btn" title="Eliminar"><i class="fa-solid fa-xmark"></i></span>
-          <div class="text-block-content" spellcheck="false">${line.str}</div>
-        `;
-
         const meta = { str: line.str, left, top, width, height, fontSize };
-        block.dataset.meta = JSON.stringify(meta);
+        const block = this.createTextBlockElement(`block-scanned-${pageNum}-${idx}`, pageNum, meta);
         this.setupLiveTextBlock(block, meta, pageNum);
         textLayer.appendChild(block);
       });
@@ -791,6 +907,9 @@ class UnifiedAcrobatApp {
     contentEl.addEventListener('blur', () => {
       contentEl.contentEditable = 'false';
       block.classList.remove('editing');
+      // `activeTextBlock` se conserva a propósito: hace de "bloque seleccionado"
+      // para el panel de Propiedades, que roba el foco al pulsar sus controles.
+      // Se sustituye al editar otro bloque y se limpia al recargar el documento.
 
       const currentText = contentEl.innerText.trim();
       const pageAnn = window.docState.initPageAnnotations(pageNum);
@@ -803,21 +922,7 @@ class UnifiedAcrobatApp {
         const existingIdx = pageAnn.texts.findIndex(t => t.id === block.id);
         const oldText = existingIdx >= 0 ? pageAnn.texts[existingIdx].text : meta.str;
 
-        const record = {
-          id: block.id,
-          isReplacement: true,
-          originalText: meta.str,
-          text: currentText,
-          boxX: parseFloat(block.style.left) || meta.left,
-          boxY: parseFloat(block.style.top) || meta.top,
-          boxW: block.offsetWidth || meta.width,
-          boxH: block.offsetHeight || meta.height,
-          x: (parseFloat(block.style.left) || meta.left) * this.renderScale,
-          y: (parseFloat(block.style.top) || meta.top) * this.renderScale,
-          size: meta.fontSize * this.renderScale,
-          font: window.docState.properties.fontFamily || '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-          color: window.docState.properties.textColor || window.docState.properties.color || '#111827'
-        };
+        const record = this.buildReplacementRecord(block, contentEl, meta, pageNum);
 
         if (existingIdx >= 0) {
           pageAnn.texts[existingIdx] = record;
@@ -831,7 +936,12 @@ class UnifiedAcrobatApp {
           blockId: block.id,
           oldText: oldText,
           newText: currentText,
-          wasModified: wasModifiedBefore
+          wasModified: wasModifiedBefore,
+          // Rehacer necesita el registro y la geometría completos: tras deshacer
+          // se eliminan de `texts`, y sin ellos el cambio rehecho no se exportaba
+          // y el texto original volvía a asomar bajo el bloque.
+          record,
+          meta
         });
 
         window.showToast('Texto modificado en la hoja.', 'success');
@@ -860,7 +970,8 @@ class UnifiedAcrobatApp {
 
       // Al iniciar el primer movimiento, tapar el texto original con parche blanco
       if (!hasBeenMoved) {
-        this.maskOriginalText(pageNum, meta);
+        this.maskOriginalText(pageNum, meta, block.id);
+        block.dataset.masked = 'true';
         hasBeenMoved = true;
         block.classList.add('moved');
         block.style.background = '#ffffff';
@@ -883,21 +994,7 @@ class UnifiedAcrobatApp {
         const finalLeft = parseFloat(block.style.left);
         const finalTop = parseFloat(block.style.top);
 
-        const record = {
-          id: block.id,
-          isReplacement: true,
-          originalText: meta.str,
-          text: contentEl.innerText.trim(),
-          boxX: finalLeft,
-          boxY: finalTop,
-          boxW: block.offsetWidth || meta.width,
-          boxH: block.offsetHeight || meta.height,
-          x: finalLeft * this.renderScale,
-          y: finalTop * this.renderScale,
-          size: meta.fontSize * this.renderScale,
-          font: window.docState.properties.fontFamily || '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif',
-          color: window.docState.properties.textColor || window.docState.properties.color || '#111827'
-        };
+        const record = this.buildReplacementRecord(block, contentEl, meta, pageNum);
 
         if (existingIdx >= 0) {
           pageAnn.texts[existingIdx] = record;
@@ -923,8 +1020,45 @@ class UnifiedAcrobatApp {
     });
   }
 
+  /**
+   * Geometría de un reemplazo de texto en píxeles CSS de página.
+   * `boxH` se ancla SIEMPRE a la altura de la línea original: si se tomara
+   * `block.offsetHeight` (que crece mientras el bloque está en edición) el
+   * parche blanco del PDF exportado borraría las líneas vecinas.
+   */
+  buildReplacementRecord(block, contentEl, meta, pageNum) {
+    const left = parseFloat(block.style.left);
+    const top = parseFloat(block.style.top);
+    const boxX = Number.isFinite(left) ? left : meta.left;
+    const boxY = Number.isFinite(top) ? top : meta.top;
+    const lineH = meta.height || 14;
+
+    return {
+      id: block.id,
+      pageNum,
+      isReplacement: true,
+      originalText: meta.str,
+      text: contentEl.innerText.replace(/\s+$/, ''),
+      boxX,
+      boxY,
+      boxW: Math.max(meta.width || 40, Math.ceil(contentEl.scrollWidth)),
+      boxH: lineH,
+      lineHeight: lineH,
+      // Máscara del texto original, en píxeles CSS y del alto exacto de la línea
+      mask: { x: meta.left - 2, y: meta.top - 1, w: (meta.width || 40) + 8, h: lineH + 2 },
+      x: boxX * this.renderScale,
+      y: boxY * this.renderScale,
+      size: (meta.fontSize || 12) * this.renderScale,
+      font: block.style.fontFamily || 'Arial, sans-serif',
+      color: window.docState.properties.textColor || '#111827'
+    };
+  }
+
   deleteLiveTextBlock(block, meta, pageNum) {
-    const maskStroke = this.maskOriginalText(pageNum, meta);
+    const pageAnn = window.docState.initPageAnnotations(pageNum);
+    // Un bloque borrado ya no aporta texto de reemplazo: sólo queda la máscara.
+    pageAnn.texts = pageAnn.texts.filter(t => t.id !== block.id);
+    const maskStroke = this.maskOriginalText(pageNum, meta, block.id);
     window.docState.pushUndo({
       type: 'delete_text',
       pageNum,
@@ -953,10 +1087,11 @@ class UnifiedAcrobatApp {
     // 1. Enmascarar el fondo original debajo con parche blanco para que NUNCA haya texto duplicado
     const pageNum = parseInt(block.dataset.pageNum, 10) || 1;
     let meta = null;
-    try { meta = JSON.parse(block.dataset.meta || '{}'); } catch(e){}
+    // Sin meta el bloque sigue siendo editable: solo se pierde el enmascarado.
+    try { meta = JSON.parse(block.dataset.meta || '{}'); } catch (e) { /* meta ausente o corrupta */ }
 
     if (!block.dataset.masked && meta && meta.left !== undefined) {
-      this.maskOriginalText(pageNum, meta);
+      this.maskOriginalText(pageNum, meta, block.id);
       block.dataset.masked = 'true';
     }
 
@@ -966,9 +1101,11 @@ class UnifiedAcrobatApp {
     block.style.zIndex = '60';
 
     // 3. Activar edición
+    this.activeTextBlock = block;
     contentEl.contentEditable = 'true';
-    contentEl.style.color = window.docState.properties.textColor || window.docState.properties.color || '#111827';
+    contentEl.style.color = window.docState.properties.textColor || '#111827';
     contentEl.focus();
+    this.syncPropertiesPanelToBlock(block);
 
     // 4. Si no fue un clic directo del ratón, colocar el cursor al final de la línea sin selección azul
     if (!clickEv) {
@@ -979,26 +1116,89 @@ class UnifiedAcrobatApp {
         range.collapse(false);
         sel.removeAllRanges();
         sel.addRange(range);
-      } catch(err){}
+      } catch (err) { /* selección no disponible en este contexto */ }
     }
   }
 
-  maskOriginalText(pageNum, meta) {
+  /**
+   * Tapa el texto original con un parche blanco del alto EXACTO de la línea.
+   * Se indexa por `blockId` para que una segunda edición del mismo bloque
+   * reemplace la máscara en vez de apilar rectángulos, y para que Deshacer
+   * pueda retirarla y devolver el texto original a la vista.
+   */
+  /** Refleja en el panel lateral la tipografía real del bloque que se edita. */
+  syncPropertiesPanelToBlock(block) {
+    const sizeInput = document.getElementById('prop-font-size');
+    if (sizeInput) sizeInput.value = Math.round(parseFloat(block.style.fontSize) || 16);
+  }
+
+  /**
+   * Aplica tipografía al bloque de Texto Vivo en edición y actualiza su registro,
+   * para que lo que se ve en pantalla sea exactamente lo que se exporta.
+   * Sin esto, los controles de Fuente y Tamaño sólo afectaban a los cuadros de
+   * texto nuevos y no hacían nada al editar texto ya existente del PDF.
+   */
+  applyTypographyToActiveBlock({ fontSize, fontFamily } = {}) {
+    const block = this.activeTextBlock;
+    if (!block) return false;
+
+    if (fontSize) block.style.fontSize = `${fontSize}px`;
+    if (fontFamily) block.style.fontFamily = fontFamily;
+
+    let meta = {};
+    try { meta = JSON.parse(block.dataset.meta || '{}'); } catch (e) { /* sin meta */ }
+    if (fontSize) meta.fontSize = fontSize;
+    block.dataset.meta = JSON.stringify(meta);
+
+    const pageNum = parseInt(block.dataset.pageNum, 10) || 1;
+    const pageAnn = window.docState.annotations[pageNum];
+    const record = pageAnn?.texts.find(t => t.id === block.id);
+    if (record) {
+      if (fontSize) {
+        record.size = fontSize * this.renderScale;
+        record.boxH = Math.max(record.lineHeight || 0, Math.ceil(fontSize * 1.2));
+      }
+      if (fontFamily) record.font = fontFamily;
+      const contentEl = block.querySelector('.text-block-content');
+      if (contentEl) record.boxW = Math.max(record.boxW || 0, Math.ceil(contentEl.scrollWidth));
+    }
+    return true;
+  }
+
+  maskOriginalText(pageNum, meta, blockId = null) {
     const pageAnn = window.docState.initPageAnnotations(pageNum);
-    // Añade un rectángulo blanco sólido para tapar el texto original con margen de cobertura
+
     const maskStroke = {
       tool: 'rect',
-      x: Math.max(0, (meta.left - 3) * this.renderScale),
-      y: Math.max(0, (meta.top - 2) * this.renderScale),
-      width: (meta.width + 12) * this.renderScale,
-      height: (meta.height + 6) * this.renderScale,
+      blockId,
+      x: Math.max(0, (meta.left - 2) * this.renderScale),
+      y: Math.max(0, (meta.top - 1) * this.renderScale),
+      width: (meta.width + 8) * this.renderScale,
+      height: (meta.height + 2) * this.renderScale,
       color: '#ffffff',
       isMask: true,
       fill: true
     };
+
+    if (blockId) {
+      const existing = pageAnn.strokes.findIndex(s => s.isMask && s.blockId === blockId);
+      if (existing >= 0) {
+        pageAnn.strokes[existing] = maskStroke;
+        this.redrawPageAnnotations(pageNum);
+        return maskStroke;
+      }
+    }
+
     pageAnn.strokes.push(maskStroke);
     this.redrawPageAnnotations(pageNum);
     return maskStroke;
+  }
+
+  removeMaskForBlock(pageNum, blockId) {
+    const pageAnn = window.docState.annotations[pageNum];
+    if (!pageAnn || !blockId) return;
+    pageAnn.strokes = pageAnn.strokes.filter(s => !(s.isMask && s.blockId === blockId));
+    this.redrawPageAnnotations(pageNum);
   }
 
   insertInlineTextBox(pageNum, cssCoords, prefilledText = '') {
@@ -1017,13 +1217,28 @@ class UnifiedAcrobatApp {
 
     const defaultText = prefilledText || 'Escribe aquí...';
 
-    box.innerHTML = `
-      <div class="text-block-toolbar">
-        <span class="text-btn-drag" title="Arrastrar para mover"><i class="fa-solid fa-arrows-up-down-left-right"></i></span>
-        <span class="text-btn-delete" title="Eliminar cuadro"><i class="fa-solid fa-trash-can"></i></span>
-      </div>
-      <div class="interactive-text-content" contenteditable="true" spellcheck="false">${defaultText}</div>
-    `;
+    // Construido por API: `defaultText` viene del usuario y no puede llegar a
+    // interpretarse como marcado (E-003), y así el bloque no hereda los nodos
+    // de texto con saltos de línea de una plantilla indentada (E-001).
+    const barra = document.createElement('div');
+    barra.className = 'text-block-toolbar';
+    const arrastrar = document.createElement('span');
+    arrastrar.className = 'text-btn-drag';
+    arrastrar.title = 'Arrastrar para mover';
+    arrastrar.innerHTML = '<i class="fa-solid fa-arrows-up-down-left-right"></i>';
+    const borrar = document.createElement('span');
+    borrar.className = 'text-btn-delete';
+    borrar.title = 'Eliminar cuadro';
+    borrar.innerHTML = '<i class="fa-solid fa-trash-can"></i>';
+    barra.append(arrastrar, borrar);
+
+    const contenido = document.createElement('div');
+    contenido.className = 'interactive-text-content';
+    contenido.contentEditable = 'true';
+    contenido.spellcheck = false;
+    contenido.textContent = defaultText;
+
+    box.append(barra, contenido);
 
     const contentEl = box.querySelector('.interactive-text-content');
     const dragBtn = box.querySelector('.text-btn-drag');
@@ -1161,7 +1376,7 @@ class UnifiedAcrobatApp {
           range.selectNodeContents(contentEl);
           sel.removeAllRanges();
           sel.addRange(range);
-        } catch(err){}
+        } catch (err) { /* selección no disponible en este contexto */ }
       }, 20);
     }
   }
@@ -1207,15 +1422,9 @@ class UnifiedAcrobatApp {
       ctx.restore();
     });
 
-    // Dibujar textos
-    pageAnn.texts.forEach(t => {
-      ctx.save();
-      ctx.font = `${t.size}px ${t.font}`;
-      ctx.fillStyle = t.color;
-      ctx.textBaseline = 'middle';
-      ctx.fillText(t.text, t.x, t.y);
-      ctx.restore();
-    });
+    // Los textos NO se pintan aquí: ya los muestra su bloque DOM encima del
+    // canvas. Duplicarlos producía el texto fantasma desalineado media línea.
+    // El quemado a canvas ocurre sólo al exportar (burnAnnotationsIntoDoc).
   }
 
   /* ==================== 3. SELLOS Y FIRMA DIGITAL ==================== */
@@ -1237,11 +1446,17 @@ class UnifiedAcrobatApp {
       el.style.width = `${stamp.width}px`;
       el.style.height = `${stamp.height}px`;
 
-      el.innerHTML = `
-        <img src="${stamp.dataUrl}" alt="Firma" />
-        <div class="stamp-handle-delete" title="Eliminar"><i class="fa-solid fa-xmark"></i></div>
-        <div class="stamp-handle-resize" title="Redimensionar"></div>
-      `;
+      const img = document.createElement('img');
+      img.src = stamp.dataUrl;
+      img.alt = 'Firma';
+      const quitar = document.createElement('div');
+      quitar.className = 'stamp-handle-delete';
+      quitar.title = 'Eliminar';
+      quitar.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+      const redimensionar = document.createElement('div');
+      redimensionar.className = 'stamp-handle-resize';
+      redimensionar.title = 'Redimensionar';
+      el.append(img, quitar, redimensionar);
 
       el.querySelector('.stamp-handle-delete').addEventListener('click', (e) => {
         e.stopPropagation();
@@ -1256,57 +1471,52 @@ class UnifiedAcrobatApp {
   }
 
   makeStampInteractive(el, stamp) {
-    let dragging = false, resizing = false;
-    let startX = 0, startY = 0;
-    let startLeft = 0, startTop = 0;
-    let startW = 0, startH = 0;
-
     const resizeHandle = el.querySelector('.stamp-handle-resize');
+
+    // Los listeners viven sólo mientras dura el gesto. Antes se registraban en
+    // `window` por cada sello y no se retiraban nunca: cada re-render de la
+    // página acumulaba otro par de handlers permanentes.
+    const beginGesture = (e, mode) => {
+      e.stopPropagation();
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const startLeft = stamp.x;
+      const startTop = stamp.y;
+      const startW = stamp.width;
+      const startH = stamp.height;
+
+      const onMove = (moveEv) => {
+        const zoom = window.docState.zoom || 1.0;
+        const dx = (moveEv.clientX - startX) / zoom;
+        const dy = (moveEv.clientY - startY) / zoom;
+        if (mode === 'drag') {
+          stamp.x = Math.max(0, startLeft + dx);
+          stamp.y = Math.max(0, startTop + dy);
+          el.style.left = `${stamp.x}px`;
+          el.style.top = `${stamp.y}px`;
+        } else {
+          stamp.width = Math.max(60, startW + dx);
+          stamp.height = Math.max(25, startH + dy);
+          el.style.width = `${stamp.width}px`;
+          el.style.height = `${stamp.height}px`;
+        }
+      };
+
+      const onUp = () => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    };
 
     el.addEventListener('pointerdown', (e) => {
       if (e.target === resizeHandle || e.target.closest('.stamp-handle-delete')) return;
-      dragging = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      startLeft = stamp.x;
-      startTop = stamp.y;
-      el.setPointerCapture(e.pointerId);
-      e.stopPropagation();
+      beginGesture(e, 'drag');
     });
 
-    resizeHandle.addEventListener('pointerdown', (e) => {
-      resizing = true;
-      startX = e.clientX;
-      startY = e.clientY;
-      startW = stamp.width;
-      startH = stamp.height;
-      resizeHandle.setPointerCapture(e.pointerId);
-      e.stopPropagation();
-    });
-
-    window.addEventListener('pointermove', (e) => {
-      const zoom = window.docState.zoom || 1.0;
-      if (dragging) {
-        const dx = (e.clientX - startX) / zoom;
-        const dy = (e.clientY - startY) / zoom;
-        stamp.x = Math.max(0, startLeft + dx);
-        stamp.y = Math.max(0, startTop + dy);
-        el.style.left = `${stamp.x}px`;
-        el.style.top = `${stamp.y}px`;
-      } else if (resizing) {
-        const dx = (e.clientX - startX) / zoom;
-        const dy = (e.clientY - startY) / zoom;
-        stamp.width = Math.max(60, startW + dx);
-        stamp.height = Math.max(25, startH + dy);
-        el.style.width = `${stamp.width}px`;
-        el.style.height = `${stamp.height}px`;
-      }
-    });
-
-    window.addEventListener('pointerup', () => {
-      dragging = false;
-      resizing = false;
-    });
+    resizeHandle.addEventListener('pointerdown', (e) => beginGesture(e, 'resize'));
   }
 
   addStampToActivePage(dataUrl, width = 160, height = 75) {
@@ -1324,6 +1534,7 @@ class UnifiedAcrobatApp {
 
     pageAnn.stamps.push(stamp);
     this.renderStampsOnPage(pageNum);
+    window.docState.pushUndo({ type: 'stamp', pageNum, stampId: stamp.id, stamp });
     window.showToast(`Sello/Firma estampado en la página ${pageNum}.`, 'success');
   }
 
@@ -1356,15 +1567,31 @@ class UnifiedAcrobatApp {
       item.className = `thumb-item p-2 relative flex flex-col items-center ${i === state.currentPage ? 'active' : ''}`;
       item.setAttribute('data-page', i);
 
-      item.innerHTML = `
-        <div class="thumb-actions">
-          <button class="thumb-action-btn btn-th-rot" title="Rotar 90°"><i class="fa-solid fa-rotate-right"></i></button>
-          <button class="thumb-action-btn btn-th-dup" title="Duplicar"><i class="fa-solid fa-copy"></i></button>
-          <button class="thumb-action-btn btn-th-del hover:!bg-rose-600" title="Eliminar"><i class="fa-solid fa-trash-can"></i></button>
-        </div>
-        <img src="${thumbCanvas.toDataURL('image/png')}" class="max-w-full rounded pointer-events-none mb-1 shadow" />
-        <span class="text-[10px] font-mono text-slate-400 font-semibold">Pág. ${i}</span>
-      `;
+      const acciones = document.createElement('div');
+      acciones.className = 'thumb-actions';
+      for (const [clase, titulo, icono] of [
+        ['btn-th-rot', 'Rotar 90°', 'fa-rotate-right'],
+        ['btn-th-dup', 'Duplicar', 'fa-copy'],
+        ['btn-th-del hover:!bg-rose-600', 'Eliminar', 'fa-trash-can']
+      ]) {
+        const boton = document.createElement('button');
+        boton.className = `thumb-action-btn ${clase}`;
+        boton.title = titulo;
+        const i = document.createElement('i');
+        i.className = `fa-solid ${icono}`;
+        boton.appendChild(i);
+        acciones.appendChild(boton);
+      }
+
+      const vista = document.createElement('img');
+      vista.src = thumbCanvas.toDataURL('image/png');
+      vista.className = 'max-w-full rounded pointer-events-none mb-1 shadow';
+
+      const etiqueta = document.createElement('span');
+      etiqueta.className = 'text-[10px] font-mono text-slate-400 font-semibold';
+      etiqueta.textContent = `Pág. ${i}`;
+
+      item.append(acciones, vista, etiqueta);
 
       item.addEventListener('click', () => {
         this.scrollToPage(i);
@@ -1406,16 +1633,7 @@ class UnifiedAcrobatApp {
 
   scrollToPage(pageNum) {
     window.docState.currentPage = pageNum;
-    document.getElementById('input-page-num').value = pageNum;
-
-    // Actualizar miniatura activa
-    document.querySelectorAll('.thumb-item').forEach(el => {
-      if (parseInt(el.getAttribute('data-page'), 10) === pageNum) {
-        el.classList.add('active');
-      } else {
-        el.classList.remove('active');
-      }
-    });
+    this.highlightActivePage(pageNum);
 
     const target = document.getElementById(`acrobat-page-${pageNum}`);
     if (target) {
@@ -1426,9 +1644,12 @@ class UnifiedAcrobatApp {
   async rotatePage(pageNum, deg) {
     window.showLoading(true, `Rotando página ${pageNum}...`);
     try {
+      await this.commitAnnotationsToLiveDoc();
       const page = window.docState.pdfLibDoc.getPage(pageNum - 1);
       const currentAngle = page.getRotation().angle;
-      page.setRotation(PDFLib.degrees((currentAngle + deg) % 360));
+      // Normalizar a [0, 360): pdf-lib acepta ángulos negativos pero muchos
+      // visores externos no interpretan bien un /Rotate -90.
+      page.setRotation(PDFLib.degrees((((currentAngle + deg) % 360) + 360) % 360));
 
       const bytes = await window.docState.pdfLibDoc.save();
       await this.loadPDFBuffer(bytes.buffer, window.docState.name, bytes.byteLength);
@@ -1443,6 +1664,7 @@ class UnifiedAcrobatApp {
   async duplicatePage(pageNum) {
     window.showLoading(true, `Duplicando página ${pageNum}...`);
     try {
+      await this.commitAnnotationsToLiveDoc();
       const [copied] = await window.docState.pdfLibDoc.copyPages(window.docState.pdfLibDoc, [pageNum - 1]);
       window.docState.pdfLibDoc.insertPage(pageNum, copied);
 
@@ -1465,6 +1687,7 @@ class UnifiedAcrobatApp {
 
     window.showLoading(true, 'Eliminando página...');
     try {
+      await this.commitAnnotationsToLiveDoc();
       window.docState.pdfLibDoc.removePage(pageNum - 1);
       const bytes = await window.docState.pdfLibDoc.save();
       await this.loadPDFBuffer(bytes.buffer, window.docState.name, bytes.byteLength);
@@ -1480,6 +1703,7 @@ class UnifiedAcrobatApp {
     if (fromNum === toNum) return;
     window.showLoading(true, 'Reordenando páginas...');
     try {
+      await this.commitAnnotationsToLiveDoc();
       const doc = window.docState.pdfLibDoc;
       const count = doc.getPageCount();
       const pageIndices = Array.from({ length: count }, (_, i) => i);
@@ -1502,7 +1726,205 @@ class UnifiedAcrobatApp {
     }
   }
 
-  /* ==================== 5. EXPORTACIÓN CON QUEMADO VECTORIAL ==================== */
+  /* ==================== 5. QUEMADO DE ANOTACIONES Y EXPORTACIÓN ==================== */
+
+  /**
+   * Corta un texto en líneas que quepan en `maxWidth` usando la métrica real del canvas.
+   */
+  wrapCanvasText(ctx, text, maxWidth) {
+    const paragraphs = String(text == null ? '' : text).split('\n');
+    const out = [];
+
+    for (const paragraph of paragraphs) {
+      if (paragraph === '') { out.push(''); continue; }
+      let line = '';
+      for (const word of paragraph.split(' ')) {
+        const candidate = line ? `${line} ${word}` : word;
+        if (maxWidth > 0 && ctx.measureText(candidate).width > maxWidth && line) {
+          out.push(line);
+          line = word;
+        } else {
+          line = candidate;
+        }
+      }
+      out.push(line);
+    }
+    return out;
+  }
+
+  /**
+   * Quema todas las anotaciones en memoria (filtros, trazos, textos y firmas)
+   * sobre un PDFDocument de pdf-lib. Se usa tanto al exportar como antes de
+   * cualquier operación de páginas, para que ninguna edición se pierda.
+   *
+   * Todos los trazos y textos de una página se componen en UN SOLO canvas y se
+   * incrustan como una única imagen: antes se generaba un PNG de página completa
+   * por cada texto, lo que multiplicaba el peso del archivo por cada edición.
+   */
+  async burnAnnotationsIntoDoc(pdfDoc) {
+    const pages = pdfDoc.getPages();
+
+    for (let i = 0; i < pages.length; i++) {
+      const pageNum = i + 1;
+      const pdfPage = pages[i];
+      const { width: pdfW, height: pdfH } = pdfPage.getSize();
+
+      const pageAnn = window.docState.annotations[pageNum];
+      const pageObj = this.renderedPages.get(pageNum);
+      if (!pageObj) continue;
+
+      const cssW = pageObj.cssWidth;
+      const cssH = pageObj.cssHeight;
+      const scaleFactorX = pdfW / cssW;
+      const scaleFactorY = pdfH / cssH;
+
+      // 1. Filtro fotográfico (Magic Color / B-N / Grises) aplicado a la página.
+      //    Sin esto el filtro era sólo un efecto de pantalla que se perdía al guardar.
+      if (pageObj.activeFilter && pageObj.activeFilter !== 'original') {
+        const filteredBytes = await this.canvasToBytes(pageObj.pdfCanvas, 'image/jpeg', 0.92);
+        const embeddedFilter = await pdfDoc.embedJpg(filteredBytes);
+        pdfPage.drawImage(embeddedFilter, { x: 0, y: 0, width: pdfW, height: pdfH });
+      }
+
+      if (!pageAnn) continue;
+      const hasLayerWork = pageAnn.strokes.length > 0 || pageAnn.texts.length > 0;
+      if (!hasLayerWork && pageAnn.stamps.length === 0) continue;
+
+      // 2. Capa única con trazos, máscaras y textos de reemplazo
+      if (hasLayerWork) {
+        const offCanvas = document.createElement('canvas');
+        offCanvas.width = Math.max(1, Math.round(pdfW * 2));
+        offCanvas.height = Math.max(1, Math.round(pdfH * 2));
+        const offCtx = offCanvas.getContext('2d');
+        offCtx.scale(2, 2);
+
+        // 2a. Trazos, formas y máscaras blancas
+        pageAnn.strokes.forEach(s => {
+          offCtx.save();
+          if (s.tool === 'pencil' || s.tool === 'highlighter') {
+            if (s.points && s.points.length > 1) {
+              offCtx.beginPath();
+              offCtx.strokeStyle = s.color;
+              offCtx.globalAlpha = s.alpha || 1.0;
+              offCtx.lineWidth = (s.lineWidth / this.renderScale) * scaleFactorX;
+              offCtx.lineCap = s.tool === 'highlighter' ? 'square' : 'round';
+              offCtx.lineJoin = 'round';
+              offCtx.moveTo((s.points[0].x / this.renderScale) * scaleFactorX, (s.points[0].y / this.renderScale) * scaleFactorY);
+              for (let k = 1; k < s.points.length; k++) {
+                offCtx.lineTo((s.points[k].x / this.renderScale) * scaleFactorX, (s.points[k].y / this.renderScale) * scaleFactorY);
+              }
+              offCtx.stroke();
+            }
+          } else if (s.tool === 'rect') {
+            const rx = (s.x / this.renderScale) * scaleFactorX;
+            const ry = (s.y / this.renderScale) * scaleFactorY;
+            const rw = (s.width / this.renderScale) * scaleFactorX;
+            const rh = (s.height / this.renderScale) * scaleFactorY;
+            if (s.fill || s.isMask) {
+              offCtx.fillStyle = s.color || '#ffffff';
+              offCtx.fillRect(rx, ry, rw, rh);
+            } else {
+              offCtx.beginPath();
+              offCtx.strokeStyle = s.color;
+              offCtx.lineWidth = (s.lineWidth / this.renderScale) * scaleFactorX;
+              offCtx.strokeRect(rx, ry, rw, rh);
+            }
+          }
+          offCtx.restore();
+        });
+
+        // 2b. Textos (reemplazos in-place y cuadros de texto libres)
+        pageAnn.texts.forEach(t => {
+          if (!t.text) return;
+          offCtx.save();
+
+          const fontPx = (t.size / this.renderScale) * scaleFactorY;
+          const lineH = t.lineHeight ? t.lineHeight * scaleFactorY : fontPx * 1.2;
+          offCtx.font = `${fontPx}px ${t.font}`;
+          offCtx.textBaseline = 'top';
+
+          // Parche blanco del alto EXACTO de la línea original, nunca del alto
+          // del bloque en edición (que crece verticalmente mientras se escribe).
+          if (t.isReplacement && t.mask) {
+            offCtx.fillStyle = '#ffffff';
+            offCtx.fillRect(
+              t.mask.x * scaleFactorX,
+              t.mask.y * scaleFactorY,
+              t.mask.w * scaleFactorX,
+              t.mask.h * scaleFactorY
+            );
+          }
+
+          offCtx.fillStyle = t.color || '#000000';
+
+          const posX = (t.boxX !== undefined ? t.boxX : (t.x / this.renderScale)) * scaleFactorX;
+          const posY = (t.boxY !== undefined ? t.boxY : (t.y / this.renderScale)) * scaleFactorY;
+          const maxW = t.boxW ? t.boxW * scaleFactorX : 0;
+
+          // Ajuste fino vertical: centra la nueva línea en el hueco de la original
+          const offsetY = t.isReplacement ? Math.max(0, (lineH - fontPx) / 2) : 0;
+
+          const lines = this.wrapCanvasText(offCtx, t.text, maxW);
+          lines.forEach((line, li) => {
+            offCtx.fillText(line, posX, posY + offsetY + li * lineH);
+          });
+
+          offCtx.restore();
+        });
+
+        const layerBytes = await this.canvasToBytes(offCanvas, 'image/png');
+        const embeddedLayer = await pdfDoc.embedPng(layerBytes);
+        pdfPage.drawImage(embeddedLayer, { x: 0, y: 0, width: pdfW, height: pdfH });
+      }
+
+      // 3. Sellos y firmas digitales
+      for (const stamp of pageAnn.stamps) {
+        const stampBytes = await fetch(stamp.dataUrl).then(r => r.arrayBuffer());
+        const embeddedStamp = await pdfDoc.embedPng(stampBytes);
+
+        const sWidth = stamp.width * scaleFactorX;
+        const sHeight = stamp.height * scaleFactorY;
+        const sX = stamp.x * scaleFactorX;
+        // El origen de coordenadas del PDF está abajo a la izquierda
+        const sY = pdfH - (stamp.y * scaleFactorY) - sHeight;
+
+        pdfPage.drawImage(embeddedStamp, { x: sX, y: sY, width: sWidth, height: sHeight });
+      }
+    }
+
+    return pdfDoc;
+  }
+
+  canvasToBytes(canvas, type = 'image/png', quality) {
+    return new Promise((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { reject(new Error('No se pudo serializar el lienzo.')); return; }
+          blob.arrayBuffer().then(resolve, reject);
+        },
+        type,
+        quality
+      );
+    });
+  }
+
+  /** ¿Hay ediciones en memoria todavía no incrustadas en el documento? */
+  hasPendingAnnotations() {
+    const ann = window.docState.annotations || {};
+    return Object.values(ann).some(p => p && (p.strokes.length || p.texts.length || p.stamps.length));
+  }
+
+  /**
+   * Devuelve una copia independiente del documento con todo ya quemado.
+   * Trabajar sobre una copia evita que exportar dos veces incruste las
+   * anotaciones por duplicado en el documento vivo.
+   */
+  async buildFlattenedDoc() {
+    const snapshot = await window.docState.pdfLibDoc.save();
+    const copy = await PDFLib.PDFDocument.load(snapshot, { ignoreEncryption: true });
+    await this.burnAnnotationsIntoDoc(copy);
+    return copy;
+  }
 
   async exportAndDownloadPDF() {
     if (!window.docState.hasDocument || !window.docState.pdfLibDoc) {
@@ -1510,143 +1932,10 @@ class UnifiedAcrobatApp {
       return;
     }
 
-    window.showLoading(true, 'Incrustando firmas vectoriales, textos y anotaciones...');
+    window.showLoading(true, 'Incrustando firmas, textos y anotaciones...');
     try {
-      const pdfDoc = window.docState.pdfLibDoc;
-      const pages = pdfDoc.getPages();
-
-      for (let i = 0; i < pages.length; i++) {
-        const pageNum = i + 1;
-        const pdfPage = pages[i];
-        const { width: pdfW, height: pdfH } = pdfPage.getSize();
-
-        const pageAnn = window.docState.annotations[pageNum];
-        if (!pageAnn) continue;
-
-        const pageObj = this.renderedPages.get(pageNum);
-        if (!pageObj) continue;
-
-        const cssW = pageObj.cssWidth;
-        const cssH = pageObj.cssHeight;
-        const scaleFactorX = pdfW / cssW;
-        const scaleFactorY = pdfH / cssH;
-
-        // 1. Quemado de trazos y dibujos mediante capa PNG nítida de alta resolución
-        if (pageAnn.strokes.length > 0) {
-          const offCanvas = document.createElement('canvas');
-          offCanvas.width = pdfW * 2;
-          offCanvas.height = pdfH * 2;
-          const offCtx = offCanvas.getContext('2d');
-          offCtx.scale(2, 2);
-
-          pageAnn.strokes.forEach(s => {
-            offCtx.save();
-            if (s.tool === 'pencil' || s.tool === 'highlighter') {
-              if (s.points && s.points.length > 1) {
-                offCtx.beginPath();
-                offCtx.strokeStyle = s.color;
-                offCtx.globalAlpha = s.alpha || 1.0;
-                offCtx.lineWidth = (s.lineWidth / this.renderScale) * scaleFactorX;
-                offCtx.lineCap = s.tool === 'highlighter' ? 'square' : 'round';
-                offCtx.lineJoin = 'round';
-                offCtx.moveTo((s.points[0].x / this.renderScale) * scaleFactorX, (s.points[0].y / this.renderScale) * scaleFactorY);
-                for (let k = 1; k < s.points.length; k++) {
-                  offCtx.lineTo((s.points[k].x / this.renderScale) * scaleFactorX, (s.points[k].y / this.renderScale) * scaleFactorY);
-                }
-                offCtx.stroke();
-              }
-            } else if (s.tool === 'rect') {
-              if (s.fill || s.isMask) {
-                offCtx.fillStyle = s.color || '#ffffff';
-                offCtx.fillRect(
-                  (s.x / this.renderScale) * scaleFactorX,
-                  (s.y / this.renderScale) * scaleFactorY,
-                  (s.width / this.renderScale) * scaleFactorX,
-                  (s.height / this.renderScale) * scaleFactorY
-                );
-              } else {
-                offCtx.beginPath();
-                offCtx.strokeStyle = s.color;
-                offCtx.lineWidth = (s.lineWidth / this.renderScale) * scaleFactorX;
-                offCtx.strokeRect(
-                  (s.x / this.renderScale) * scaleFactorX,
-                  (s.y / this.renderScale) * scaleFactorY,
-                  (s.width / this.renderScale) * scaleFactorX,
-                  (s.height / this.renderScale) * scaleFactorY
-                );
-              }
-            }
-            offCtx.restore();
-          });
-
-          const strokeImgBytes = await fetch(offCanvas.toDataURL('image/png')).then(r => r.arrayBuffer());
-          const embeddedStrokes = await pdfDoc.embedPng(strokeImgBytes);
-          pdfPage.drawImage(embeddedStrokes, { x: 0, y: 0, width: pdfW, height: pdfH });
-        }
-
-        // 2. Incrustación de textos (reemplazos in-place y nuevos textos libres)
-        if (pageAnn.texts.length > 0) {
-          for (const t of pageAnn.texts) {
-            // Si es un reemplazo de texto existente, tapar el texto original con un rectángulo blanco limpio
-            if (t.isReplacement) {
-              const rX = (t.boxX || 0) * scaleFactorX;
-              const rW = ((t.boxW || 40) + 4) * scaleFactorX;
-              const rH = ((t.boxH || 14) + 4) * scaleFactorY;
-              // En coordenadas PDF, el origen (0,0) está en la esquina inferior izquierda
-              const rY = pdfH - ((t.boxY || 0) * scaleFactorY) - rH;
-
-              pdfPage.drawRectangle({
-                x: Math.max(0, rX - 2),
-                y: Math.max(0, rY),
-                width: rW + 4,
-                height: rH + 2,
-                color: PDFLib.rgb(1, 1, 1),
-                borderWidth: 0
-              });
-            }
-
-            // Dibujamos el nuevo texto nítido en canvas de alta resolución
-            const textCanvas = document.createElement('canvas');
-            textCanvas.width = pdfW * 2;
-            textCanvas.height = pdfH * 2;
-            const tCtx = textCanvas.getContext('2d');
-            tCtx.scale(2, 2);
-            tCtx.font = `${(t.size / this.renderScale) * scaleFactorY}px ${t.font}`;
-            tCtx.fillStyle = t.color || '#000000';
-            tCtx.textBaseline = 'top';
-            const posX = (t.boxX !== undefined ? t.boxX : (t.x / this.renderScale)) * scaleFactorX;
-            const posY = (t.boxY !== undefined ? t.boxY : (t.y / this.renderScale)) * scaleFactorY;
-            tCtx.fillText(t.text, posX, posY);
-
-            const txtBytes = await fetch(textCanvas.toDataURL('image/png')).then(r => r.arrayBuffer());
-            const embeddedTxt = await pdfDoc.embedPng(txtBytes);
-            pdfPage.drawImage(embeddedTxt, { x: 0, y: 0, width: pdfW, height: pdfH });
-          }
-        }
-
-        // 3. Incrustación de sellos y firmas digitales
-        if (pageAnn.stamps.length > 0) {
-          for (const stamp of pageAnn.stamps) {
-            const stampBytes = await fetch(stamp.dataUrl).then(r => r.arrayBuffer());
-            const embeddedStamp = await pdfDoc.embedPng(stampBytes);
-
-            const sWidth = stamp.width * scaleFactorX;
-            const sHeight = stamp.height * scaleFactorY;
-            const sX = stamp.x * scaleFactorX;
-            // Coordenada Y en PDF se mide desde el fondo inferior hacia arriba
-            const sY = pdfH - (stamp.y * scaleFactorY) - sHeight;
-
-            pdfPage.drawImage(embeddedStamp, {
-              x: sX,
-              y: sY,
-              width: sWidth,
-              height: sHeight
-            });
-          }
-        }
-      }
-
-      const finalBytes = await pdfDoc.save();
+      const flattened = await this.buildFlattenedDoc();
+      const finalBytes = await flattened.save();
       const blob = new Blob([finalBytes], { type: 'application/pdf' });
       const url = URL.createObjectURL(blob);
 
@@ -1666,6 +1955,22 @@ class UnifiedAcrobatApp {
     } finally {
       window.showLoading(false);
     }
+  }
+
+  /**
+   * Consolida las ediciones dentro del documento vivo y limpia el estado.
+   * Toda operación de páginas (rotar, duplicar, eliminar, reordenar, fusionar,
+   * comprimir) pasa por aquí: antes las anotaciones sobrevivían a la recarga
+   * asociadas a números de página que ya habían cambiado, y se volvían a
+   * incrustar en la siguiente exportación.
+   */
+  async commitAnnotationsToLiveDoc() {
+    if (!this.hasPendingAnnotations()) return;
+    // La referencia se toma antes del await: así queda claro que se limpia el
+    // mismo estado sobre el que se acaba de incrustar, no el que hubiera después.
+    const estado = window.docState;
+    await this.burnAnnotationsIntoDoc(estado.pdfLibDoc);
+    estado.annotations = {};
   }
 
   /* ==================== 6. TOP BAR Y NAVEGACIÓN ==================== */
@@ -1770,7 +2075,11 @@ class UnifiedAcrobatApp {
         if (block) {
           const content = block.querySelector('.text-block-content');
           if (content) content.innerText = action.oldText;
-          if (!action.wasModified) block.classList.remove('modified');
+          if (!action.wasModified) {
+            block.classList.remove('modified');
+            block.style.background = 'transparent';
+            delete block.dataset.masked;
+          }
         }
         const pageAnn = state.annotations[action.pageNum];
         if (pageAnn) {
@@ -1782,6 +2091,8 @@ class UnifiedAcrobatApp {
               t.text = action.oldText;
             }
           }
+          // Sin esto el parche blanco seguía tapando el texto original recuperado
+          if (!action.wasModified) this.removeMaskForBlock(action.pageNum, action.blockId);
         }
         break;
       }
@@ -1898,12 +2209,18 @@ class UnifiedAcrobatApp {
           const content = block.querySelector('.text-block-content');
           if (content) content.innerText = action.newText;
           block.classList.add('modified');
+          block.style.background = '#ffffff';
+          block.dataset.masked = 'true';
         }
-        const pageAnn = state.annotations[action.pageNum];
-        if (pageAnn) {
-          const t = pageAnn.texts.find(x => x.id === action.blockId);
-          if (t) t.text = action.newText;
+        const pageAnn = state.initPageAnnotations(action.pageNum);
+        const t = pageAnn.texts.find(x => x.id === action.blockId);
+        if (t) {
+          t.text = action.newText;
+        } else if (action.record) {
+          pageAnn.texts.push({ ...action.record, text: action.newText });
         }
+        // Reponer el parche blanco que `undo` había retirado
+        if (action.meta) this.maskOriginalText(action.pageNum, action.meta, action.blockId);
         break;
       }
       case 'move_text': {
@@ -1952,6 +2269,14 @@ class UnifiedAcrobatApp {
         }
         break;
       }
+      case 'stamp': {
+        if (action.stamp) {
+          const pageAnn = state.initPageAnnotations(action.pageNum);
+          if (!pageAnn.stamps.some(s => s.id === action.stamp.id)) pageAnn.stamps.push(action.stamp);
+          this.renderStampsOnPage(action.pageNum);
+        }
+        break;
+      }
     }
 
     this.updateUndoRedoButtons();
@@ -1987,9 +2312,50 @@ class UnifiedAcrobatApp {
 
   applyZoom(zoom) {
     const stage = document.getElementById('pdf-render-stage');
+    const sizer = document.getElementById('pdf-zoom-sizer');
     const zoomText = document.getElementById('btn-zoom-reset');
-    if (stage) stage.style.transform = `scale(${zoom})`;
     if (zoomText) zoomText.textContent = `${Math.round(zoom * 100)}%`;
+    if (!stage) return;
+
+    const natural = this.measureStageNaturalSize();
+    stage.style.transform = `scale(${zoom})`;
+
+    if (sizer) {
+      sizer.style.width = `${Math.ceil(natural.width * zoom)}px`;
+      sizer.style.height = `${Math.ceil(natural.height * zoom)}px`;
+    }
+  }
+
+  /**
+   * Tamaño del escenario sin escalar, medido UNA vez por renderizado.
+   * Medirlo en cada cambio de zoom obligaba a quitar la transformación, y eso
+   * reiniciaba la transición CSS desde el 100 % en cada paso (la página daba un
+   * salto al tamaño original antes de animar hacia el zoom nuevo).
+   */
+  measureStageNaturalSize(force = false) {
+    if (!force && this.stageNaturalSize) return this.stageNaturalSize;
+
+    const stage = document.getElementById('pdf-render-stage');
+    const sizer = document.getElementById('pdf-zoom-sizer');
+    if (!stage) return { width: 0, height: 0 };
+
+    const prevTransition = stage.style.transition;
+    const prevTransform = stage.style.transform;
+    // El sizer se neutraliza para que su ancho (derivado del escenario) no
+    // realimente la medida del propio escenario.
+    const prevSizerW = sizer ? sizer.style.width : null;
+    const prevSizerH = sizer ? sizer.style.height : null;
+    if (sizer) { sizer.style.width = 'auto'; sizer.style.height = 'auto'; }
+    stage.style.transition = 'none';
+    stage.style.transform = 'none';
+
+    this.stageNaturalSize = { width: stage.offsetWidth, height: stage.offsetHeight };
+
+    stage.style.transform = prevTransform;
+    stage.style.transition = prevTransition;
+    if (sizer && prevSizerW !== null) { sizer.style.width = prevSizerW; sizer.style.height = prevSizerH; }
+
+    return this.stageNaturalSize;
   }
 
   fitToWidth() {
@@ -2000,8 +2366,7 @@ class UnifiedAcrobatApp {
     const padding = window.innerWidth < 768 ? 20 : 80;
     const availableWidth = Math.max(100, viewport.clientWidth - padding);
     const pageWidth = parseFloat(firstPage.style.width) || 600;
-    const targetZoom = Math.min(2.5, Math.max(0.2, availableWidth / pageWidth));
-    window.docState.setZoom(targetZoom);
+    window.docState.setZoom(availableWidth / pageWidth);
   }
 
   setupPanelsToggle() {
@@ -2068,6 +2433,27 @@ class UnifiedAcrobatApp {
         propsPanel?.classList.toggle('collapsed');
       }
     });
+
+    // Botón del ribbon "Panel de Miniaturas"
+    document.getElementById('btn-toggle-thumbnails')?.addEventListener('click', () => {
+      if (window.innerWidth < 1024) {
+        propsPanel?.classList.remove('open-mobile');
+        const isOpen = thumbStrip?.classList.toggle('open-mobile');
+        if (isOpen) backdrop?.classList.remove('hidden');
+        else backdrop?.classList.add('hidden');
+      } else {
+        thumbStrip?.classList.toggle('collapsed');
+      }
+    });
+
+    document.getElementById('btn-thumb-add-pdf')?.addEventListener('click', () => {
+      this.promptInsertPDF();
+    });
+
+    // Cerrar los cajones al volver a escritorio para no dejar estados colgados
+    window.addEventListener('resize', () => {
+      if (window.innerWidth >= 1024) closeAllDrawers();
+    });
   }
 
   /* ==================== 7. CINTA DE HERRAMIENTAS (RIBBON) ==================== */
@@ -2094,27 +2480,20 @@ class UnifiedAcrobatApp {
     // Herramientas de Edición
     document.querySelectorAll('[data-action="tool"]').forEach(btn => {
       btn.addEventListener('click', () => {
-        document.querySelectorAll('[data-action="tool"]').forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        const tool = btn.getAttribute('data-tool');
-        window.docState.setTool(tool);
-        this.updateCursorMode(tool);
+        window.docState.setTool(btn.getAttribute('data-tool'));
       });
     });
 
     // Muestras de color rápido
     document.querySelectorAll('.color-swatch').forEach(swatch => {
       swatch.addEventListener('click', () => {
-        document.querySelectorAll('.color-swatch').forEach(s => s.classList.remove('active'));
-        swatch.classList.add('active');
-        const color = swatch.getAttribute('data-color');
-        window.docState.properties.color = color;
-        const customInput = document.getElementById('ribbon-color-custom');
-        if (customInput) customInput.value = color;
-        const propInput = document.getElementById('prop-stroke-color');
-        if (propInput) propInput.value = color;
-        document.getElementById('prop-stroke-color-hex').textContent = color;
+        this.setStrokeColor(swatch.getAttribute('data-color'));
       });
+    });
+
+    // Selector "Más colores": se escribía en él pero nunca se leía su valor
+    document.getElementById('ribbon-color-custom')?.addEventListener('input', (e) => {
+      this.setStrokeColor(e.target.value);
     });
 
     // Botones de Firma Rápida
@@ -2195,6 +2574,25 @@ class UnifiedAcrobatApp {
     document.getElementById('btn-open-md-editor')?.addEventListener('click', () => this.openMarkdownModal());
   }
 
+  /** Aplica un color de trazo y sincroniza los tres controles que lo muestran. */
+  setStrokeColor(color) {
+    if (!color) return;
+    window.docState.properties.color = color;
+
+    document.querySelectorAll('.color-swatch').forEach(s => {
+      s.classList.toggle('active', s.getAttribute('data-color') === color);
+    });
+
+    const customInput = document.getElementById('ribbon-color-custom');
+    if (customInput && customInput.value !== color) customInput.value = color;
+
+    const propInput = document.getElementById('prop-stroke-color');
+    if (propInput && propInput.value !== color) propInput.value = color;
+
+    const hex = document.getElementById('prop-stroke-color-hex');
+    if (hex) hex.textContent = color;
+  }
+
   updateCursorMode(tool) {
     const stage = document.getElementById('pdf-render-stage');
     stage?.classList.remove('tool-mode-text', 'tool-mode-select', 'tool-mode-eraser');
@@ -2218,31 +2616,6 @@ class UnifiedAcrobatApp {
 
   /* ==================== 8. PANELES LATERALES Y PROPIEDADES ==================== */
 
-  setupPanelsToggle() {
-    const thumbPanel = document.getElementById('thumbnail-strip');
-    const propPanel = document.getElementById('properties-panel');
-
-    document.getElementById('btn-collapse-thumbs')?.addEventListener('click', () => {
-      thumbPanel?.classList.toggle('collapsed');
-    });
-
-    document.getElementById('btn-toggle-thumbnails')?.addEventListener('click', () => {
-      thumbPanel?.classList.toggle('collapsed');
-    });
-
-    document.getElementById('btn-collapse-properties')?.addEventListener('click', () => {
-      propPanel?.classList.toggle('collapsed');
-    });
-
-    document.getElementById('btn-toggle-properties')?.addEventListener('click', () => {
-      propPanel?.classList.toggle('collapsed');
-    });
-
-    document.getElementById('btn-thumb-add-pdf')?.addEventListener('click', () => {
-      this.promptInsertPDF();
-    });
-  }
-
   setupPropertiesPanel() {
     const strokeColor = document.getElementById('prop-stroke-color');
     const strokeWidth = document.getElementById('prop-stroke-width');
@@ -2251,8 +2624,7 @@ class UnifiedAcrobatApp {
     const fontFamily = document.getElementById('prop-font-family');
 
     strokeColor?.addEventListener('input', (e) => {
-      window.docState.properties.color = e.target.value;
-      document.getElementById('prop-stroke-color-hex').textContent = e.target.value;
+      this.setStrokeColor(e.target.value);
     });
 
     strokeWidth?.addEventListener('input', (e) => {
@@ -2268,11 +2640,14 @@ class UnifiedAcrobatApp {
     });
 
     fontSize?.addEventListener('input', (e) => {
-      window.docState.properties.fontSize = parseInt(e.target.value, 10) || 16;
+      const val = parseInt(e.target.value, 10) || 16;
+      window.docState.properties.fontSize = val;
+      this.applyTypographyToActiveBlock({ fontSize: val });
     });
 
     fontFamily?.addEventListener('change', (e) => {
       window.docState.properties.fontFamily = e.target.value;
+      this.applyTypographyToActiveBlock({ fontFamily: e.target.value });
     });
 
     document.getElementById('btn-clear-annotations')?.addEventListener('click', () => {
@@ -2318,6 +2693,12 @@ class UnifiedAcrobatApp {
           window.docState.setTool('text');
         } else if (e.key === 'u' || e.key === 'U') {
           window.docState.setTool('highlighter');
+        } else if (e.key === 'h' || e.key === 'H') {
+          window.docState.setTool('hand');
+        } else if (e.key === 'e' || e.key === 'E') {
+          window.docState.setTool('eraser');
+        } else if (e.key === 'r' || e.key === 'R') {
+          window.docState.setTool('rect');
         }
       }
     });
@@ -2358,7 +2739,8 @@ class UnifiedAcrobatApp {
 
     canvas.onpointerup = (e) => {
       drawing = false;
-      try { canvas.releasePointerCapture(e.pointerId); } catch(err){}
+      // El puntero puede haberse liberado ya (p. ej. si el gesto salió de la ventana).
+      try { canvas.releasePointerCapture(e.pointerId); } catch (err) { /* captura ya liberada */ }
     };
 
     document.getElementById('btn-modal-sig-close')?.addEventListener('click', () => modal?.classList.add('hidden'));
@@ -2446,6 +2828,7 @@ class UnifiedAcrobatApp {
       await page.render({ canvasContext: ctx, viewport: pageObj.viewport }).promise;
 
       if (filterType === 'original') {
+        pageObj.activeFilter = 'original';
         window.showToast('Filtro restablecido.', 'info');
         return;
       }
@@ -2482,6 +2865,9 @@ class UnifiedAcrobatApp {
       }
 
       ctx.putImageData(imgData, 0, 0);
+      // Marcar la página: el filtro dejaba de existir al guardar porque sólo
+      // vivía en el canvas de pantalla y nunca se incrustaba en el PDF.
+      pageObj.activeFilter = filterType;
       window.showToast(`Filtro ${filterType} aplicado a la página ${pageNum}.`, 'success');
     } catch (err) {
       window.showToast('Error al aplicar filtro.', 'error');
@@ -2512,13 +2898,19 @@ class UnifiedAcrobatApp {
     const statusEl = document.getElementById('ocr-modal-status');
     const percentEl = document.getElementById('ocr-modal-percent');
     const progressEl = document.getElementById('ocr-modal-progress-bar');
+    const progressBox = document.getElementById('ocr-modal-progress-container');
     const textarea = document.getElementById('ocr-modal-text-result');
     const lang = document.getElementById('select-ocr-lang')?.value || 'spa+eng';
 
+    progressBox?.classList.remove('hidden');
+    if (progressEl) progressEl.style.width = '0%';
+    if (percentEl) percentEl.textContent = '0%';
+    if (textarea) textarea.value = '';
     if (statusEl) statusEl.textContent = 'Inicializando motor OCR WebAssembly...';
 
+    let worker = null;
     try {
-      const worker = await Tesseract.createWorker(lang, 1, {
+      worker = await Tesseract.createWorker(lang, 1, {
         logger: m => {
           if (m.progress && progressEl && percentEl) {
             const p = Math.round(m.progress * 100);
@@ -2532,20 +2924,27 @@ class UnifiedAcrobatApp {
       });
 
       const { data: { text } } = await worker.recognize(pageObj.pdfCanvas);
-      await worker.terminate();
 
       if (textarea) textarea.value = text.trim();
       if (statusEl) statusEl.textContent = '¡Texto reconocido!';
+      if (progressEl) progressEl.style.width = '100%';
+      if (percentEl) percentEl.textContent = '100%';
       window.showToast('OCR completado con éxito.', 'success');
     } catch (err) {
       console.error('Error en OCR:', err);
+      if (statusEl) statusEl.textContent = 'El reconocimiento falló.';
       window.showToast('Error durante el OCR: ' + err.message, 'error');
+    } finally {
+      // Terminar el worker también cuando falla, o el WASM queda en memoria
+      if (worker) { try { await worker.terminate(); } catch (e) { /* ya terminado */ } }
     }
   }
 
   showOcrResultModal(text) {
     const modal = document.getElementById('modal-ocr');
     const textarea = document.getElementById('ocr-modal-text-result');
+    // No hay proceso que seguir cuando el texto ya venía del PDF
+    document.getElementById('ocr-modal-progress-container')?.classList.add('hidden');
     if (modal && textarea) {
       textarea.value = text;
       modal.classList.remove('hidden');
@@ -2586,7 +2985,13 @@ class UnifiedAcrobatApp {
 
     const qualityVal = parseInt(document.getElementById('ribbon-compress-quality').value, 10) / 100;
     window.showLoading(true, 'Recomprimiendo documento en memoria RAM...');
+    const originalSize = window.docState.size;
     try {
+      await this.commitAnnotationsToLiveDoc();
+      // Re-renderizar el visor para que las páginas reflejen lo ya incrustado
+      const committed = await window.docState.pdfLibDoc.save();
+      await this.loadPDFBuffer(committed.buffer.slice(0), window.docState.name, committed.byteLength);
+
       const newPdf = await PDFLib.PDFDocument.create();
 
       for (let i = 1; i <= window.docState.totalPages; i++) {
@@ -2609,17 +3014,23 @@ class UnifiedAcrobatApp {
       }
 
       const compressedBytes = await newPdf.save({ useObjectStreams: true });
-      const diff = window.docState.size - compressedBytes.byteLength;
-      const pct = Math.round((diff / window.docState.size) * 100);
+      const baseSize = originalSize || compressedBytes.byteLength;
+      const pct = Math.round(((baseSize - compressedBytes.byteLength) / baseSize) * 100);
 
       // Cargar el documento comprimido directamente en el visor
       await this.loadPDFBuffer(compressedBytes.buffer, window.docState.name, compressedBytes.byteLength);
 
       const statusEl = document.getElementById('ribbon-compress-status');
-      if (statusEl) {
-        statusEl.textContent = `Ahorro: -${pct}% (${this.formatBytes(compressedBytes.byteLength)})`;
-      }
-      window.showToast(`Documento optimizado: -${pct}% de peso`, 'success');
+      const label = pct > 0
+        ? `Ahorro: -${pct}% (${this.formatBytes(compressedBytes.byteLength)})`
+        : `Sin ahorro: ${this.formatBytes(compressedBytes.byteLength)}`;
+      if (statusEl) statusEl.textContent = label;
+      window.showToast(
+        pct > 0
+          ? `Documento optimizado: -${pct}% de peso`
+          : 'El documento ya estaba optimizado; no se redujo el tamaño.',
+        pct > 0 ? 'success' : 'info'
+      );
     } catch (err) {
       console.error('Error al comprimir:', err);
       window.showToast('Error al comprimir documento.', 'error');
@@ -2661,16 +3072,40 @@ class UnifiedAcrobatApp {
     }
   }
 
+  /** Convierte cualquier imagen que el navegador sepa decodificar a bytes PNG. */
+  async transcodeImageToPngBytes(file) {
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((resolve, reject) => {
+        const image = new Image();
+        image.onload = () => resolve(image);
+        image.onerror = () => reject(new Error('No se pudo decodificar la imagen.'));
+        image.src = url;
+      });
+
+      const canvas = document.createElement('canvas');
+      canvas.width = img.naturalWidth || img.width;
+      canvas.height = img.naturalHeight || img.height;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      return await this.canvasToBytes(canvas, 'image/png');
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  }
+
   async importImageAsPDF(file) {
     window.showLoading(true, 'Convirtiendo imagen a PDF...');
     try {
       const pdfDoc = await PDFLib.PDFDocument.create();
-      const buffer = await file.arrayBuffer();
       let img;
       if (file.type === 'image/png') {
-        img = await pdfDoc.embedPng(buffer);
+        img = await pdfDoc.embedPng(await file.arrayBuffer());
+      } else if (file.type === 'image/jpeg') {
+        img = await pdfDoc.embedJpg(await file.arrayBuffer());
       } else {
-        img = await pdfDoc.embedJpg(buffer);
+        // pdf-lib sólo incrusta PNG y JPEG: WebP, GIF, BMP o AVIF se
+        // transcodifican primero pasando por un canvas.
+        img = await pdfDoc.embedPng(await this.transcodeImageToPngBytes(file));
       }
 
       const dims = img.scale(1.0);
@@ -2695,6 +3130,7 @@ class UnifiedAcrobatApp {
       if (e.target.files && e.target.files[0]) {
         window.showLoading(true, 'Fusionando páginas del nuevo PDF...');
         try {
+          await this.commitAnnotationsToLiveDoc();
           const newBuffer = await e.target.files[0].arrayBuffer();
           const extraPdf = await PDFLib.PDFDocument.load(newBuffer, { ignoreEncryption: true });
           const count = extraPdf.getPageCount();
@@ -2744,8 +3180,9 @@ class UnifiedAcrobatApp {
         return;
       }
 
+      const source = await this.buildFlattenedDoc();
       const newPdf = await PDFLib.PDFDocument.create();
-      const copied = await newPdf.copyPages(window.docState.pdfLibDoc, uniqueIndices);
+      const copied = await newPdf.copyPages(source, uniqueIndices);
       copied.forEach(p => newPdf.addPage(p));
 
       const bytes = await newPdf.save();
@@ -2929,9 +3366,11 @@ window.showToast = function(msg, type = 'info') {
     warning: 'fa-triangle-exclamation text-amber-400',
     info: 'fa-circle-info text-cyan-400'
   };
-  t.innerHTML = `<i class="fa-solid ${icons[type] || icons.info}"></i><span></span>`;
-  const span = t.querySelector('span');
-  if (span) span.textContent = String(msg || '');
+  const icono = document.createElement('i');
+  icono.className = `fa-solid ${icons[type] || icons.info}`;
+  const span = document.createElement('span');
+  span.textContent = String(msg || '');
+  t.append(icono, span);
   c.appendChild(t);
   setTimeout(() => {
     t.style.opacity = '0';
