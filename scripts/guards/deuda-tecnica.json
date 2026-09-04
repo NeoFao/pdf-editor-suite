@@ -1,0 +1,22 @@
+{
+  "_lee_esto_primero": [
+    "Excepciones TEMPORALES a las reglas deterministas. Cada entrada es deuda",
+    "reconocida, no una exención permanente: se imprime en rojo en cada corrida",
+    "de `npm run guard` y en cada PR.",
+    "",
+    "REGLAS DE ESTE FICHERO:",
+    "  1. Solo el humano responsable del repo puede AÑADIR entradas.",
+    "     Una IA nunca añade una entrada para poner el CI en verde: eso es una",
+    "     violación directa de AGENTS.md §3.",
+    "  2. Toda entrada necesita `motivo` y `resolucion`. Sin ellos no vale.",
+    "  3. La lista solo puede encoger. La regla `deuda-acotada` falla si crece",
+    "     por encima de `maximo_entradas`.",
+    "  4. Al resolver una entrada, se borra de aquí en el mismo PR.",
+    "",
+    "Historial: contuvo los cinco módulos de la interfaz multipágina anterior",
+    "(E-021). Se borraron; el tope bajó de 5 a 0. No vuelvas a subirlo sin",
+    "acuerdo explícito del responsable del repositorio."
+  ],
+  "maximo_entradas": 0,
+  "entradas": []
+}

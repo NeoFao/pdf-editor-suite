@@ -1,0 +1,32 @@
+#!/bin/sh
+# Commit-msg: exige conventional commits.
+# Escape consciente:  PDFEDITOR_SKIP_HOOKS=1
+
+if [ "$PDFEDITOR_SKIP_HOOKS" = "1" ]; then
+  exit 0
+fi
+
+PRIMERA=$(head -n 1 "$1")
+
+# Ignorar merges y reverts generados por git.
+case "$PRIMERA" in
+  "Merge "*|"Revert "*|"fixup!"*|"squash!"*) exit 0 ;;
+esac
+
+if ! printf '%s' "$PRIMERA" | grep -Eq '^(feat|fix|docs|style|refactor|perf|test|build|ci|chore)(\([a-z0-9._-]+\))?!?: .{10,}'; then
+  echo "[commit-msg] BLOQUEADO: el asunto no sigue conventional commits."
+  echo ""
+  echo "  Formato:  tipo(ambito opcional): descripcion de al menos 10 caracteres"
+  echo "  Tipos:    feat fix docs style refactor perf test build ci chore"
+  echo ""
+  echo "  Ejemplo:  fix: la mascara del texto usa el alto de la linea original"
+  echo "  Recibido: $PRIMERA"
+  exit 1
+fi
+
+if [ "$(printf '%s' "$PRIMERA" | wc -c)" -gt 100 ]; then
+  echo "[commit-msg] BLOQUEADO: el asunto supera 100 caracteres. Resume y usa el cuerpo."
+  exit 1
+fi
+
+exit 0

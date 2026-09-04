@@ -1,41 +1,216 @@
-name: CI & Security Audit
+name: CI
+
+# Todo lo que impide que un defecto conocido vuelva a main.
+#
+# Los cinco jobs son independientes a propósito: un PR ve de golpe TODO lo que
+# está mal, no solo el primer fallo. Todos deben ser checks obligatorios en la
+# protección de rama (ver docs/BRANCH-PROTECTION.md).
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+  merge_group:
+    types: [checks_requested]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '20'
 
 jobs:
-  build-and-verify:
+  # ── 1. Reglas deterministas ────────────────────────────────────────────
+  # Cada regla nace de un defecto real registrado en docs/ERRORES-CONOCIDOS.md.
+  # Es el job más rápido: falla primero y con el mensaje más concreto.
+  reglas:
+    name: Reglas deterministas
     runs-on: ubuntu-latest
-
+    timeout-minutes: 10
     steps:
-    - name: Checkout del repositorio
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
 
-    - name: Configurar Node.js
-      uses: actions/setup-node@v4
-      with:
-        node-version: '20'
-        cache: 'npm'
+      - name: Espejos de reglas de IA sincronizados
+        run: npm run reglas:check
 
-    - name: Instalar dependencias
-      run: npm ci
+      - name: Reglas deterministas
+        run: npm run guard
 
-    - name: Compilar Tailwind CSS
-      run: npm run build
+      - name: Tests de las propias reglas
+        run: npm run test:unit
 
-    - name: Verificación de sintaxis de JavaScript
-      run: |
-        node --check js/app.js
-        node --check js/state.js
-        node --check js/modules/organizer.js
-        node --check js/modules/annotator.js
-        node --check js/modules/compressor.js
-        node --check js/modules/scanner.js
-        node --check js/modules/converter.js
-        node --check server.js
+  # ── 2. Calidad estática ────────────────────────────────────────────────
+  estatico:
+    name: Lint y sintaxis
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
 
-    - name: Auditoría de seguridad de dependencias
-      run: npm audit --audit-level=high || true
+      - name: ESLint
+        run: npm run lint
+
+      - name: Sintaxis de todos los .js propios
+        run: |
+          set -euo pipefail
+          for f in js/app.js js/state.js server.js; do
+            node --check "$f"
+          done
+
+  # ── 3. Build reproducible ──────────────────────────────────────────────
+  # css/tailwind.min.css va versionado (no hay build en despliegue): si no
+  # corresponde al HTML actual, en producción faltan clases (E-022).
+  build:
+    name: Build de CSS al día
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+
+      - name: El CSS compilado corresponde al código
+        run: npm run build:check
+
+  # ── 4. Suite E2E en Chromium real ──────────────────────────────────────
+  # El corazón del pipeline. Estos defectos son de maquetación, geometría de
+  # canvas y composición de PDF: un DOM simulado los deja pasar todos.
+  e2e:
+    name: E2E en Chromium
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+
+      - name: Instalar Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Generar fixtures
+        run: npm run test:fixtures
+
+      - name: Ejecutar suite
+        run: npx playwright test
+
+      - name: Publicar informe si falla
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 14
+
+  # ── 5. Higiene del repositorio ─────────────────────────────────────────
+  higiene:
+    name: Higiene del repo
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Escaneo de secretos
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Ficheros prohibidos
+        shell: bash
+        run: |
+          set -euo pipefail
+          fallo=0
+          reportar() {
+            if [ -n "$2" ]; then
+              echo "::error::$1"
+              echo "$2" | sed 's/^/  - /'
+              fallo=1
+            fi
+          }
+          todos=$(git ls-files)
+
+          reportar "Prohibido versionar .env (salvo .env.example):" \
+            "$(printf '%s\n' "$todos" | grep -E '(^|/)\.env(\.[^/]+)?$' | grep -vE '(^|/)\.env\.example$' || true)"
+
+          reportar "Prohibido versionar claves o certificados:" \
+            "$(printf '%s\n' "$todos" | grep -E '\.(pem|key|pfx|p12)$' || true)"
+
+          reportar "Prohibido versionar capturas sueltas en la raíz (van fuera del repo):" \
+            "$(printf '%s\n' "$todos" | grep -E '^[^/]+\.(png|jpe?g|webp|gif)$' || true)"
+
+          reportar "Prohibido versionar fixtures generados (se regeneran con npm run test:fixtures):" \
+            "$(printf '%s\n' "$todos" | grep -E '^tests/fixtures/generados/' || true)"
+
+          reportar "Prohibido versionar informes de test:" \
+            "$(printf '%s\n' "$todos" | grep -E '^(playwright-report|test-results)/' || true)"
+
+          reportar "Prohibido versionar ficheros temporales de sesión (prefijo _):" \
+            "$(printf '%s\n' "$todos" | grep -E '^_[^/]*\.(js|mjs|pdf|txt|json)$' || true)"
+
+          if [ "$fallo" -eq 1 ]; then
+            echo ""
+            echo "Contexto: AGENTS.md y docs/ERRORES-CONOCIDOS.md"
+            exit 1
+          fi
+          echo "Sin ficheros prohibidos."
+
+      - name: El PR modifica AGENTS.md sin regenerar espejos
+        if: github.event_name == 'pull_request'
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="origin/${{ github.base_ref }}"
+          git fetch --no-tags --depth=1 origin "${{ github.base_ref }}"
+          if git diff --name-only "$base"...HEAD | grep -q '^AGENTS\.md$'; then
+            if ! git diff --name-only "$base"...HEAD | grep -q '^CLAUDE\.md$'; then
+              echo "::error::Has cambiado AGENTS.md sin regenerar los espejos. Ejecuta: npm run reglas:sync"
+              exit 1
+            fi
+          fi
+          echo "Espejos coherentes con el diff."
+
+  # ── Puerta única para la protección de rama ────────────────────────────
+  # Un solo check obligatorio que agrega los cinco. Añadir un job nuevo no
+  # obliga a reconfigurar la protección de la rama.
+  ci-ok:
+    name: CI completo
+    if: always()
+    needs: [reglas, estatico, build, e2e, higiene]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar que todo pasó
+        shell: bash
+        run: |
+          set -euo pipefail
+          resultados='${{ toJSON(needs) }}'
+          echo "$resultados"
+          if echo "$resultados" | grep -q '"result": *"failure"'; then
+            echo "::error::Hay jobs en rojo. No se puede mergear (AGENTS.md §4)."
+            exit 1
+          fi
+          if echo "$resultados" | grep -q '"result": *"cancelled"'; then
+            echo "::error::Hay jobs cancelados: el estado del PR no está verificado."
+            exit 1
+          fi
+          echo "CI completo en verde."

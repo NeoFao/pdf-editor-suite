@@ -1,0 +1,49 @@
+#!/bin/sh
+# Pre-commit: reglas deterministas + tests de reglas sobre lo que se va a commitear.
+#
+# Se activa con:  npm run hooks:install   (o automaticamente en `npm install`)
+#
+# Degradacion elegante: si falta node solo avisa. CI vuelve a correr TODO, asi
+# que saltarse el hook no cuela nada a main. Ver AGENTS.md seccion 4.
+# Escape consciente:  PDFEDITOR_SKIP_HOOKS=1 git commit ...
+
+if [ "$PDFEDITOR_SKIP_HOOKS" = "1" ]; then
+  echo "[pre-commit] AVISO: hooks omitidos a peticion (PDFEDITOR_SKIP_HOOKS=1). CI los volvera a correr."
+  exit 0
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "[pre-commit] AVISO: falta node; se omiten las comprobaciones locales. CI las corre igualmente."
+  exit 0
+fi
+
+# 1. Nunca commitear directamente en main (AGENTS.md seccion 4).
+RAMA=$(git symbolic-ref --short -q HEAD || echo "")
+if [ "$RAMA" = "main" ]; then
+  echo "[pre-commit] BLOQUEADO: no se commitea en main. Crea una rama:"
+  echo "    git switch -c fix/<descripcion-en-kebab-case>"
+  exit 1
+fi
+
+# 2. Espejos de reglas para IA sincronizados con AGENTS.md.
+if ! node scripts/sync-reglas.mjs --check; then
+  echo "[pre-commit] BLOQUEADO: los ficheros de reglas de IA estan desincronizados."
+  exit 1
+fi
+
+# 3. Reglas deterministas (cada una nace de un defecto real).
+if ! node scripts/guards/run-all.mjs; then
+  echo "[pre-commit] BLOQUEADO: una regla determinista esta en rojo."
+  echo "    Contexto: docs/ERRORES-CONOCIDOS.md"
+  exit 1
+fi
+
+# 4. Tests de las propias reglas: rapidos, sin navegador.
+if ! node --test scripts/guards/*.test.mjs >/dev/null 2>&1; then
+  echo "[pre-commit] BLOQUEADO: fallan los tests de las reglas."
+  echo "    Detalle: npm run test:unit"
+  exit 1
+fi
+
+echo "[pre-commit] OK. Recuerda: la suite E2E (npm run test:e2e) es obligatoria antes del PR."
+exit 0

@@ -1,0 +1,31 @@
+#!/bin/sh
+# Pre-push: impide empujar a main y recuerda la suite E2E.
+#
+# No corre Playwright aqui a proposito: tarda demasiado para un hook y acabaria
+# empujandote a usar --no-verify por costumbre. CI si la ejecuta y es
+# bloqueante. Ver docs/TESTING.md.
+# Escape consciente:  PDFEDITOR_SKIP_HOOKS=1 git push ...
+
+if [ "$PDFEDITOR_SKIP_HOOKS" = "1" ]; then
+  echo "[pre-push] AVISO: hooks omitidos a peticion. CI los volvera a correr."
+  exit 0
+fi
+
+while read -r _local_ref _local_sha remote_ref _remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main)
+      echo "[pre-push] BLOQUEADO: main solo se integra por pull request (AGENTS.md seccion 4)."
+      exit 1
+      ;;
+  esac
+done
+
+if command -v node >/dev/null 2>&1; then
+  if ! node scripts/guards/run-all.mjs; then
+    echo "[pre-push] BLOQUEADO: una regla determinista esta en rojo."
+    exit 1
+  fi
+fi
+
+echo "[pre-push] OK. Antes de abrir el PR: npm run verify"
+exit 0
