@@ -198,14 +198,13 @@ body {
   position: absolute;
   pointer-events: auto;
   cursor: text;
-  white-space: pre-wrap;
-  word-break: break-word;
-  line-height: 1.35;
+  white-space: pre;
   color: transparent; /* Transparente en reposo para mostrar el canvas debajo */
   background: transparent;
   user-select: none !important; /* Previene selección accidental de texto transparente */
   box-sizing: border-box;
-  border-radius: 2px;
+  padding: 0 1px;
+  border-radius: 1px;
   z-index: 30;
   transition: outline 0.1s ease;
 }
@@ -216,7 +215,7 @@ body {
   outline: none;
   cursor: text;
   pointer-events: auto !important;
-  padding: 0 1px;
+  padding: 0;
   user-select: none;
 }
 
@@ -224,7 +223,7 @@ body {
 .tool-mode-text .acrobat-text-block:hover,
 .tool-mode-select .acrobat-text-block:hover {
   outline: 1px dashed #3b82f6;
-  background: rgba(59, 130, 246, 0.04);
+  background: rgba(59, 130, 246, 0.05);
 }
 
 .tool-mode-eraser .acrobat-text-block:hover {
@@ -238,10 +237,14 @@ body {
   color: #111827 !important;
   background: #ffffff !important; /* Blanco sólido que cubre por completo el texto original */
   outline: 1.5px solid #2563eb !important;
-  box-shadow: 0 4px 16px rgba(37, 99, 235, 0.2) !important;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.25) !important;
   z-index: 55 !important;
   caret-color: #2563eb !important;
   user-select: text !important;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  height: auto !important;
+  line-height: 1.25 !important;
 }
 
 .acrobat-text-block.editing .text-block-content {
@@ -255,6 +258,10 @@ body {
   background: #ffffff !important;
   z-index: 32 !important;
   outline: 1px solid rgba(59, 130, 246, 0.4);
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  height: auto !important;
+  line-height: 1.25 !important;
 }
 
 .acrobat-text-block.modified .text-block-content {
@@ -266,6 +273,10 @@ body {
   background: #ffffff !important;
   z-index: 35 !important;
   outline: 1.5px dashed #2563eb;
+  white-space: pre-wrap !important;
+  word-break: break-word !important;
+  height: auto !important;
+  line-height: 1.25 !important;
 }
 
 .acrobat-text-block.moved .text-block-content {
@@ -275,19 +286,19 @@ body {
 /* Controles sutiles Acrobat en las esquinas del bloque */
 .acrobat-drag-handle {
   position: absolute;
-  top: -9px;
-  left: -9px;
-  width: 18px;
-  height: 18px;
+  top: -8px;
+  left: -8px;
+  width: 15px;
+  height: 15px;
   background: #2563eb;
   color: #ffffff;
   border-radius: 50%;
   display: none;
   align-items: center;
   justify-content: center;
-  font-size: 9px;
+  font-size: 8px;
   cursor: grab;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  box-shadow: 0 2px 5px rgba(0,0,0,0.3);
   z-index: 70;
   user-select: none;
 }
@@ -298,19 +309,19 @@ body {
 
 .acrobat-delete-btn {
   position: absolute;
-  top: -9px;
-  right: -9px;
-  width: 18px;
-  height: 18px;
+  top: -8px;
+  right: -8px;
+  width: 15px;
+  height: 15px;
   background: #ef4444;
   color: #ffffff;
   border-radius: 50%;
   display: none;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: 8px;
   cursor: pointer;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+  box-shadow: 0 2px 5px rgba(0,0,0,0.3);
   z-index: 70;
   user-select: none;
 }

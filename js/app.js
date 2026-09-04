@@ -600,13 +600,14 @@ class UnifiedAcrobatApp {
       block.dataset.pageNum = pageNum;
       block.style.left = `${line.left}px`;
       block.style.top = `${line.top}px`;
-      block.style.width = `${line.width + 6}px`;
-      block.style.minHeight = `${line.height}px`;
+      block.style.width = `${line.width + 4}px`;
+      block.style.height = `${line.height}px`;
+      block.style.lineHeight = `${line.height}px`;
       block.style.fontSize = `${line.fontSize}px`;
       block.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
       block.innerHTML = `
-        <span class="acrobat-drag-handle" title="Arrastrar para mover (Acrobat style)"><i class="fa-solid fa-grip-vertical"></i></span>
+        <span class="acrobat-drag-handle" title="Arrastrar para mover"><i class="fa-solid fa-arrows-up-down-left-right"></i></span>
         <span class="acrobat-delete-btn" title="Eliminar"><i class="fa-solid fa-xmark"></i></span>
         <div class="text-block-content" spellcheck="false">${line.str}</div>
       `;
@@ -684,44 +685,6 @@ class UnifiedAcrobatApp {
         return;
       }
 
-      // 2. Agrupar líneas adyacentes en párrafos naturales (Modelo Adobe Acrobat Pro)
-      const paragraphs = [];
-      let currentP = null;
-
-      for (const line of rawLines) {
-        if (!currentP) {
-          currentP = {
-            lines: [line],
-            text: line.str,
-            bbox: { ...line.bbox }
-          };
-          continue;
-        }
-
-        const lastLine = currentP.lines[currentP.lines.length - 1];
-        const lineGap = line.bbox.y0 - lastLine.bbox.y1;
-        const avgHeight = (line.height + lastLine.height) / 2;
-        const isCloseVertically = lineGap >= -4 && lineGap <= avgHeight * 1.5;
-        const isSimilarIndent = Math.abs(line.bbox.x0 - currentP.bbox.x0) <= 32;
-
-        if (isCloseVertically && isSimilarIndent) {
-          currentP.lines.push(line);
-          currentP.text += '\n' + line.str;
-          currentP.bbox.x0 = Math.min(currentP.bbox.x0, line.bbox.x0);
-          currentP.bbox.y0 = Math.min(currentP.bbox.y0, line.bbox.y0);
-          currentP.bbox.x1 = Math.max(currentP.bbox.x1, line.bbox.x1);
-          currentP.bbox.y1 = Math.max(currentP.bbox.y1, line.bbox.y1);
-        } else {
-          paragraphs.push(currentP);
-          currentP = {
-            lines: [line],
-            text: line.str,
-            bbox: { ...line.bbox }
-          };
-        }
-      }
-      if (currentP) paragraphs.push(currentP);
-
       // Limpiar capa para evitar bloques duplicados
       textLayer.innerHTML = '';
 
@@ -730,14 +693,12 @@ class UnifiedAcrobatApp {
       const scaleX = pageW / canvas.width;
       const scaleY = pageH / canvas.height;
 
-      paragraphs.forEach((p, idx) => {
-        const left = Math.max(0, Math.round(p.bbox.x0 * scaleX));
-        const top = Math.max(0, Math.round(p.bbox.y0 * scaleY));
-        const width = Math.max(24, Math.round((p.bbox.x1 - p.bbox.x0) * scaleX));
-        const height = Math.max(16, Math.round((p.bbox.y1 - p.bbox.y0) * scaleY));
-        const lineCount = p.lines.length;
-        const singleLineH = height / lineCount;
-        const fontSize = Math.max(12, Math.round(singleLineH * 0.76));
+      rawLines.forEach((line, idx) => {
+        const left = Math.max(0, Math.round(line.bbox.x0 * scaleX));
+        const top = Math.max(0, Math.round(line.bbox.y0 * scaleY));
+        const width = Math.max(20, Math.round((line.bbox.x1 - line.bbox.x0) * scaleX));
+        const height = Math.max(12, Math.round((line.bbox.y1 - line.bbox.y0) * scaleY));
+        const fontSize = Math.max(11, Math.round(height * 0.85));
 
         const block = document.createElement('div');
         block.className = 'acrobat-text-block';
@@ -745,19 +706,19 @@ class UnifiedAcrobatApp {
         block.dataset.pageNum = pageNum;
         block.style.left = `${left}px`;
         block.style.top = `${top}px`;
-        block.style.width = `${width + 8}px`;
-        block.style.minHeight = `${height + 2}px`;
+        block.style.width = `${width + 4}px`;
+        block.style.height = `${height}px`;
+        block.style.lineHeight = `${height}px`;
         block.style.fontSize = `${fontSize}px`;
-        block.style.lineHeight = '1.35';
         block.style.fontFamily = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif';
 
         block.innerHTML = `
-          <span class="acrobat-drag-handle" title="Arrastrar para mover (Acrobat style)"><i class="fa-solid fa-grip-vertical"></i></span>
+          <span class="acrobat-drag-handle" title="Arrastrar para mover"><i class="fa-solid fa-arrows-up-down-left-right"></i></span>
           <span class="acrobat-delete-btn" title="Eliminar"><i class="fa-solid fa-xmark"></i></span>
-          <div class="text-block-content" spellcheck="false">${p.text}</div>
+          <div class="text-block-content" spellcheck="false">${line.str}</div>
         `;
 
-        const meta = { str: p.text, left, top, width, height, fontSize };
+        const meta = { str: line.str, left, top, width, height, fontSize };
         block.dataset.meta = JSON.stringify(meta);
         this.setupLiveTextBlock(block, meta, pageNum);
         textLayer.appendChild(block);
