@@ -33,7 +33,16 @@
       ]
     },
     {
-      "source": "/(.*)\\.(js|css|wasm|woff2)",
+      "source": "/(.*)\\.(js|css)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=0, must-revalidate"
+        }
+      ]
+    },
+    {
+      "source": "/(.*)\\.(wasm|woff2)",
       "headers": [
         {
           "key": "Cache-Control",
