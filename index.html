@@ -10,7 +10,7 @@
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%236366f1'><path d='M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm-9.5 8.5h-2v-4h2c.83 0 1.5.67 1.5 1.5v1c0 .83-.67 1.5-1.5 1.5zm5 2h-2v-6h2c.83 0 1.5.67 1.5 1.5v3c0 .83-.67 1.5-1.5 1.5zm4.5-3.5h-2.5v1.5h2v1h-2v1.5H15v-6h4v1z'/></svg>">
 
   <!-- Tailwind CSS Compilado de Producción (Sin advertencias de consola) -->
-  <link rel="stylesheet" href="css/tailwind.min.css?v=2.1.0">
+  <link rel="stylesheet" href="css/tailwind.min.css?v=2.2.0">
 
   <!-- FontAwesome 6 Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -22,11 +22,11 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
 
   <!-- Estilos del Workspace Adobe Acrobat -->
-  <link rel="stylesheet" href="css/styles.css?v=2.1.0">
+  <link rel="stylesheet" href="css/styles.css?v=2.2.0">
 
   <!-- Librerías de Alto Rendimiento -->
   <script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
-  <script src="js/pdf.min.js"></script>
+  <script src="js/pdf.min.js?v=2.2.0"></script>
   <script>
     if (window.pdfjsLib) {
       window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'js/pdf.worker.min.js';
@@ -47,7 +47,7 @@
   <header class="h-12 bg-slate-950 border-b border-slate-800/80 px-4 flex items-center justify-between select-none z-30">
     
     <!-- Lado Izquierdo: Marca, Menú Archivo y Nombre del Documento -->
-    <div class="flex items-center gap-1.5 sm:gap-3">
+    <div class="flex items-center gap-1.5 sm:gap-3 min-w-0 flex-1">
       <!-- Botón Móvil para abrir Miniaturas -->
       <button id="btn-mobile-thumbs" class="lg:hidden p-1.5 rounded bg-slate-900 border border-slate-800 text-slate-300 text-xs flex items-center gap-1 hover:bg-slate-800" title="Ver páginas">
         <i class="fa-solid fa-copy text-indigo-400"></i>
@@ -90,7 +90,7 @@
       </div>
 
       <!-- Nombre del archivo activo -->
-      <div id="doc-title-container" class="hidden sm:flex items-center gap-2 text-xs text-slate-400 pl-2">
+      <div id="doc-title-container" class="hidden sm:flex max-sm:!hidden items-center gap-2 text-xs text-slate-400 pl-2 min-w-0">
         <span class="text-slate-600">|</span>
         <span id="doc-title-text" class="text-slate-200 font-medium truncate max-w-[150px] md:max-w-[200px]" title="Sin título.pdf">Sin título.pdf</span>
         <span class="badge-active text-[10px] hidden md:inline">RAM Local</span>
@@ -111,9 +111,9 @@
     </div>
 
     <!-- Lado Derecho: Deshacer / Rehacer, Zoom y Guardar PDF -->
-    <div class="flex items-center gap-1.5 sm:gap-2">
+    <div class="flex items-center gap-1.5 sm:gap-2 shrink-0">
       <!-- Deshacer / Rehacer -->
-      <div class="flex items-center bg-slate-900 rounded-lg p-0.5 border border-slate-800 text-xs shadow-sm">
+      <div class="hidden sm:flex items-center bg-slate-900 rounded-lg p-0.5 border border-slate-800 text-xs shadow-sm">
         <button id="btn-undo" class="px-2.5 py-1 hover:text-white text-slate-300 flex items-center gap-1.5 transition-colors" title="Deshacer (Ctrl + Z)">
           <i class="fa-solid fa-rotate-left text-indigo-400"></i>
           <span class="hidden md:inline text-[11px] font-medium">Deshacer</span>
@@ -351,7 +351,7 @@
   <main class="flex-1 flex overflow-hidden relative">
 
     <!-- Telón de fondo (Backdrop) para cerrar paneles en móviles -->
-    <div id="sidebar-backdrop" class="fixed inset-0 bg-black/70 backdrop-blur-xs z-40 hidden"></div>
+    <div id="sidebar-backdrop" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-40 hidden"></div>
 
     <!-- COLUMNA 1: TIRA LATERAL DE MINIATURAS (ACROBAT THUMBNAIL STRIP) -->
     <aside id="thumbnail-strip" class="thumbnail-strip flex flex-col justify-between p-3 select-none z-10">
@@ -419,8 +419,13 @@
       </div>
 
       <!-- VISOR DINÁMICO DE PÁGINAS DEL PDF (CUANDO HAY DOCUMENTO) -->
-      <div id="pdf-render-stage" class="zoom-stage hidden">
-        <!-- Contenedores de páginas generados dinámicamente -->
+      <!-- El sizer reserva el tamaño REAL del contenido escalado: `transform: scale()`
+           no ocupa espacio de maquetación, así que sin él al ampliar el zoom la página
+           se recortaba y no había forma de desplazarse hasta el borde derecho. -->
+      <div id="pdf-zoom-sizer" class="zoom-sizer hidden">
+        <div id="pdf-render-stage" class="zoom-stage">
+          <!-- Contenedores de páginas generados dinámicamente -->
+        </div>
       </div>
 
     </div>
@@ -615,12 +620,10 @@
   <div id="toast-container"></div>
 
   <!-- Scripts de la Aplicación -->
-  <script src="js/state.js?v=2.1.0"></script>
-  <script src="js/modules/organizer.js?v=2.1.0"></script>
-  <script src="js/modules/annotator.js?v=2.1.0"></script>
-  <script src="js/modules/compressor.js?v=2.1.0"></script>
-  <script src="js/modules/scanner.js?v=2.1.0"></script>
-  <script src="js/modules/converter.js?v=2.1.0"></script>
-  <script src="js/app.js?v=2.1.0"></script>
+  <!-- js/modules/*.js pertenecen a la interfaz multipágina anterior: ninguno se
+       inicializa y todos buscan IDs que ya no existen en este DOM. Se dejan de
+       cargar para no descargar ~90 KB de código muerto en cada visita. -->
+  <script src="js/state.js?v=2.2.0"></script>
+  <script src="js/app.js?v=2.2.0"></script>
 </body>
 </html>

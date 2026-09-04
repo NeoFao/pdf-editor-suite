@@ -81,7 +81,9 @@ class DocumentState {
   }
 
   setZoom(zoom) {
-    const clamped = Math.min(1.8, Math.max(0.5, zoom));
+    // Rango amplio: con el tope anterior de 1.8 el "ajustar al ancho" no podía
+    // llenar monitores grandes ni acercarse lo suficiente para editar en móvil.
+    const clamped = Math.min(4.0, Math.max(0.25, zoom));
     this.zoom = Math.round(clamped * 100) / 100;
     this.emit('zoomChanged', this.zoom);
     return this.zoom;

@@ -15,6 +15,9 @@ const PORT = process.env.PORT || 3000;
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
+  '.pdf': 'application/pdf',
+  '.txt': 'text/plain; charset=utf-8',
+  '.md': 'text/markdown; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'application/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
@@ -79,8 +82,10 @@ const server = http.createServer((req, res) => {
   // Resolver y normalizar ruta absoluta de forma segura
   const resolvedPath = path.resolve(__dirname, '.' + path.sep + decodedPath);
 
-  // Asegurar que la ruta resuelta permanezca estrictamente dentro de __dirname
-  if (!resolvedPath.startsWith(__dirname)) {
+  // Asegurar que la ruta resuelta permanezca estrictamente dentro de __dirname.
+  // El separador final es imprescindible: sin él un directorio hermano cuyo
+  // nombre empiece igual (".../PDF Editor-backup") pasaría el filtro.
+  if (resolvedPath !== __dirname && !resolvedPath.startsWith(__dirname + path.sep)) {
     res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('403 Acceso Denegado');
     return;

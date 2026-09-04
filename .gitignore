@@ -4,4 +4,16 @@ node_modules/
 .DS_Store
 Thumbs.db
 
-.vercel
+# Artefactos de test (se regeneran)
+tests/fixtures/generados/
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
+# Ficheros temporales de sesión: el prefijo _ está prohibido por la regla
+# `rutas-prohibidas`, este ignore evita que lleguen siquiera al índice.
+_*.js
+_*.mjs
+_*.pdf
+_*.txt

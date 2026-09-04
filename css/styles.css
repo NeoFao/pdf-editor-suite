@@ -138,17 +138,27 @@ body {
   height: calc(100vh - 108px);
   width: 100%;
   flex: 1 1 auto;
+  /* Los elementos flex traen `min-width: auto`: sin esto, una página ancha
+     empuja al visor por encima del ancho de la pantalla, y la medida del
+     ajuste al ancho sale inflada (E-026). */
+  min-width: 0;
+}
+
+/* Contenedor que reserva el espacio del contenido ya escalado */
+.zoom-sizer {
+  margin: 0 auto;
+  flex: none;
 }
 
 .zoom-stage {
-  transform-origin: top center;
+  transform-origin: top left;
   transition: transform 0.12s ease-out;
   display: flex;
   flex-direction: column;
   align-items: center;
   padding: 1.5rem;
   gap: 1.5rem;
-  min-width: 100%;
+  width: max-content;
 }
 
 @media (max-width: 767px) {
@@ -217,6 +227,7 @@ body {
   pointer-events: auto !important;
   padding: 0;
   user-select: none;
+  white-space: pre;
 }
 
 /* Hover estilo Acrobat */
@@ -232,7 +243,11 @@ body {
   cursor: pointer;
 }
 
-/* Modo edición activa in-place estilo Acrobat */
+/* Modo edición activa in-place estilo Acrobat.
+   El bloque crece a lo ANCHO con el texto y conserva el alto de una línea.
+   Con `pre-wrap` + ancho fijo el cuadro se plegaba en varias líneas y tapaba
+   los renglones vecinos, y ese alto inflado acababa en el parche blanco del
+   PDF exportado, borrando párrafos enteros. */
 .acrobat-text-block.editing {
   color: #111827 !important;
   background: #ffffff !important; /* Blanco sólido que cubre por completo el texto original */
@@ -241,10 +256,9 @@ body {
   z-index: 55 !important;
   caret-color: #2563eb !important;
   user-select: text !important;
-  white-space: pre-wrap !important;
-  word-break: break-word !important;
-  height: auto !important;
-  line-height: 1.25 !important;
+  white-space: pre !important;
+  width: max-content !important;
+  overflow: visible !important;
 }
 
 .acrobat-text-block.editing .text-block-content {
@@ -258,10 +272,9 @@ body {
   background: #ffffff !important;
   z-index: 32 !important;
   outline: 1px solid rgba(59, 130, 246, 0.4);
-  white-space: pre-wrap !important;
-  word-break: break-word !important;
-  height: auto !important;
-  line-height: 1.25 !important;
+  white-space: pre !important;
+  width: max-content !important;
+  overflow: visible !important;
 }
 
 .acrobat-text-block.modified .text-block-content {
@@ -273,10 +286,9 @@ body {
   background: #ffffff !important;
   z-index: 35 !important;
   outline: 1.5px dashed #2563eb;
-  white-space: pre-wrap !important;
-  word-break: break-word !important;
-  height: auto !important;
-  line-height: 1.25 !important;
+  white-space: pre !important;
+  width: max-content !important;
+  overflow: visible !important;
 }
 
 .acrobat-text-block.moved .text-block-content {
@@ -444,6 +456,16 @@ body {
   transform: translateX(-100%);
   overflow: hidden;
   border-right: none;
+}
+
+/* El telón arranca DEBAJO de la cabecera y el ribbon.
+   Con `inset: 0` cubría toda la ventana y, con un cajón abierto, los botones
+   de la cabecera dejaban de responder: había que cerrar el cajón para poder
+   pulsar cualquier otra cosa (E-025). */
+@media (max-width: 1023px) {
+  #sidebar-backdrop {
+    top: 106px;
+  }
 }
 
 /* Modo Responsive en Pantallas Móviles (< 1024px) */

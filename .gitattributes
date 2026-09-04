@@ -1,0 +1,13 @@
+# Los ficheros de reglas y los scripts se comparan byte a byte (huella SHA-256 en
+# scripts/sync-reglas.mjs). Con finales de línea CRLF la comparación falla en
+# Windows aunque el contenido sea idéntico, así que se fijan a LF.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.pdf binary
+*.woff binary
+*.woff2 binary

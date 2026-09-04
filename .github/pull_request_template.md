@@ -1,21 +1,47 @@
-### 📋 Resumen del Cambio
-<!-- Explica brevemente qué hace este Pull Request y qué problema soluciona -->
+<!--
+  Antes de abrir el PR ejecuta `npm run verify` y pega la salida abajo.
+  Reglas completas: AGENTS.md. Defectos ya cometidos: docs/ERRORES-CONOCIDOS.md.
+-->
 
-### 🔒 Verificación de Seguridad y Privacidad (Obligatorio)
-- [ ] **Zero-Data Storage**: Confirmo que ningún dato, archivo o información del usuario se envía a servidores externos ni bases de datos. Todo el procesamiento se mantiene 100% en el cliente (navegador/RAM).
-- [ ] **Sin código ofuscado o malicioso**: Confirmo que el código no incluye scripts externos no autorizados, scripts de rastreo, miners, o llamadas de red no declaradas.
-- [ ] **Dependencias**: No se han introducido librerías de terceros no auditadas en `package.json` ni etiquetas `<script>` no aprobadas.
-- [ ] **Compilación exitosa**: Se ha ejecutado `npm run build` sin errores ni advertencias.
+## Qué cambia y por qué
 
-### 🧪 Tipo de Cambio
-- [ ] 🐛 Corrección de error (Bug fix)
-- [ ] ✨ Nueva funcionalidad (Feature)
-- [ ] 🎨 Mejora de interfaz o diseño responsive (UI/UX)
-- [ ] ⚡ Optimización de rendimiento
-- [ ] 📝 Documentación
+<!-- Dos o tres frases. El "por qué" importa más que el "qué": el diff ya dice el qué. -->
 
-### 📸 Capturas de Pantalla / Evidencia Visual (Si aplica)
-<!-- Adjunta imágenes o GIFs del funcionamiento antes y después -->
+## Verificación
 
----
-*Nota: Este repositorio tiene protección estricta. Todo PR debe ser revisado y aprobado exclusivamente por el propietario antes de ser integrado a `main`.*
+<!--
+  OBLIGATORIO: pega la salida real de `npm run verify`.
+  "Los tests pasan" sin la salida no cuenta como verificación.
+-->
+
+```
+(pega aquí la salida de npm run verify)
+```
+
+## Comprobaciones
+
+- [ ] **Hay un test que fallaba antes de este cambio y ahora pasa**
+      (o el cambio no altera comportamiento observable — explica por qué abajo).
+- [ ] El test de comportamiento está en `tests/e2e/` (Chromium real), no solo
+      en un test unitario.
+- [ ] `npm run verify` en verde en local, con la salida pegada arriba.
+- [ ] Si toqué la interfaz, la geometría o la exportación: **lo abrí en el
+      navegador y lo comprobé a ojo**.
+- [ ] Si arreglé un defecto: añadí su entrada `E-0NN` en
+      `docs/ERRORES-CONOCIDOS.md` con síntoma y causa raíz.
+- [ ] Si el patrón puede repetirse en otro sitio: añadí su regla en
+      `scripts/guards/reglas.mjs` con su test.
+- [ ] No añadí ningún `guard-disable-next-line` para poner el CI en verde.
+- [ ] No hay `test.skip` / `test.only` / `test.fixme`.
+- [ ] Si toqué clases de Tailwind: ejecuté `npm run build` y commiteé el CSS.
+- [ ] Si cambié `AGENTS.md`: ejecuté `npm run reglas:sync`.
+- [ ] Sin secretos, sin ficheros temporales, sin capturas sueltas.
+
+## Escapes usados
+
+<!--
+  Lista aquí cada `guard-disable-next-line` que hayas añadido, con su razón.
+  Si no hay ninguno: "ninguno".
+-->
+
+ninguno

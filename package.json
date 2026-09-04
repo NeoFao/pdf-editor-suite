@@ -1,13 +1,27 @@
 {
   "name": "pdf-editor-suite",
-  "version": "1.0.0",
+  "version": "2.2.0",
   "description": "Suite Integral de Edición y Manipulación de PDF en el navegador (Client-Side WebAssembly)",
   "type": "module",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js",
     "build": "tailwindcss -i ./css/input.css -o ./css/tailwind.min.css --minify",
-    "build:css": "tailwindcss -i ./css/input.css -o ./css/tailwind.min.css --minify"
+    "build:css": "tailwindcss -i ./css/input.css -o ./css/tailwind.min.css --minify",
+    "build:check": "node scripts/check-build-fresco.mjs",
+    "guard": "node scripts/guards/run-all.mjs",
+    "lint": "eslint .",
+    "reglas:sync": "node scripts/sync-reglas.mjs",
+    "reglas:check": "node scripts/sync-reglas.mjs --check",
+    "version:sync": "node scripts/sync-version.mjs",
+    "test:fixtures": "node tests/fixtures/generar-fixtures.mjs",
+    "test:unit": "node --test scripts/guards/*.test.mjs",
+    "test:e2e": "npm run test:fixtures && playwright test",
+    "test:e2e:ui": "npm run test:fixtures && playwright test --ui",
+    "test": "npm run test:unit && npm run test:e2e",
+    "verify": "npm run reglas:check && npm run build:check && npm run lint && npm run guard && npm run test:unit && npm run test:e2e",
+    "hooks:install": "git config core.hooksPath .githooks",
+    "prepare": "git config core.hooksPath .githooks || true"
   },
   "keywords": [
     "pdf",
@@ -24,5 +38,10 @@
     "pdf-lib": "^1.17.1",
     "tailwindcss": "^3.4.1",
     "tesseract.js": "^5.1.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.62.1",
+    "eslint": "^9.39.5",
+    "globals": "^17.12.0"
   }
 }
