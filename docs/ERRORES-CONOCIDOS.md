@@ -407,17 +407,88 @@ del archivo, y cualquier extractor lo recupera.
 texto originales siguen intactos en el flujo de contenido de la página, debajo.
 Es como tapar una palabra con corrector: en papel funciona; en un PDF, no.
 
-**Estado: sin resolver.** No es un descuido, es una decisión de diseño
-pendiente. Las dos salidas tienen coste:
+#### Cómo lo resuelve Adobe Acrobat
 
-- Reescribir el flujo de contenido de la página para eliminar los operadores de
-  texto afectados. Es lo correcto, y es un trabajo considerable con pdf-lib.
-- Rasterizar la página entera al exportar. Trivial, pero convierte todo el
-  documento en una imagen: se pierde el texto seleccionable y sube mucho el peso.
+Conviene saberlo antes de decidir, porque Acrobat **nunca usa el rectángulo
+como mecanismo**: el recuadro que se ve es la *consecuencia* de haber quitado
+el texto, no la forma de quitarlo. Son dos funciones distintas y ninguna se
+parece a lo que hace hoy este editor.
+
+**1. Editar PDF (edición de texto).** Acrobat interpreta el flujo de contenido
+de la página, reconstruye los bloques de párrafo a partir de las tiradas de
+glifos y, al escribir, **reescribe ese flujo**: cambia el operando de los
+operadores `Tj`/`TJ`, recalcula el kerning del array y las matrices de texto
+del resto de la línea, y vuelve a maquetar el bloque. Necesita la fuente: si
+está incrustada como subconjunto y no trae el glifo que tecleas, o amplía el
+subconjunto (cuando la licencia de incrustación lo permite) o sustituye por una
+tipografía parecida — de ahí que a veces cambie el aspecto de la línea editada.
+No se pinta ningún parche: **los glifos originales dejan de existir**.
+
+**2. Redactar (censura).** Es deliberadamente de dos fases, y esa separación es
+la parte importante del diseño:
+
+- *Marcar para redacción*: crea anotaciones `/Subtype /Redact` (ISO 32000-1,
+  §12.5.6.23). Aquí el contenido **sigue intacto** y Acrobat mantiene un aviso
+  permanente en pantalla diciéndolo. Guardar en este punto produce exactamente
+  el archivo que produce hoy este editor.
+- *Aplicar redacciones*: la pasada destructiva. Por cada región, reescribe el
+  flujo de contenido eliminando los glifos cuyo recuadro cae dentro — partiendo
+  los arrays `TJ` y reemitiendo el posicionamiento para que el texto que
+  sobrevive no se mueva —, recorta o elimina las imágenes y trazos afectados y
+  *después* pinta el relleno. Además purga el texto de todos los demás sitios
+  donde vive: XObjects, anotaciones y campos de formulario, marcadores,
+  adjuntos, JavaScript del documento y metadatos (diccionario `Info` y XMP).
+  Al terminar obliga a **guardar como archivo nuevo**, con reescritura completa:
+  un guardado incremental dejaría la revisión anterior — y por tanto los glifos
+  originales — dentro del mismo fichero.
+
+La lección de diseño: Acrobat separa "marcado" de "eliminado" precisamente para
+que nadie confunda uno con otro. **Este editor está permanentemente en la fase 1
+con el aspecto de la fase 2.** Ese es el riesgo real, más que la carencia
+técnica.
+
+#### Las tres salidas, con su coste
+
+**Ruta A · Cirugía del flujo de contenido** (lo que hace Acrobat, lo correcto).
+Es viable en el navegador: pdf-lib da acceso al `Contents` de la página y a su
+diccionario de recursos, y las anchuras de glifo salen del propio diccionario de
+fuente — no hace falta rasterizar nada para calcular los recuadros. Se tokeniza
+el flujo manteniendo la máquina de estados (`q/Q`, `cm`, `BT/ET`, `Tf`, `Tm/Td/
+TD/T*`, `TJ/Tj/'/"`), se calcula el recuadro de cada tirada y se eliminan o
+parten las que caen dentro de la máscara.
+*Se puede escalonar*: empezar con **granularidad de operador completo** —
+descartar íntegras las tiradas contenidas del todo en la máscara— cubre el caso
+real de esta app, que enmascara líneas enteras ya detectadas por pdf.js. El
+corte parcial de una tirada se deja para después.
+Trabajo pendiente que no se puede saltar: varios `Contents` por página (array),
+Form XObjects de forma recursiva y no romper la compresión del flujo. Es la
+única ruta que elimina de verdad **y** conserva el texto seleccionable.
+
+**Ruta B · Rasterizar la página al exportar.** Trivial de implementar y
+destructiva de más: no queda texto extraíble, pero tampoco queda texto — se
+pierde selección, búsqueda y accesibilidad en todo el documento y el peso sube
+mucho. Sólo tiene sentido como opción explícita ("exportar aplanado"), nunca
+como comportamiento por defecto.
+
+**Ruta C · Rasterizar y volver a poner una capa de texto invisible** (`3 Tr`),
+que es lo que hacen las tuberías de OCR. Los glifos originales desaparecen y el
+documento sigue siendo buscable y copiable, pero con el texto *nuevo*. Mucho más
+barata que la A; a cambio la página pasa a ser una imagen (peso, sin nitidez
+vectorial al ampliar). Sirve de red de seguridad para los casos que la Ruta A
+escalonada todavía no cubra.
+
+#### Recomendación
+
+1. **Ahora, sin esperar a la solución técnica:** copiar el modelo de dos fases de
+   Acrobat en el lenguaje de la interfaz. La acción actual se llama "ocultar" y
+   no "eliminar", y la exportación avisa de que el texto tapado sigue en el
+   archivo. Coste cercano a cero y cierra el agujero de "alguien lo va a suponer".
+2. **Después:** Ruta A por etapas, con la Ruta C como respaldo para las
+   intersecciones parciales.
+3. **Ruta B** sólo como opción marcada explícitamente por el usuario.
 
 **Implicación mientras siga abierto.** Esta herramienta **no sirve para redactar
-información confidencial**. Conviene decirlo en la interfaz antes que dejar que
-alguien lo suponga.
+información confidencial**.
 
 **Cómo se detecta ahora.** Los tests de exportación asertan sobre el resultado
 **visual** (perfil de píxeles por franja), no sobre el texto extraído,
