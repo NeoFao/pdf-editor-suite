@@ -207,7 +207,11 @@ class UnifiedAcrobatApp {
         cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/cmaps/',
         cMapPacked: true,
         standardFontDataUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/standard_fonts/',
-        enableXfa: true
+        enableXfa: true,
+        // CVE-2024-4367: sin esto pdf.js compila las expresiones de fuente con
+        // eval() y un PDF manipulado puede ejecutar código en la página. El
+        // documento que se abre es entrada no confiable (ver E-027 y E-003).
+        isEvalSupported: false
       });
       state.pdfJsDoc = await loadingTask.promise;
       state.totalPages = state.pdfJsDoc.numPages;

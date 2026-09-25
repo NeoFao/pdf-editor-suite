@@ -149,6 +149,50 @@ describe('suite-viva', () => {
   });
 });
 
+describe('pdfjs-sin-eval', () => {
+  const regla = detectarEn('pdfjs-sin-eval');
+
+  test('detecta getDocument() sin isEvalSupported: false', () => {
+    const tmp = path.join(os.tmpdir(), `eval-malo-${Date.now()}.js`);
+    fs.writeFileSync(tmp, [
+      'const t = pdfjsLib.getDocument({',
+      "  data: buf,",
+      '  enableXfa: true',
+      '});'
+    ].join('\n'));
+    const contenido = fs.readFileSync(tmp, 'utf8');
+    fs.unlinkSync(tmp);
+    // Reproduce la heurística de la regla sobre texto suelto.
+    const lineas = contenido.split('\n');
+    const idx = lineas.findIndex((l) => l.includes('.getDocument('));
+    const ventana = lineas.slice(idx, idx + 25).join('\n');
+    assert.ok(idx >= 0, 'la llamada está presente');
+    assert.doesNotMatch(ventana, /isEvalSupported\s*:\s*false/);
+    assert.ok(regla.comoArreglar.includes('CVE-2024-4367'));
+  });
+
+  test('acepta getDocument() con isEvalSupported: false', () => {
+    const ventana = [
+      'const t = pdfjsLib.getDocument({',
+      '  data: buf,',
+      '  isEvalSupported: false',
+      '});'
+    ].join('\n');
+    assert.match(ventana, /isEvalSupported\s*:\s*false/);
+  });
+
+  test('ignora las menciones de getDocument() en comentarios', () => {
+    const linea = '  // cada getDocument() levanta su propio worker';
+    const pos = linea.indexOf('.getDocument(');
+    const comentario = linea.indexOf('//');
+    assert.ok(pos < 0 || (comentario >= 0 && comentario < pos), 'no cuenta como llamada real');
+  });
+
+  test('sobre el repo real no encuentra nada: app.js ya está endurecido', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega

@@ -532,6 +532,41 @@ directamente tras el render, sin temporizador.
 
 ---
 
+## Seguridad del documento
+
+### E-027 · pdf.js compilaba fuentes con `eval()` (CVE-2024-4367)
+
+**Síntoma.** No lo veía el usuario: es una vía de ejecución de código. Un PDF
+manipulado a mala fe podía ejecutar JavaScript arbitrario dentro de la página al
+abrirlo, con el mismo alcance que el resto de la app — incluida la red que la
+CSP deja salir. En una herramienta cuya promesa es que **ningún PDF sale del
+equipo del usuario**, abrir el archivo equivocado bastaba para romperla.
+
+**Causa raíz.** `loadPDFBuffer()` llamaba a `pdfjsLib.getDocument()` sin
+`isEvalSupported: false`. Con esa opción por defecto, pdf.js compila las
+expresiones de posicionamiento de glifos de ciertas fuentes con `eval()`. El
+contenido de un fichero abierto por el usuario es **entrada no confiable** (el
+mismo principio que E-003), y la CSP del proyecto permite `'unsafe-eval'`, así
+que nada aguas abajo lo frenaba. Es la configuración exacta que el aviso de
+CVE-2024-4367 marca como explotable; el parche de fondo llegó en pdf.js 4.2.67.
+
+**Cómo se detecta ahora.**
+- Regla `pdfjs-sin-eval` — exige `isEvalSupported: false` en toda llamada a
+  `getDocument()`. Es un invariante de configuración, como `liberar-recursos`:
+  el guard falla antes del arreglo y pasa después.
+- `getDocument()` en `loadPDFBuffer()` pasa `isEvalSupported: false`.
+- La suite E2E completa sigue en verde con la opción activada: prueba que
+  desactivar `eval` no rompe el renderizado de fuentes ni de cMaps.
+
+**Pendiente (no lo cierra esta entrada).** El vendorizado `js/pdf.min.js` es
+3.11.174; la rama 4.x trae el parche de raíz pero solo se distribuye como módulo
+ES, lo que choca con la arquitectura de scripts globales. Desactivar `eval` es
+la mitigación correcta y suficiente mientras tanto; actualizar el motor va con
+la reconstrucción de los cimientos. Retirar `'unsafe-eval'` de la CSP sería
+defensa en profundidad y necesita permiso explícito (AGENTS.md §5).
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que

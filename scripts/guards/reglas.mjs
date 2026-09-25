@@ -368,6 +368,41 @@ export const conDeudaAcotada = {
   }
 };
 
+/* ── E-027 · CVE-2024-4367 · pdf.js compilando fuentes con eval ─────────── */
+export const conPdfJsSinEval = {
+  id: 'pdfjs-sin-eval',
+  titulo: 'pdf.js se carga con isEvalSupported: false',
+  comoArreglar:
+    'Añade isEvalSupported: false a las opciones de pdfjsLib.getDocument(). Sin él, ' +
+    'pdf.js compila las expresiones de fuente con eval() y un PDF manipulado puede ' +
+    'ejecutar código en la página (CVE-2024-4367). La promesa "ningún PDF sale del ' +
+    'equipo del usuario" depende de que esto no ocurra.',
+  ejecutar() {
+    const hallazgos = [];
+    for (const archivo of fuentesApp()) {
+      if (tieneDeuda(archivo, this.id)) continue;
+      const contenido = leer(archivo);
+      const exentas = lineasExentas(contenido, this.id);
+      const lineas = contenido.split('\n');
+      lineas.forEach((linea, i) => {
+        const pos = linea.indexOf('.getDocument(');
+        if (pos < 0) return;
+        // Menciones en comentarios (// … getDocument()) no son llamadas reales.
+        const comentario = linea.indexOf('//');
+        if (comentario >= 0 && comentario < pos) return;
+        const n = i + 1;
+        if (exentas.has(n)) return;
+        // La llamada abre un objeto de opciones que suele ocupar varias líneas.
+        const ventana = lineas.slice(i, i + 25).join('\n');
+        if (!/isEvalSupported\s*:\s*false/.test(ventana)) {
+          hallazgos.push(hallazgo(archivo, n, 'getDocument() sin isEvalSupported: false (CVE-2024-4367)'));
+        }
+      });
+    }
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -380,5 +415,6 @@ export const TODAS = [
   conEspejosSincronizados,
   conErroresDocumentados,
   conSuiteViva,
-  conDeudaAcotada
+  conDeudaAcotada,
+  conPdfJsSinEval
 ];
