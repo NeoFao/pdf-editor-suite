@@ -55,6 +55,8 @@ export interface PdfEngine {
   insertText(doc: DocHandle, pageIndex: number, spec: InsertTextSpec): number;
   /** Desplaza un run por (dxPt, dyPt) en puntos PDF. Reversible con el delta inverso. */
   moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean;
+  /** Cambia el color de relleno de un run (RGB 0-255). */
+  setRunColor(doc: DocHandle, pageIndex: number, runId: number, color: [number, number, number]): boolean;
   save(doc: DocHandle): Uint8Array<ArrayBuffer>;
   close(doc: DocHandle): void;
 }

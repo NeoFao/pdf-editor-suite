@@ -5,6 +5,7 @@ import { EditTextRunCmd } from '../commands/EditTextRun';
 import { DeleteRunCmd } from '../commands/DeleteRun';
 import { InsertTextCmd } from '../commands/InsertText';
 import { MoveRunCmd } from '../commands/MoveRun';
+import { SetColorCmd } from '../commands/SetColor';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
@@ -17,9 +18,12 @@ export class App {
   private docName = 'documento.pdf';
   private insertMode = false;
   private selection: { pageIndex: number; runId: number } | null = null;
+  private viewer: Viewer | null = null;
+  private scale = 1;
   private readonly viewerEl: HTMLElement;
   private readonly status: HTMLElement;
   private readonly btnInsert: HTMLButtonElement;
+  private readonly colorInput: HTMLInputElement;
 
   constructor(rootEl: HTMLElement) {
     rootEl.textContent = '';
@@ -33,6 +37,13 @@ export class App {
 
     this.btnInsert = this.button('Insertar texto', 'btn-insert', () => this.toggleInsert());
     const btnDelete = this.button('Borrar', 'btn-delete', () => this.deleteSelected());
+
+    this.colorInput = document.createElement('input');
+    this.colorInput.type = 'color'; this.colorInput.id = 'btn-color'; this.colorInput.title = 'Color de la línea seleccionada';
+    this.colorInput.addEventListener('input', () => this.applyColor());
+
+    const btnZoomOut = this.button('−', 'btn-zoom-out', () => this.zoom(1 / 1.25));
+    const btnZoomIn = this.button('+', 'btn-zoom-in', () => this.zoom(1.25));
     const btnSave = this.button('Guardar', 'btn-save', () => this.save());
     const btnUndo = this.button('Deshacer', 'btn-undo', () => { void this.bus?.undo(); });
     const btnRedo = this.button('Rehacer', 'btn-redo', () => { void this.bus?.redo(); });
@@ -40,7 +51,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, this.colorInput, btnZoomOut, btnZoomIn, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     this.viewerEl = document.createElement('div');
@@ -81,9 +92,10 @@ export class App {
     this.bus = new CommandBus(this.session);
     this.selection = null;
     this.viewerEl.textContent = '';
-    new Viewer(this.viewerEl, this.session, {
+    this.scale = 1;
+    this.viewer = new Viewer(this.viewerEl, this.session, {
       onEdit: (req) => this.handleEdit(req),
-      onSelect: (pageIndex, runId) => { this.selection = { pageIndex, runId }; },
+      onSelect: (pageIndex, runId) => { this.selection = { pageIndex, runId }; this.reflectColor(); },
       onBackgroundClick: (pageIndex, at) => { void this.handleInsert(pageIndex, at); },
       onMove: (pageIndex, runId, dxPt, dyPt) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt)); }
     });
@@ -120,6 +132,34 @@ export class App {
     this.setStatus('Línea borrada del documento.');
   }
 
+  private selectedRun() {
+    if (!this.session || !this.selection) return null;
+    const page = this.session.model.pages[this.selection.pageIndex];
+    return page?.runs.find((r) => r.runId === this.selection!.runId) ?? null;
+  }
+
+  /** Refleja en el selector el color de la línea seleccionada. */
+  private reflectColor(): void {
+    const run = this.selectedRun();
+    if (run) this.colorInput.value = rgbToHex(run.color[0], run.color[1], run.color[2]);
+  }
+
+  private applyColor(): void {
+    const run = this.selectedRun();
+    if (!run || !this.bus || !this.selection) { this.setStatus('Selecciona una línea para darle color.'); return; }
+    const nuevo = hexToRgb(this.colorInput.value);
+    const viejo: [number, number, number] = [run.color[0], run.color[1], run.color[2]];
+    if (nuevo[0] === viejo[0] && nuevo[1] === viejo[1] && nuevo[2] === viejo[2]) return;
+    void this.bus.execute(new SetColorCmd(this.selection.pageIndex, this.selection.runId, nuevo, viejo));
+    this.setStatus('Color aplicado.');
+  }
+
+  private zoom(factor: number): void {
+    this.scale = Math.min(4, Math.max(0.25, Math.round(this.scale * factor * 100) / 100));
+    this.viewer?.setScale(this.scale);
+    this.setStatus(`Zoom ${Math.round(this.scale * 100)}%`);
+  }
+
   private save(): void {
     const s = this.session;
     if (!s) return;
@@ -135,4 +175,15 @@ export class App {
   }
 
   private setStatus(msg: string): void { this.status.textContent = msg; }
+}
+
+function rgbToHex(r: number, g: number, b: number): string {
+  const h = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0');
+  return `#${h(r)}${h(g)}${h(b)}`;
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
+  if (!m) return [0, 0, 0];
+  return [parseInt(m[1]!, 16), parseInt(m[2]!, 16), parseInt(m[3]!, 16)];
 }
