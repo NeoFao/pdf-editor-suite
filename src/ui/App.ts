@@ -1,24 +1,21 @@
 import { PdfiumEngine } from '../engine/pdfium/PdfiumEngine';
-import type { DocHandle } from '../engine/PdfEngine';
-import { DocumentModel } from '../model/DocumentModel';
-import type { PageModel } from '../model/types';
+import { EditSession } from '../model/EditSession';
 import { CommandBus } from '../commands/Command';
 import { EditTextRunCmd } from '../commands/EditTextRun';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 
-/** Orquesta motor + modelo + comandos + visor. Punto de entrada de la app nueva. */
+/** Orquesta motor + sesión + comandos + visor. Punto de entrada de la app nueva. */
 export class App {
   private engine!: PdfiumEngine;
-  private doc: DocHandle | null = null;
-  private model: DocumentModel | null = null;
+  private session: EditSession | null = null;
   private bus: CommandBus | null = null;
   private viewer: Viewer | null = null;
   private docName = 'documento.pdf';
   private readonly viewerEl: HTMLElement;
   private readonly status: HTMLElement;
 
-  constructor(private readonly rootEl: HTMLElement) {
+  constructor(rootEl: HTMLElement) {
     rootEl.textContent = '';
     const bar = document.createElement('div');
     bar.className = 'toolbar';
@@ -29,8 +26,8 @@ export class App {
     file.addEventListener('change', () => { const f = file.files?.[0]; if (f) void this.openFile(f); });
 
     const btnSave = this.button('Guardar', 'btn-save', () => this.save());
-    const btnUndo = this.button('Deshacer', 'btn-undo', () => { this.bus?.undo(); });
-    const btnRedo = this.button('Rehacer', 'btn-redo', () => { this.bus?.redo(); });
+    const btnUndo = this.button('Deshacer', 'btn-undo', () => { void this.bus?.undo(); });
+    const btnRedo = this.button('Rehacer', 'btn-redo', () => { void this.bus?.redo(); });
 
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
@@ -44,8 +41,8 @@ export class App {
     rootEl.appendChild(this.viewerEl);
 
     document.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); this.bus?.undo(); }
-      if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y')) { e.preventDefault(); this.bus?.redo(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); void this.bus?.undo(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); void this.bus?.redo(); }
     });
   }
 
@@ -63,26 +60,20 @@ export class App {
   async openFile(file: File): Promise<void> {
     this.setStatus('Cargando…');
     const engine = await this.ensureEngine();
-    if (this.doc !== null) engine.close(this.doc);
+    if (this.session) engine.close(this.session.doc);
     this.docName = file.name || 'documento.pdf';
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const doc = await engine.open(bytes);
-    this.doc = doc;
-    const pages: PageModel[] = [];
-    const count = engine.pageCount(doc);
-    for (let i = 0; i < count; i++) {
-      pages.push({ index: i, sizePt: engine.pageSize(doc, i), rotation: engine.pageRotation(doc, i), runs: engine.getPageText(doc, i) });
-    }
-    this.model = new DocumentModel(pages);
-    this.bus = new CommandBus({ engine, model: this.model, doc });
+    this.session = await EditSession.open(engine, bytes);
+    this.bus = new CommandBus(this.session);
     this.viewerEl.textContent = '';
-    this.viewer = new Viewer(this.viewerEl, engine, doc, this.model, (req) => this.handleEdit(req));
-    this.setStatus(`${count} página(s)`);
+    this.viewer = new Viewer(this.viewerEl, engine, this.session.doc, this.session.model, (req) => this.handleEdit(req));
+    this.setStatus(`${this.session.model.pages.length} página(s)`);
   }
 
   private handleEdit(req: EditRequest): void {
-    if (!this.doc || !this.engine || !this.model || !this.bus) return;
-    const res = this.engine.editTextRun(this.doc, req.pageIndex, req.runId, req.newText);
+    const s = this.session;
+    if (!s || !this.bus) return;
+    const res = s.engine.editTextRun(s.doc, req.pageIndex, req.runId, req.newText);
     if (!res.ok) {
       req.el.textContent = req.oldText; // revertir la vista
       this.setStatus(res.reason === 'glyph-missing'
@@ -90,14 +81,15 @@ export class App {
         : 'No se puede editar ese elemento.');
       return;
     }
-    this.model.updateRunText(req.pageIndex, req.runId, req.newText);
+    s.model.updateRunText(req.pageIndex, req.runId, req.newText);
     this.bus.pushExecuted(new EditTextRunCmd(req.pageIndex, req.runId, req.newText, req.oldText));
     this.setStatus('Editado.');
   }
 
   private save(): void {
-    if (!this.doc || !this.engine) return;
-    const bytes = this.engine.save(this.doc);
+    const s = this.session;
+    if (!s) return;
+    const bytes = s.engine.save(s.doc);
     const blob = new Blob([bytes], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
