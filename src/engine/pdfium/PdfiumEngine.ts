@@ -1,6 +1,6 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, type Mem } from './mem';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult, InsertTextSpec } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 
@@ -160,6 +160,26 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDFPageObj_Destroy(obj);
       this.p.FPDFPage_GenerateContent(page);
       return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  insertText(doc: DocHandle, pageIndex: number, spec: InsertTextSpec): number {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const obj = this.p.FPDFPageObj_NewTextObj(doc, spec.fontName ?? 'Helvetica', spec.sizePt);
+      const wptr = this.mem.wide(spec.text);
+      this.p.FPDFText_SetText(obj, wptr);
+      this.mem.free(wptr);
+      const [r, g, b] = spec.color ?? [0, 0, 0];
+      this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
+      // Matriz identidad + traslación a (x, y) en puntos PDF.
+      this.p.FPDFPageObj_Transform(obj, 1, 0, 0, 1, spec.xPt, spec.yPt);
+      this.p.FPDFPage_InsertObject(page, obj);
+      this.p.FPDFPage_GenerateContent(page);
+      return this.p.FPDFPage_CountObjects(page) - 1; // el objeto insertado es el último
     } finally {
       this.p.FPDF_ClosePage(page);
     }

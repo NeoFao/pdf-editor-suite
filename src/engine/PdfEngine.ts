@@ -17,6 +17,16 @@ export type EditResult = { ok: true } | { ok: false; reason: 'glyph-missing' | '
 /** Bitmap RGBA listo para volcar en un canvas. */
 export interface RenderResult { width: number; height: number; data: Uint8ClampedArray }
 
+/** Especificación de un texto nuevo a insertar (coordenadas en puntos PDF). */
+export interface InsertTextSpec {
+  xPt: number;
+  yPt: number;
+  text: string;
+  sizePt: number;
+  fontName?: string;          // fuente estándar; por defecto Helvetica
+  color?: [number, number, number]; // RGB 0-255; por defecto negro
+}
+
 /** Puntero opaco al documento dentro del motor. */
 export type DocHandle = number;
 
@@ -39,6 +49,8 @@ export interface PdfEngine {
    * Tras guardar, el texto ya no es extraíble. Devuelve true si eliminó un run.
    */
   deleteRun(doc: DocHandle, pageIndex: number, runId: number): boolean;
+  /** Inserta un texto nuevo en la página; devuelve el runId del objeto creado. */
+  insertText(doc: DocHandle, pageIndex: number, spec: InsertTextSpec): number;
   save(doc: DocHandle): Uint8Array<ArrayBuffer>;
   close(doc: DocHandle): void;
 }
