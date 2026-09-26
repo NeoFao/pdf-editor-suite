@@ -66,12 +66,27 @@ async function pdfApaisado() {
   return doc.save();
 }
 
+/**
+ * PDF con dos líneas de fuentes, tamaños y colores conocidos, para los tests de
+ * fidelidad de la app nueva: al editar una línea debe conservarse su tipografía.
+ */
+async function pdfFuentes() {
+  const doc = await PDFDocument.create();
+  const times = await doc.embedFont(StandardFonts.TimesRoman);
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  const p = doc.addPage([320, 200]);
+  p.drawText('ORIGINAL-TIMES', { x: 40, y: 150, size: 18, font: times, color: rgb(0.85, 0.1, 0.1) });
+  p.drawText('linea-helvetica', { x: 40, y: 110, size: 12, font: helv, color: rgb(0, 0, 0) });
+  return doc.save();
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
     'nativo.pdf': await pdfNativo(),
     'hostil.pdf': await pdfHostil(),
-    'apaisado.pdf': await pdfApaisado()
+    'apaisado.pdf': await pdfApaisado(),
+    'fuentes.pdf': await pdfFuentes()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {
     fs.writeFileSync(path.join(SALIDA, nombre), bytes);

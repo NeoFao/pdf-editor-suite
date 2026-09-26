@@ -1,4 +1,5 @@
 import globals from 'globals';
+import tseslint from 'typescript-eslint';
 
 /**
  * ESLint como red complementaria a las reglas deterministas.
@@ -16,7 +17,8 @@ export default [
       'js/pdf.worker.min.js',
       'playwright-report/**',
       'test-results/**',
-      'tests/fixtures/generados/**'
+      'tests/fixtures/generados/**',
+      'dist-next/**'
     ]
   },
 
@@ -80,9 +82,29 @@ export default [
     }
   },
 
+  // App nueva (TypeScript): recomendado de typescript-eslint, sin type-checking
+  // (rápido, no necesita el proyecto de tipos). El chequeo de tipos lo hace `tsc`.
+  ...tseslint.configs.recommended.map((c) => ({
+    ...c,
+    files: ['src/**/*.ts', 'tests/unit/**/*.ts', 'tests/e2e/next/**/*.ts']
+  })),
+  {
+    files: ['src/**/*.ts', 'tests/unit/**/*.ts', 'tests/e2e/next/**/*.ts'],
+    languageOptions: { globals: { ...globals.browser, ...globals.node } },
+    rules: {
+      'no-unused-vars': 'off',
+      '@typescript-eslint/no-unused-vars': ['error', { args: 'none', caughtErrors: 'none' }]
+    }
+  },
+  {
+    // Frontera con el WASM de PDFium: el módulo emscripten no está tipado.
+    files: ['src/engine/pdfium/**/*.ts'],
+    rules: { '@typescript-eslint/no-explicit-any': 'off' }
+  },
+
   // La suite E2E: bloquea desactivar tests desde el propio linter.
   {
-    files: ['tests/e2e/**/*.spec.js'],
+    files: ['tests/e2e/**/*.spec.js', 'tests/e2e/next/**/*.spec.ts'],
     languageOptions: {
       ecmaVersion: 2023,
       sourceType: 'module',

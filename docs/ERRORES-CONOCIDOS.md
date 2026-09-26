@@ -572,6 +572,12 @@ defensa en profundidad y necesita permiso explícito (AGENTS.md §5).
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que
 impide los anteriores:
 
+- **`motor-encapsulado`** — la API cruda `FPDF_` del motor PDFium solo puede
+  aparecer en `src/engine/`. Toda la reconstrucción (spec de cimientos §3) se
+  apoya en que el motor sea reemplazable detrás de la interfaz `PdfEngine`: si la
+  UI, el modelo o los comandos llaman a `FPDF_*` directamente, esa capa deja de
+  aislar y cambiar de motor se vuelve imposible. Nace con el subproyecto 1 de la
+  reconstrucción, no de un defecto de producto.
 - **`espejos-ia-sincronizados`** — `AGENTS.md` se replica a siete formatos de
   reglas (Claude, Gemini, Copilot, Cursor, Cline, Windsurf, Kiro). Si uno se
   queda atrás, esa IA trabaja con reglas viejas. La huella SHA-256 lo impide.

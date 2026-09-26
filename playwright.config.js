@@ -30,16 +30,31 @@ export default defineConfig({
     {
       name: 'escritorio',
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
-      // responsive.spec.js es exclusivo del proyecto `movil`
-      testIgnore: /responsive\.spec\.js/
+      // responsive.spec.js es del proyecto `movil`; la app nueva, del proyecto `next`.
+      testIgnore: [/responsive\.spec\.js/, /e2e[\\/]next[\\/]/]
     },
-    { name: 'movil', use: { ...devices['Pixel 7'] }, testMatch: /responsive\.spec\.js/ }
+    { name: 'movil', use: { ...devices['Pixel 7'] }, testMatch: /responsive\.spec\.js/ },
+    // App nueva (cimientos): servida por `vite preview` en :4173.
+    {
+      name: 'next',
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, baseURL: 'http://127.0.0.1:4173' },
+      testMatch: /e2e[\\/]next[\\/].*\.spec\.ts/
+    }
   ],
-  webServer: {
-    command: 'node server.js',
-    port: 3100,
-    env: { PORT: '3100' },
-    reuseExistingServer: !process.env.CI,
-    timeout: 30_000
-  }
+  webServer: [
+    {
+      command: 'node server.js',
+      port: 3100,
+      env: { PORT: '3100' },
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000
+    },
+    {
+      // Construye la app nueva y la sirve estática para los tests del proyecto `next`.
+      command: 'npm run build:next && npm run preview:next',
+      port: 4173,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000
+    }
+  ]
 });

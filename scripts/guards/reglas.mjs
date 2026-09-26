@@ -403,6 +403,38 @@ export const conPdfJsSinEval = {
   }
 };
 
+/* ── Cimientos · el motor se usa solo tras su interfaz ──────────────────── */
+export const conMotorEncapsulado = {
+  id: 'motor-encapsulado',
+  titulo: 'la API cruda FPDF_ solo aparece en src/engine',
+  comoArreglar:
+    'Llama al motor a través de la interfaz PdfEngine (o de un comando), nunca a ' +
+    'FPDF_* directamente. Toda la arquitectura nueva se apoya en que el motor sea ' +
+    'reemplazable detrás de esa capa: si la UI, el modelo o los comandos usan FPDF_ ' +
+    'directo, la capa deja de aislar (spec de cimientos §3).',
+  ejecutar() {
+    const raizSrc = path.join(RAIZ, 'src');
+    if (!fs.existsSync(raizSrc)) return [];
+    const hallazgos = [];
+    const recorrer = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { recorrer(full); continue; }
+        if (!e.name.endsWith('.ts')) continue;
+        const rel = path.relative(RAIZ, full).replace(/\\/g, '/');
+        if (rel.startsWith('src/engine/')) continue; // único lugar permitido
+        leer(rel).split('\n').forEach((linea, i) => {
+          if (/\bFPDF[A-Za-z_]/.test(linea)) {
+            hallazgos.push(hallazgo(rel, i + 1, 'usa la API cruda FPDF_ fuera de src/engine'));
+          }
+        });
+      }
+    };
+    recorrer(raizSrc);
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -416,5 +448,6 @@ export const TODAS = [
   conErroresDocumentados,
   conSuiteViva,
   conDeudaAcotada,
-  conPdfJsSinEval
+  conPdfJsSinEval,
+  conMotorEncapsulado
 ];

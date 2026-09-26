@@ -1,0 +1,194 @@
+import { loadEngine, type Pdfium } from './loadEngine';
+import { makeMem, type Mem } from './mem';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult } from '../PdfEngine';
+
+const FPDF_PAGEOBJ_TEXT = 1;
+
+/**
+ * Implementación de PdfEngine sobre @embedpdf/pdfium (WASM).
+ * FPDF_LoadMemDocument exige que el buffer de datos siga vivo mientras el
+ * documento esté abierto: se guarda su puntero por documento y se libera al cerrar.
+ */
+export class PdfiumEngine implements PdfEngine {
+  private readonly srcPtr = new Map<DocHandle, number>();
+
+  private constructor(private readonly p: Pdfium, private readonly mem: Mem) {}
+
+  static async create(): Promise<PdfiumEngine> {
+    const p = await loadEngine();
+    return new PdfiumEngine(p, makeMem(p));
+  }
+
+  async open(bytes: Uint8Array): Promise<DocHandle> {
+    const ptr = this.mem.copyIn(bytes);
+    const doc = this.p.FPDF_LoadMemDocument(ptr, bytes.length, '') as DocHandle;
+    if (!doc) { this.mem.free(ptr); throw new Error('PDF no válido o cifrado no soportado'); }
+    this.srcPtr.set(doc, ptr);
+    return doc;
+  }
+
+  pageCount(doc: DocHandle): number {
+    return this.p.FPDF_GetPageCount(doc);
+  }
+
+  pageSize(doc: DocHandle, pageIndex: number): SizePt {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      return { widthPt: this.p.FPDF_GetPageWidthF(page), heightPt: this.p.FPDF_GetPageHeightF(page) };
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  renderPage(doc: DocHandle, pageIndex: number, scale: number): RenderResult {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const width = Math.max(1, Math.round(this.p.FPDF_GetPageWidthF(page) * scale));
+    const height = Math.max(1, Math.round(this.p.FPDF_GetPageHeightF(page) * scale));
+    // Bitmap BGRA, fondo blanco; el /Rotate de la página lo aplica PDFium con rotate=0.
+    const bmp = this.p.FPDFBitmap_Create(width, height, 0);
+    try {
+      this.p.FPDFBitmap_FillRect(bmp, 0, 0, width, height, 0xffffffff);
+      this.p.FPDF_RenderPageBitmap(bmp, page, 0, 0, width, height, 0, 0);
+      const stride = this.p.FPDFBitmap_GetStride(bmp);
+      const buf = this.p.FPDFBitmap_GetBuffer(bmp);
+      const rgba = new Uint8ClampedArray(width * height * 4);
+      for (let y = 0; y < height; y++) {
+        const row = buf + y * stride;
+        for (let x = 0; x < width; x++) {
+          const src = row + x * 4;      // BGRA
+          const dst = (y * width + x) * 4;
+          rgba[dst] = this.mem.HEAPU8[src + 2]!;     // R ← B
+          rgba[dst + 1] = this.mem.HEAPU8[src + 1]!; // G
+          rgba[dst + 2] = this.mem.HEAPU8[src]!;     // B ← R
+          rgba[dst + 3] = this.mem.HEAPU8[src + 3]!; // A
+        }
+      }
+      return { width, height, data: rgba };
+    } finally {
+      this.p.FPDFBitmap_Destroy(bmp);
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  getPageText(doc: DocHandle, pageIndex: number): TextRun[] {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const textPage = this.p.FPDFText_LoadPage(page);
+    const runs: TextRun[] = [];
+    try {
+      const n = this.p.FPDFPage_CountObjects(page);
+      for (let i = 0; i < n; i++) {
+        const obj = this.p.FPDFPage_GetObject(page, i);
+        if (this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) continue;
+        runs.push(this.readTextRun(obj, textPage, i));
+      }
+    } finally {
+      this.p.FPDFText_ClosePage(textPage);
+      this.p.FPDF_ClosePage(page);
+    }
+    return runs;
+  }
+
+  /** Lee las propiedades de un objeto de texto (obj) usando la text page para el string. */
+  private readTextRun(obj: number, textPage: number, runId: number): TextRun {
+    const m = this.mem;
+    // Texto (UTF-16)
+    const tbuf = m.malloc(1024);
+    this.p.FPDFTextObj_GetText(obj, textPage, tbuf, 1024);
+    const text = m.readU16(tbuf); m.free(tbuf);
+    // Tamaño de fuente (out float)
+    const fs = m.malloc(4); this.p.FPDFTextObj_GetFontSize(obj, fs);
+    const sizePt = m.getValue(fs, 'float'); m.free(fs);
+    // Nombre de fuente
+    const font = this.p.FPDFTextObj_GetFont(obj);
+    const nbuf = m.malloc(256); this.p.FPDFFont_GetBaseFontName(font, nbuf, 256);
+    const fontName = m.UTF8ToString(nbuf); m.free(nbuf);
+    // Color de relleno (RGBA, out uints)
+    const r = m.malloc(4), g = m.malloc(4), b = m.malloc(4), a = m.malloc(4);
+    this.p.FPDFPageObj_GetFillColor(obj, r, g, b, a);
+    const color: [number, number, number, number] = [m.getValue(r, 'i32'), m.getValue(g, 'i32'), m.getValue(b, 'i32'), m.getValue(a, 'i32')];
+    [r, g, b, a].forEach((ptr) => m.free(ptr));
+    // Caja (left, bottom, right, top)
+    const l = m.malloc(4), bo = m.malloc(4), ri = m.malloc(4), to = m.malloc(4);
+    this.p.FPDFPageObj_GetBounds(obj, l, bo, ri, to);
+    const left = m.getValue(l, 'float'), bottom = m.getValue(bo, 'float'), right = m.getValue(ri, 'float'), top = m.getValue(to, 'float');
+    [l, bo, ri, to].forEach((ptr) => m.free(ptr));
+    return { runId, text, sizePt, fontName, color, boxPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom } };
+  }
+
+  editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, runId);
+      if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
+        return { ok: false, reason: 'not-a-text-run' };
+      }
+      // La fuente del propio run: garantiza que el texto nuevo se dibuja con ella.
+      const font = this.p.FPDFTextObj_GetFont(obj);
+      const fs = this.mem.malloc(4); this.p.FPDFTextObj_GetFontSize(obj, fs);
+      const size = this.mem.getValue(fs, 'float'); this.mem.free(fs);
+      // Si la fuente no tiene el glifo de algún carácter (no blanco), no editamos.
+      for (const ch of newText) {
+        if (/\s/.test(ch)) continue;
+        const cp = ch.codePointAt(0)!;
+        if (this.p.FPDFFont_GetGlyphPath(font, cp, size) === 0) {
+          return { ok: false, reason: 'glyph-missing' };
+        }
+      }
+      // Edición EN SITIO: mismo objeto → conserva fuente, tamaño, color y matriz.
+      const wptr = this.mem.wide(newText);
+      this.p.FPDFText_SetText(obj, wptr);
+      this.mem.free(wptr);
+      this.p.FPDFPage_GenerateContent(page);
+      return { ok: true };
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  deleteRun(doc: DocHandle, pageIndex: number, runId: number): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, runId);
+      if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) return false;
+      // RemoveObject transfiere la propiedad al llamante: hay que destruirlo.
+      if (!this.p.FPDFPage_RemoveObject(page, obj)) return false;
+      this.p.FPDFPageObj_Destroy(obj);
+      this.p.FPDFPage_GenerateContent(page);
+      return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  save(doc: DocHandle): Uint8Array<ArrayBuffer> {
+    const chunks: Uint8Array[] = [];
+    const cb = this.mem.addFunction((_pThis: number, pData: number, size: number): number => {
+      chunks.push(Uint8Array.from(this.mem.HEAPU8.subarray(pData, pData + size)));
+      return 1;
+    }, 'iiii');
+    const fw = this.mem.malloc(8);
+    this.mem.setValue(fw, 1, 'i32');      // FPDF_FILEWRITE.version = 1
+    this.mem.setValue(fw + 4, cb, 'i32'); // WriteBlock
+    try {
+      this.p.FPDF_SaveAsCopy(doc, fw, 0);
+    } finally {
+      this.mem.free(fw);
+    }
+    const total = chunks.reduce((s, c) => s + c.length, 0);
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) { out.set(c, off); off += c.length; }
+    return out;
+  }
+
+  close(doc: DocHandle): void {
+    this.p.FPDF_CloseDocument(doc);
+    const ptr = this.srcPtr.get(doc);
+    if (ptr !== undefined) { this.mem.free(ptr); this.srcPtr.delete(doc); }
+  }
+}
