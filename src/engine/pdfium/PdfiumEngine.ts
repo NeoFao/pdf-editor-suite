@@ -1,6 +1,8 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, type Mem } from './mem';
-import type { PdfEngine, DocHandle, SizePt } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun } from '../PdfEngine';
+
+const FPDF_PAGEOBJ_TEXT = 1;
 
 /**
  * Implementación de PdfEngine sobre @embedpdf/pdfium (WASM).
@@ -37,6 +39,52 @@ export class PdfiumEngine implements PdfEngine {
     } finally {
       this.p.FPDF_ClosePage(page);
     }
+  }
+
+  getPageText(doc: DocHandle, pageIndex: number): TextRun[] {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const textPage = this.p.FPDFText_LoadPage(page);
+    const runs: TextRun[] = [];
+    try {
+      const n = this.p.FPDFPage_CountObjects(page);
+      for (let i = 0; i < n; i++) {
+        const obj = this.p.FPDFPage_GetObject(page, i);
+        if (this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) continue;
+        runs.push(this.readTextRun(obj, textPage, i));
+      }
+    } finally {
+      this.p.FPDFText_ClosePage(textPage);
+      this.p.FPDF_ClosePage(page);
+    }
+    return runs;
+  }
+
+  /** Lee las propiedades de un objeto de texto (obj) usando la text page para el string. */
+  private readTextRun(obj: number, textPage: number, runId: number): TextRun {
+    const m = this.mem;
+    // Texto (UTF-16)
+    const tbuf = m.malloc(1024);
+    this.p.FPDFTextObj_GetText(obj, textPage, tbuf, 1024);
+    const text = m.readU16(tbuf); m.free(tbuf);
+    // Tamaño de fuente (out float)
+    const fs = m.malloc(4); this.p.FPDFTextObj_GetFontSize(obj, fs);
+    const sizePt = m.getValue(fs, 'float'); m.free(fs);
+    // Nombre de fuente
+    const font = this.p.FPDFTextObj_GetFont(obj);
+    const nbuf = m.malloc(256); this.p.FPDFFont_GetBaseFontName(font, nbuf, 256);
+    const fontName = m.UTF8ToString(nbuf); m.free(nbuf);
+    // Color de relleno (RGBA, out uints)
+    const r = m.malloc(4), g = m.malloc(4), b = m.malloc(4), a = m.malloc(4);
+    this.p.FPDFPageObj_GetFillColor(obj, r, g, b, a);
+    const color: [number, number, number, number] = [m.getValue(r, 'i32'), m.getValue(g, 'i32'), m.getValue(b, 'i32'), m.getValue(a, 'i32')];
+    [r, g, b, a].forEach((ptr) => m.free(ptr));
+    // Caja (left, bottom, right, top)
+    const l = m.malloc(4), bo = m.malloc(4), ri = m.malloc(4), to = m.malloc(4);
+    this.p.FPDFPageObj_GetBounds(obj, l, bo, ri, to);
+    const left = m.getValue(l, 'float'), bottom = m.getValue(bo, 'float'), right = m.getValue(ri, 'float'), top = m.getValue(to, 'float');
+    [l, bo, ri, to].forEach((ptr) => m.free(ptr));
+    return { runId, text, sizePt, fontName, color, boxPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom } };
   }
 
   save(doc: DocHandle): Uint8Array {

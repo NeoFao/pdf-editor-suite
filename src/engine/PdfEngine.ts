@@ -21,6 +21,8 @@ export interface PdfEngine {
   open(bytes: Uint8Array): Promise<DocHandle>;
   pageCount(doc: DocHandle): number;
   pageSize(doc: DocHandle, pageIndex: number): SizePt;
+  /** Runs de texto de la página, con su caja, fuente, tamaño y color. Vacío si no hay texto (escaneado). */
+  getPageText(doc: DocHandle, pageIndex: number): TextRun[];
   save(doc: DocHandle): Uint8Array;
   close(doc: DocHandle): void;
 }
