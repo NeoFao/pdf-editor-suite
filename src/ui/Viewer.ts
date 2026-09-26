@@ -1,55 +1,75 @@
-import type { PdfEngine, DocHandle } from '../engine/PdfEngine';
-import type { DocumentModel } from '../model/DocumentModel';
 import { PageGeometry } from '../coords/PageGeometry';
+import type { EditSession } from '../model/EditSession';
 import { visiblePageIndices } from './layout';
 import { TextLayer, type EditRequest } from './TextLayer';
+import type { PtPoint } from '../coords/PageGeometry';
 
 const GAP = 16;
 
+export interface ViewerCallbacks {
+  onEdit: (req: EditRequest) => void;
+  onSelect: (pageIndex: number, runId: number) => void;
+  onBackgroundClick: (pageIndex: number, at: PtPoint) => void;
+}
+
 /** Renderiza páginas visibles (canvas del motor) con su capa de texto encima. */
 export class Viewer {
-  private readonly wrappers: HTMLElement[] = [];
-  private readonly rendered = new Set<number>();
+  private wrappers: HTMLElement[] = [];
+  private geoms: PageGeometry[] = [];
+  private rendered = new Set<number>();
   private scale = 1;
 
   constructor(
     private readonly root: HTMLElement,
-    private readonly engine: PdfEngine,
-    private readonly doc: DocHandle,
-    private readonly model: DocumentModel,
-    private readonly onEdit: (req: EditRequest) => void
+    private readonly session: EditSession,
+    private readonly cb: ViewerCallbacks
   ) {
     this.layout();
     this.root.addEventListener('scroll', () => this.renderVisible());
     this.renderVisible();
-    this.model.on('change', (pageIndex) => { this.rendered.delete(pageIndex); this.renderVisible(); });
+    this.session.model.on('change', (pageIndex) => { this.rendered.delete(pageIndex); this.renderVisible(); });
+    // Recarga completa (deshacer de borrar/insertar): reconstruir todo.
+    this.session.model.onReload(() => this.rebuild());
   }
 
-  setScale(scale: number): void { this.scale = scale; this.layout(); this.rendered.clear(); this.renderVisible(); }
+  private rebuild(): void {
+    this.root.textContent = '';
+    this.wrappers = [];
+    this.geoms = [];
+    this.rendered = new Set();
+    this.layout();
+    this.renderVisible();
+  }
 
   private cssHeights(): number[] {
-    return this.model.pages.map((p) => p.sizePt.heightPt * this.scale);
+    return this.session.model.pages.map((p) => p.sizePt.heightPt * this.scale);
   }
 
   private layout(): void {
-    if (this.wrappers.length === 0) {
-      for (const page of this.model.pages) {
-        const w = document.createElement('div');
-        w.className = 'page';
-        w.dataset.page = String(page.index);
-        w.style.position = 'relative';
-        w.style.margin = `0 auto ${GAP}px`;
-        w.style.background = '#fff';
-        w.style.boxShadow = '0 1px 6px rgba(0,0,0,.25)';
-        this.root.appendChild(w);
-        this.wrappers.push(w);
-      }
+    for (const page of this.session.model.pages) {
+      const w = document.createElement('div');
+      w.className = 'page';
+      w.dataset.page = String(page.index);
+      Object.assign(w.style, {
+        position: 'relative',
+        margin: `0 auto ${GAP}px`,
+        background: '#fff',
+        boxShadow: '0 1px 6px rgba(0,0,0,.25)',
+        width: `${page.sizePt.widthPt * this.scale}px`,
+        height: `${page.sizePt.heightPt * this.scale}px`
+      });
+      // Clic en el fondo (no en un run) → insertar en ese punto.
+      w.addEventListener('click', (e) => {
+        if ((e.target as HTMLElement).classList.contains('run')) return;
+        const rect = w.getBoundingClientRect();
+        const geom = this.geoms[page.index]!;
+        const at = geom.cssToPt(e.clientX - rect.left, e.clientY - rect.top);
+        this.cb.onBackgroundClick(page.index, at);
+      });
+      this.root.appendChild(w);
+      this.wrappers.push(w);
+      this.geoms.push(new PageGeometry(page.sizePt.widthPt, page.sizePt.heightPt, this.scale, page.rotation));
     }
-    this.model.pages.forEach((page, i) => {
-      const w = this.wrappers[i]!;
-      w.style.width = `${page.sizePt.widthPt * this.scale}px`;
-      w.style.height = `${page.sizePt.heightPt * this.scale}px`;
-    });
   }
 
   private renderVisible(): void {
@@ -62,10 +82,10 @@ export class Viewer {
   }
 
   private renderPage(i: number): void {
-    const page = this.model.pages[i]!;
+    const page = this.session.model.pages[i]!;
     const wrapper = this.wrappers[i]!;
     wrapper.textContent = '';
-    const { width, height, data } = this.engine.renderPage(this.doc, i, this.scale);
+    const { width, height, data } = this.session.engine.renderPage(this.session.doc, i, this.scale);
     const canvas = document.createElement('canvas');
     canvas.width = width; canvas.height = height;
     canvas.style.display = 'block';
@@ -77,7 +97,6 @@ export class Viewer {
     layer.className = 'text-layer';
     Object.assign(layer.style, { position: 'absolute', inset: '0' });
     wrapper.appendChild(layer);
-    const geom = new PageGeometry(page.sizePt.widthPt, page.sizePt.heightPt, this.scale, page.rotation);
-    new TextLayer(layer, page, geom, this.onEdit);
+    new TextLayer(layer, page, this.geoms[i]!, { onEdit: this.cb.onEdit, onSelect: this.cb.onSelect });
   }
 }

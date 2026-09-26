@@ -2,19 +2,22 @@ import type { PageModel } from '../model/types';
 import type { PageGeometry } from '../coords/PageGeometry';
 
 export interface EditRequest { pageIndex: number; runId: number; newText: string; oldText: string; el: HTMLElement }
+export interface TextLayerCallbacks {
+  onEdit: (req: EditRequest) => void;
+  onSelect: (pageIndex: number, runId: number) => void;
+}
 
 /**
  * Capa de bloques de texto editables sobre una página. Cada run es un div
- * posicionado por PageGeometry. Al confirmar la edición llama a onEdit; quien
- * la recibe valida (motor) y decide si aplicar. El texto se pone con
- * textContent, nunca innerHTML (entrada no confiable).
+ * posicionado por PageGeometry. Clic selecciona (y activa edición); al confirmar
+ * llama a onEdit. El texto se pone con textContent, nunca innerHTML.
  */
 export class TextLayer {
   constructor(
     private readonly host: HTMLElement,
     private readonly page: PageModel,
     private readonly geom: PageGeometry,
-    private readonly onEdit: (req: EditRequest) => void
+    private readonly cb: TextLayerCallbacks
   ) {
     this.build();
   }
@@ -38,7 +41,9 @@ export class TextLayer {
         whiteSpace: 'pre'
       });
       let oldText = run.text;
-      block.addEventListener('click', () => {
+      block.addEventListener('click', (e) => {
+        e.stopPropagation(); // no lo trate el fondo (insertar)
+        this.cb.onSelect(this.page.index, run.runId);
         if (block.isContentEditable) return;
         oldText = block.textContent ?? '';
         block.contentEditable = 'true';
@@ -49,7 +54,7 @@ export class TextLayer {
         block.contentEditable = 'false';
         const newText = block.textContent ?? '';
         if (newText !== oldText) {
-          this.onEdit({ pageIndex: this.page.index, runId: run.runId, newText, oldText, el: block });
+          this.cb.onEdit({ pageIndex: this.page.index, runId: run.runId, newText, oldText, el: block });
         }
       };
       block.addEventListener('blur', commit);
