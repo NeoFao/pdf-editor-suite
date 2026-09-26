@@ -34,6 +34,11 @@ export interface PdfEngine {
    * si la fuente del run no tiene algún glifo del nuevo texto.
    */
   editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult;
+  /**
+   * Redacción real: elimina el objeto de texto del flujo de contenido (no lo tapa).
+   * Tras guardar, el texto ya no es extraíble. Devuelve true si eliminó un run.
+   */
+  deleteRun(doc: DocHandle, pageIndex: number, runId: number): boolean;
   save(doc: DocHandle): Uint8Array<ArrayBuffer>;
   close(doc: DocHandle): void;
 }
