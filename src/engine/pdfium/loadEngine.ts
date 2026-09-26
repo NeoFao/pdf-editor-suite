@@ -7,8 +7,10 @@ let cached: Promise<Pdfium> | null = null;
 /** Obtiene los bytes del WASM: por fs en Node (tests), por fetch(?url) en el navegador. */
 async function getWasmBinary(): Promise<Uint8Array> {
   if (typeof window === 'undefined') {
-    const { readFile } = await import('node:fs/promises');
-    const { createRequire } = await import('node:module');
+    // Rama solo-Node (tests). @vite-ignore evita que el bundler del navegador
+    // intente empaquetar módulos nativos que aquí nunca se ejecutan.
+    const { readFile } = await import(/* @vite-ignore */ 'node:fs/promises');
+    const { createRequire } = await import(/* @vite-ignore */ 'node:module');
     const req = createRequire(import.meta.url);
     const wasmPath = req.resolve('@embedpdf/pdfium/pdfium.wasm');
     return new Uint8Array(await readFile(wasmPath));
