@@ -19,8 +19,18 @@ export class CommandBus {
   private redoStack: Command[] = [];
   constructor(private readonly ctx: Ctx) {}
 
+  /** Aplica el comando y lo registra. */
   execute(cmd: Command): void {
     cmd.execute(this.ctx);
+    this.record(cmd);
+  }
+
+  /** Registra un comando ya aplicado por fuera (p. ej. la UI validó y aplicó la edición). */
+  pushExecuted(cmd: Command): void {
+    this.record(cmd);
+  }
+
+  private record(cmd: Command): void {
     const prev = this.undoStack[this.undoStack.length - 1];
     if (cmd.coalesceKey && prev && prev.coalesceKey === cmd.coalesceKey && cmd.coalesce) {
       const merged = cmd.coalesce(prev);

@@ -14,6 +14,9 @@ export interface TextRun {
 
 export type EditResult = { ok: true } | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' };
 
+/** Bitmap RGBA listo para volcar en un canvas. */
+export interface RenderResult { width: number; height: number; data: Uint8ClampedArray }
+
 /** Puntero opaco al documento dentro del motor. */
 export type DocHandle = number;
 
@@ -21,6 +24,8 @@ export interface PdfEngine {
   open(bytes: Uint8Array): Promise<DocHandle>;
   pageCount(doc: DocHandle): number;
   pageSize(doc: DocHandle, pageIndex: number): SizePt;
+  /** Renderiza la página a un bitmap RGBA a la escala dada. */
+  renderPage(doc: DocHandle, pageIndex: number, scale: number): RenderResult;
   /** Runs de texto de la página, con su caja, fuente, tamaño y color. Vacío si no hay texto (escaneado). */
   getPageText(doc: DocHandle, pageIndex: number): TextRun[];
   /**
@@ -29,6 +34,6 @@ export interface PdfEngine {
    * si la fuente del run no tiene algún glifo del nuevo texto.
    */
   editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult;
-  save(doc: DocHandle): Uint8Array;
+  save(doc: DocHandle): Uint8Array<ArrayBuffer>;
   close(doc: DocHandle): void;
 }

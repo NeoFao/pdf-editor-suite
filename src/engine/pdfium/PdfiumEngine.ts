@@ -1,6 +1,6 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, type Mem } from './mem';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 
@@ -37,6 +37,37 @@ export class PdfiumEngine implements PdfEngine {
     try {
       return { widthPt: this.p.FPDF_GetPageWidthF(page), heightPt: this.p.FPDF_GetPageHeightF(page) };
     } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  renderPage(doc: DocHandle, pageIndex: number, scale: number): RenderResult {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const width = Math.max(1, Math.round(this.p.FPDF_GetPageWidthF(page) * scale));
+    const height = Math.max(1, Math.round(this.p.FPDF_GetPageHeightF(page) * scale));
+    // Bitmap BGRA, fondo blanco; el /Rotate de la página lo aplica PDFium con rotate=0.
+    const bmp = this.p.FPDFBitmap_Create(width, height, 0);
+    try {
+      this.p.FPDFBitmap_FillRect(bmp, 0, 0, width, height, 0xffffffff);
+      this.p.FPDF_RenderPageBitmap(bmp, page, 0, 0, width, height, 0, 0);
+      const stride = this.p.FPDFBitmap_GetStride(bmp);
+      const buf = this.p.FPDFBitmap_GetBuffer(bmp);
+      const rgba = new Uint8ClampedArray(width * height * 4);
+      for (let y = 0; y < height; y++) {
+        const row = buf + y * stride;
+        for (let x = 0; x < width; x++) {
+          const src = row + x * 4;      // BGRA
+          const dst = (y * width + x) * 4;
+          rgba[dst] = this.mem.HEAPU8[src + 2]!;     // R ← B
+          rgba[dst + 1] = this.mem.HEAPU8[src + 1]!; // G
+          rgba[dst + 2] = this.mem.HEAPU8[src]!;     // B ← R
+          rgba[dst + 3] = this.mem.HEAPU8[src + 3]!; // A
+        }
+      }
+      return { width, height, data: rgba };
+    } finally {
+      this.p.FPDFBitmap_Destroy(bmp);
       this.p.FPDF_ClosePage(page);
     }
   }
@@ -118,7 +149,7 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
-  save(doc: DocHandle): Uint8Array {
+  save(doc: DocHandle): Uint8Array<ArrayBuffer> {
     const chunks: Uint8Array[] = [];
     const cb = this.mem.addFunction((_pThis: number, pData: number, size: number): number => {
       chunks.push(Uint8Array.from(this.mem.HEAPU8.subarray(pData, pData + size)));

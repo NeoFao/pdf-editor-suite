@@ -1,3 +1,4 @@
-// Punto de entrada de la app nueva. Se irá cableando App() en tareas posteriores.
+import { App } from './ui/App';
+
 const el = document.getElementById('app');
-if (el) el.textContent = 'Base nueva lista (Vite + TypeScript).';
+if (el) new App(el);
