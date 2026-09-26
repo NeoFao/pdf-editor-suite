@@ -4,6 +4,7 @@ import { CommandBus } from '../commands/Command';
 import { EditTextRunCmd } from '../commands/EditTextRun';
 import { DeleteRunCmd } from '../commands/DeleteRun';
 import { InsertTextCmd } from '../commands/InsertText';
+import { MoveRunCmd } from '../commands/MoveRun';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
@@ -83,7 +84,8 @@ export class App {
     new Viewer(this.viewerEl, this.session, {
       onEdit: (req) => this.handleEdit(req),
       onSelect: (pageIndex, runId) => { this.selection = { pageIndex, runId }; },
-      onBackgroundClick: (pageIndex, at) => { void this.handleInsert(pageIndex, at); }
+      onBackgroundClick: (pageIndex, at) => { void this.handleInsert(pageIndex, at); },
+      onMove: (pageIndex, runId, dxPt, dyPt) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt)); }
     });
     this.setStatus(`${this.session.model.pages.length} página(s)`);
   }

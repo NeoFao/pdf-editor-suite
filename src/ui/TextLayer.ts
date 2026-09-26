@@ -5,12 +5,13 @@ export interface EditRequest { pageIndex: number; runId: number; newText: string
 export interface TextLayerCallbacks {
   onEdit: (req: EditRequest) => void;
   onSelect: (pageIndex: number, runId: number) => void;
+  onMove: (pageIndex: number, runId: number, dxCss: number, dyCss: number) => void;
 }
 
 /**
  * Capa de bloques de texto editables sobre una página. Cada run es un div
- * posicionado por PageGeometry. Clic selecciona (y activa edición); al confirmar
- * llama a onEdit. El texto se pone con textContent, nunca innerHTML.
+ * posicionado por PageGeometry. Clic selecciona/edita; un tirador permite
+ * arrastrarlo. El texto se pone con textContent, nunca innerHTML.
  */
 export class TextLayer {
   constructor(
@@ -40,9 +41,10 @@ export class TextLayer {
         cursor: 'text',
         whiteSpace: 'pre'
       });
+
       let oldText = run.text;
       block.addEventListener('click', (e) => {
-        e.stopPropagation(); // no lo trate el fondo (insertar)
+        e.stopPropagation();
         this.cb.onSelect(this.page.index, run.runId);
         if (block.isContentEditable) return;
         oldText = block.textContent ?? '';
@@ -62,7 +64,39 @@ export class TextLayer {
         if (e.key === 'Enter') { e.preventDefault(); block.blur(); }
         if (e.key === 'Escape') { block.textContent = oldText; block.blur(); }
       });
+
+      block.appendChild(this.makeDragHandle(block, run.runId));
       this.host.appendChild(block);
     }
+  }
+
+  /** Tirador para arrastrar el bloque; dispara onMove al soltar. */
+  private makeDragHandle(block: HTMLElement, runId: number): HTMLElement {
+    const handle = document.createElement('div');
+    handle.className = 'run-drag';
+    Object.assign(handle.style, {
+      position: 'absolute', left: '-9px', top: '-9px', width: '14px', height: '14px',
+      borderRadius: '50%', background: '#6366f1', cursor: 'move', border: '2px solid #fff'
+    });
+    handle.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX, startY = e.clientY;
+      const baseLeft = parseFloat(block.style.left) || 0;
+      const baseTop = parseFloat(block.style.top) || 0;
+      const onMove = (ev: PointerEvent): void => {
+        block.style.left = `${baseLeft + (ev.clientX - startX)}px`;
+        block.style.top = `${baseTop + (ev.clientY - startY)}px`;
+      };
+      const onUp = (ev: PointerEvent): void => {
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (dx !== 0 || dy !== 0) this.cb.onMove(this.page.index, runId, dx, dy);
+      };
+      window.addEventListener('pointermove', onMove);
+      window.addEventListener('pointerup', onUp);
+    });
+    return handle;
   }
 }

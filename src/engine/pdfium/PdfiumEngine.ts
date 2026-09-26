@@ -160,6 +160,20 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
+  moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, runId);
+      if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) return false;
+      this.p.FPDFPageObj_Transform(obj, 1, 0, 0, 1, dxPt, dyPt); // traslación pura
+      this.p.FPDFPage_GenerateContent(page);
+      return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
   deleteRun(doc: DocHandle, pageIndex: number, runId: number): boolean {
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
