@@ -53,6 +53,8 @@ export interface PdfEngine {
   deleteRun(doc: DocHandle, pageIndex: number, runId: number): boolean;
   /** Inserta un texto nuevo en la página; devuelve el runId del objeto creado. */
   insertText(doc: DocHandle, pageIndex: number, spec: InsertTextSpec): number;
+  /** Desplaza un run por (dxPt, dyPt) en puntos PDF. Reversible con el delta inverso. */
+  moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean;
   save(doc: DocHandle): Uint8Array<ArrayBuffer>;
   close(doc: DocHandle): void;
 }

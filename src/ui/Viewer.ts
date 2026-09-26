@@ -10,6 +10,7 @@ export interface ViewerCallbacks {
   onEdit: (req: EditRequest) => void;
   onSelect: (pageIndex: number, runId: number) => void;
   onBackgroundClick: (pageIndex: number, at: PtPoint) => void;
+  onMove: (pageIndex: number, runId: number, dxPt: number, dyPt: number) => void;
 }
 
 /** Renderiza páginas visibles (canvas del motor) con su capa de texto encima. */
@@ -97,6 +98,16 @@ export class Viewer {
     layer.className = 'text-layer';
     Object.assign(layer.style, { position: 'absolute', inset: '0' });
     wrapper.appendChild(layer);
-    new TextLayer(layer, page, this.geoms[i]!, { onEdit: this.cb.onEdit, onSelect: this.cb.onSelect });
+    const geom = this.geoms[i]!;
+    new TextLayer(layer, page, geom, {
+      onEdit: this.cb.onEdit,
+      onSelect: this.cb.onSelect,
+      onMove: (pageIndex, runId, dxCss, dyCss) => {
+        // La conversión pt es afín: el delta no depende del punto base.
+        const o = geom.cssToPt(0, 0);
+        const d = geom.cssToPt(dxCss, dyCss);
+        this.cb.onMove(pageIndex, runId, d.xPt - o.xPt, d.yPt - o.yPt);
+      }
+    });
   }
 }
