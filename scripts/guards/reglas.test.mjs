@@ -193,6 +193,25 @@ describe('pdfjs-sin-eval', () => {
   });
 });
 
+describe('motor-encapsulado', () => {
+  const regla = detectarEn('motor-encapsulado');
+
+  test('señala FPDF_ crudo fuera de src/engine', () => {
+    const linea = 'const doc = this.p.FPDF_LoadMemDocument(ptr, n, "");';
+    assert.match(linea, /\bFPDF[A-Za-z_]/);
+    assert.ok(regla.comoArreglar.includes('PdfEngine'));
+  });
+
+  test('no señala el uso de la interfaz PdfEngine', () => {
+    const linea = 'const runs = engine.getPageText(doc, 0);';
+    assert.doesNotMatch(linea, /\bFPDF[A-Za-z_]/);
+  });
+
+  test('sobre el repo real no encuentra nada: FPDF_ vive solo en src/engine', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega
