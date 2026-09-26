@@ -33,6 +33,12 @@ export class Viewer {
     this.session.model.onReload(() => this.rebuild());
   }
 
+  /** Cambia la escala (zoom) y vuelve a maquetar y renderizar. */
+  setScale(scale: number): void {
+    this.scale = scale;
+    this.rebuild();
+  }
+
   private rebuild(): void {
     this.root.textContent = '';
     this.wrappers = [];
