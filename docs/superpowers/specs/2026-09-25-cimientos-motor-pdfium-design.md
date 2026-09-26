@@ -105,6 +105,20 @@ Conversiones (incluido Y-flip y rotación) solo en `PageGeometry`, que conoce `a
 
 **Consecuencia:** con PDFium para render + extracción + edición hay **un solo motor y un solo sistema de coordenadas**; se **retira pdf.js y pdf-lib del núcleo**. Menos código, una sola fuente geométrica, y desaparece el pdf.js 3.11 del CVE.
 
+### 4.1 Fidelidad de edición (requisito central)
+
+El editor anterior, al tocar una línea, cambiaba el tipo de letra, el fondo y la maquetación, porque tapaba con una imagen y re-escribía con una fuente por defecto. **Aquí no.** Regla de diseño dura, verificada por spike (2026-09-26):
+
+> Editar una línea modifica el **objeto de texto existente en sitio** con `FPDFText_SetText(obj, …)`, que **conserva su fuente, tamaño, color y matriz de posición**. Nunca se crea un objeto nuevo con fuente por defecto para una edición, ni se rasteriza.
+
+Evidencia del spike: una línea Times-Roman 18pt roja en (40,150) → tras editarla, guardar y reabrir → fuente `Times-Roman`, tamaño `18`, color `[217,26,26,255]` y posición `[40,150]` **idénticos**; solo cambió el texto, y las demás líneas quedaron intactas. Las propiedades se leen con `FPDFTextObj_GetFont/GetFontSize`, `FPDFFont_GetBaseFontName`, `FPDFPageObj_GetFillColor/GetMatrix`.
+
+Casos que el spec del comando `EditTextRun` debe cubrir en su plan:
+- **Texto que no cabe en el ancho original:** conservar fuente/tamaño; el reflujo de párrafo fino es trabajo posterior, pero la línea editada no debe pisar a la vecina.
+- **Glifos ausentes en un subconjunto de fuente incrustada:** si la fuente incrustada no trae el carácter tecleado, detectarlo y avisar/derivar a una estrategia definida (no sustituir la fuente en silencio).
+- **Insertar texto nuevo** (no editar): reutilizar un recurso de fuente de la página cuando exista; solo si no hay, incrustar una fuente elegida — decisión explícita, nunca un Helvetica accidental.
+- **Redacción:** eliminar el objeto (`FPDFPage_RemoveObject`), no taparlo.
+
 ---
 
 ## 5. Comandos y enlace con la UI
@@ -150,7 +164,7 @@ Atraviesa **todas** las capas en una función real:
 
 **Fuera de esta rebanada** (subproyectos posteriores): OCR, importaciones Word/imagen/Markdown, compresión, dividir, firmas/sellos, dibujo, filtros, miniaturas, cajones móviles, fusionar, búsqueda, marcadores, formularios, redacción avanzada.
 
-**Definición de "hecho":** abrir un PDF real, editar una línea, guardar, reabrir y comprobar que el texto editado es seleccionable y el original desapareció; deshacer/rehacer coherentes; `npm run verify` (adaptado) en verde con tests nuevos y de paridad.
+**Definición de "hecho":** abrir un PDF real, editar una línea, guardar, reabrir y comprobar que (a) el texto editado es seleccionable y el original desapareció, y (b) **fuente, tamaño, color y posición se conservan idénticos** — solo cambió el texto (§4.1); deshacer/rehacer coherentes; `npm run verify` (adaptado) en verde con tests nuevos y de paridad.
 
 ---
 
@@ -177,7 +191,7 @@ Estado: **Conservada** (misma función, nueva base) · **Mejorada** (además cor
 | 9 | Navegación por página | Conservada | modelo + observer | salta a página |
 | 10 | Miniaturas laterales | Conservada | render a escala baja | miniatura por página |
 | 11 | Reordenar por drag&drop | Conservada | comando `ReorderPages` | orden persiste al guardar |
-| 12 | Editar texto in-place | **Mejorada** (vectorial) | `EditTextRun` + PDFium | editado extraíble; original eliminado |
+| 12 | Editar texto in-place | **Mejorada** (vectorial, fiel) | `EditTextRun` + PDFium (edición en sitio) | editado extraíble; original eliminado; **fuente/tamaño/color/posición idénticos** (§4.1) |
 | 13 | Cuadros de texto nuevos | Mejorada | `AddTextObject` | texto nuevo extraíble |
 | 14 | Mover/eliminar bloque de texto | Mejorada | `MoveObject`/`DeleteObject` | posición/ausencia en el PDF |
 | 15 | Panel de propiedades (fuente/tamaño/color) | Conservada | comando sobre objeto seleccionado | cambia el objeto en edición |
