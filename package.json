@@ -15,6 +15,11 @@
     "reglas:check": "node scripts/sync-reglas.mjs --check",
     "version:sync": "node scripts/sync-version.mjs",
     "test:fixtures": "node tests/fixtures/generar-fixtures.mjs",
+    "dev:next": "vite",
+    "build:next": "vite build",
+    "preview:next": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit",
+    "test:unit:src": "vitest run",
     "test:unit": "node --test scripts/guards/*.test.mjs",
     "test:e2e": "npm run test:fixtures && playwright test",
     "test:e2e:ui": "npm run test:fixtures && playwright test --ui",
@@ -35,13 +40,19 @@
   "author": "PDF Editor Team",
   "license": "MIT",
   "dependencies": {
+    "@embedpdf/pdfium": "^2.15.1",
     "pdf-lib": "^1.17.1",
     "tailwindcss": "^3.4.1",
     "tesseract.js": "^5.1.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.62.1",
+    "@types/node": "^26.6.3",
     "eslint": "^9.39.5",
-    "globals": "^17.12.0"
+    "globals": "^17.12.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.70.1",
+    "vite": "^5.4.21",
+    "vitest": "^2.1.9"
   }
 }
