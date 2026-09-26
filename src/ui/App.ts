@@ -71,7 +71,7 @@ export class App {
     const pages: PageModel[] = [];
     const count = engine.pageCount(doc);
     for (let i = 0; i < count; i++) {
-      pages.push({ index: i, sizePt: engine.pageSize(doc, i), rotation: 0, runs: engine.getPageText(doc, i) });
+      pages.push({ index: i, sizePt: engine.pageSize(doc, i), rotation: engine.pageRotation(doc, i), runs: engine.getPageText(doc, i) });
     }
     this.model = new DocumentModel(pages);
     this.bus = new CommandBus({ engine, model: this.model, doc });

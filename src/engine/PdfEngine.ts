@@ -34,6 +34,8 @@ export interface PdfEngine {
   open(bytes: Uint8Array): Promise<DocHandle>;
   pageCount(doc: DocHandle): number;
   pageSize(doc: DocHandle, pageIndex: number): SizePt;
+  /** Rotación de la página en grados: 0, 90, 180 o 270. */
+  pageRotation(doc: DocHandle, pageIndex: number): 0 | 90 | 180 | 270;
   /** Renderiza la página a un bitmap RGBA a la escala dada. */
   renderPage(doc: DocHandle, pageIndex: number, scale: number): RenderResult;
   /** Runs de texto de la página, con su caja, fuente, tamaño y color. Vacío si no hay texto (escaneado). */

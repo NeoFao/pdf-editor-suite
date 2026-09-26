@@ -41,6 +41,17 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
+  pageRotation(doc: DocHandle, pageIndex: number): 0 | 90 | 180 | 270 {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const grados = (this.p.FPDFPage_GetRotation(page) * 90) % 360;
+      return grados as 0 | 90 | 180 | 270;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
   renderPage(doc: DocHandle, pageIndex: number, scale: number): RenderResult {
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
