@@ -1,24 +1,26 @@
 import { PdfiumEngine } from '../engine/pdfium/PdfiumEngine';
-import type { DocHandle } from '../engine/PdfEngine';
-import { DocumentModel } from '../model/DocumentModel';
-import type { PageModel } from '../model/types';
+import { EditSession } from '../model/EditSession';
 import { CommandBus } from '../commands/Command';
 import { EditTextRunCmd } from '../commands/EditTextRun';
+import { DeleteRunCmd } from '../commands/DeleteRun';
+import { InsertTextCmd } from '../commands/InsertText';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
+import type { PtPoint } from '../coords/PageGeometry';
 
-/** Orquesta motor + modelo + comandos + visor. Punto de entrada de la app nueva. */
+/** Orquesta motor + sesión + comandos + visor. Punto de entrada de la app nueva. */
 export class App {
   private engine!: PdfiumEngine;
-  private doc: DocHandle | null = null;
-  private model: DocumentModel | null = null;
+  private session: EditSession | null = null;
   private bus: CommandBus | null = null;
-  private viewer: Viewer | null = null;
   private docName = 'documento.pdf';
+  private insertMode = false;
+  private selection: { pageIndex: number; runId: number } | null = null;
   private readonly viewerEl: HTMLElement;
   private readonly status: HTMLElement;
+  private readonly btnInsert: HTMLButtonElement;
 
-  constructor(private readonly rootEl: HTMLElement) {
+  constructor(rootEl: HTMLElement) {
     rootEl.textContent = '';
     const bar = document.createElement('div');
     bar.className = 'toolbar';
@@ -28,14 +30,16 @@ export class App {
     file.type = 'file'; file.accept = 'application/pdf'; file.id = 'file-input';
     file.addEventListener('change', () => { const f = file.files?.[0]; if (f) void this.openFile(f); });
 
+    this.btnInsert = this.button('Insertar texto', 'btn-insert', () => this.toggleInsert());
+    const btnDelete = this.button('Borrar', 'btn-delete', () => this.deleteSelected());
     const btnSave = this.button('Guardar', 'btn-save', () => this.save());
-    const btnUndo = this.button('Deshacer', 'btn-undo', () => { this.bus?.undo(); });
-    const btnRedo = this.button('Rehacer', 'btn-redo', () => { this.bus?.redo(); });
+    const btnUndo = this.button('Deshacer', 'btn-undo', () => { void this.bus?.undo(); });
+    const btnRedo = this.button('Rehacer', 'btn-redo', () => { void this.bus?.redo(); });
 
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     this.viewerEl = document.createElement('div');
@@ -44,8 +48,8 @@ export class App {
     rootEl.appendChild(this.viewerEl);
 
     document.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); this.bus?.undo(); }
-      if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'y')) { e.preventDefault(); this.bus?.redo(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); void this.bus?.undo(); }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); void this.bus?.redo(); }
     });
   }
 
@@ -53,6 +57,12 @@ export class App {
     const b = document.createElement('button');
     b.textContent = label; b.id = id; b.addEventListener('click', onClick);
     return b;
+  }
+
+  private toggleInsert(): void {
+    this.insertMode = !this.insertMode;
+    this.btnInsert.style.background = this.insertMode ? '#c7d2fe' : '';
+    this.setStatus(this.insertMode ? 'Modo insertar: haz clic donde quieras el texto.' : 'Modo insertar desactivado.');
   }
 
   private async ensureEngine(): Promise<PdfiumEngine> {
@@ -63,41 +73,55 @@ export class App {
   async openFile(file: File): Promise<void> {
     this.setStatus('Cargando…');
     const engine = await this.ensureEngine();
-    if (this.doc !== null) engine.close(this.doc);
+    if (this.session) engine.close(this.session.doc);
     this.docName = file.name || 'documento.pdf';
     const bytes = new Uint8Array(await file.arrayBuffer());
-    const doc = await engine.open(bytes);
-    this.doc = doc;
-    const pages: PageModel[] = [];
-    const count = engine.pageCount(doc);
-    for (let i = 0; i < count; i++) {
-      pages.push({ index: i, sizePt: engine.pageSize(doc, i), rotation: 0, runs: engine.getPageText(doc, i) });
-    }
-    this.model = new DocumentModel(pages);
-    this.bus = new CommandBus({ engine, model: this.model, doc });
+    this.session = await EditSession.open(engine, bytes);
+    this.bus = new CommandBus(this.session);
+    this.selection = null;
     this.viewerEl.textContent = '';
-    this.viewer = new Viewer(this.viewerEl, engine, doc, this.model, (req) => this.handleEdit(req));
-    this.setStatus(`${count} página(s)`);
+    new Viewer(this.viewerEl, this.session, {
+      onEdit: (req) => this.handleEdit(req),
+      onSelect: (pageIndex, runId) => { this.selection = { pageIndex, runId }; },
+      onBackgroundClick: (pageIndex, at) => { void this.handleInsert(pageIndex, at); }
+    });
+    this.setStatus(`${this.session.model.pages.length} página(s)`);
   }
 
   private handleEdit(req: EditRequest): void {
-    if (!this.doc || !this.engine || !this.model || !this.bus) return;
-    const res = this.engine.editTextRun(this.doc, req.pageIndex, req.runId, req.newText);
+    const s = this.session;
+    if (!s || !this.bus) return;
+    const res = s.engine.editTextRun(s.doc, req.pageIndex, req.runId, req.newText);
     if (!res.ok) {
-      req.el.textContent = req.oldText; // revertir la vista
+      req.el.textContent = req.oldText;
       this.setStatus(res.reason === 'glyph-missing'
         ? 'La fuente de esa línea no tiene alguno de esos caracteres; edición no aplicada.'
         : 'No se puede editar ese elemento.');
       return;
     }
-    this.model.updateRunText(req.pageIndex, req.runId, req.newText);
+    s.model.updateRunText(req.pageIndex, req.runId, req.newText);
     this.bus.pushExecuted(new EditTextRunCmd(req.pageIndex, req.runId, req.newText, req.oldText));
     this.setStatus('Editado.');
   }
 
+  private async handleInsert(pageIndex: number, at: PtPoint): Promise<void> {
+    if (!this.insertMode || !this.bus) return;
+    await this.bus.execute(new InsertTextCmd(pageIndex, { xPt: at.xPt, yPt: at.yPt, text: 'Texto nuevo', sizePt: 16 }));
+    this.setStatus('Texto insertado. Haz clic en él para editarlo.');
+  }
+
+  private async deleteSelected(): Promise<void> {
+    if (!this.bus || !this.selection) { this.setStatus('Selecciona primero una línea (haz clic en ella).'); return; }
+    const { pageIndex, runId } = this.selection;
+    this.selection = null;
+    await this.bus.execute(new DeleteRunCmd(pageIndex, runId));
+    this.setStatus('Línea borrada del documento.');
+  }
+
   private save(): void {
-    if (!this.doc || !this.engine) return;
-    const bytes = this.engine.save(this.doc);
+    const s = this.session;
+    if (!s) return;
+    const bytes = s.engine.save(s.doc);
     const blob = new Blob([bytes], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

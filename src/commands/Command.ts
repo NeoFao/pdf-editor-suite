@@ -1,14 +1,25 @@
 import type { PdfEngine, DocHandle } from '../engine/PdfEngine';
 import type { DocumentModel } from '../model/DocumentModel';
 
-export interface Ctx { engine: PdfEngine; model: DocumentModel; doc: DocHandle }
+/**
+ * Contexto que reciben los comandos. Lo cumple EditSession: expone el motor, el
+ * documento actual (cambia tras un reload), el modelo, y las operaciones de
+ * recarga por snapshot (reload) y de reconstrucción del modelo (refresh).
+ */
+export interface Ctx {
+  readonly engine: PdfEngine;
+  readonly doc: DocHandle;
+  readonly model: DocumentModel;
+  reload(bytes: Uint8Array): Promise<void>;
+  refresh(): void;
+}
 
 export interface Command {
   readonly id: string;
   readonly label: string;
   readonly coalesceKey?: string;
-  execute(c: Ctx): void;
-  undo(c: Ctx): void;
+  execute(c: Ctx): void | Promise<void>;
+  undo(c: Ctx): void | Promise<void>;
   /** Si comparte coalesceKey con el comando previo, devuelve el comando fusionado (o null). */
   coalesce?(prev: Command): Command | null;
 }
@@ -20,8 +31,8 @@ export class CommandBus {
   constructor(private readonly ctx: Ctx) {}
 
   /** Aplica el comando y lo registra. */
-  execute(cmd: Command): void {
-    cmd.execute(this.ctx);
+  async execute(cmd: Command): Promise<void> {
+    await cmd.execute(this.ctx);
     this.record(cmd);
   }
 
@@ -44,17 +55,17 @@ export class CommandBus {
     this.redoStack = [];
   }
 
-  undo(): void {
+  async undo(): Promise<void> {
     const cmd = this.undoStack.pop();
     if (!cmd) return;
-    cmd.undo(this.ctx);
+    await cmd.undo(this.ctx);
     this.redoStack.push(cmd);
   }
 
-  redo(): void {
+  async redo(): Promise<void> {
     const cmd = this.redoStack.pop();
     if (!cmd) return;
-    cmd.execute(this.ctx);
+    await cmd.execute(this.ctx);
     this.undoStack.push(cmd);
   }
 
