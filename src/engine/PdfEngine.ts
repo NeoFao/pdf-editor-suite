@@ -23,6 +23,12 @@ export interface PdfEngine {
   pageSize(doc: DocHandle, pageIndex: number): SizePt;
   /** Runs de texto de la página, con su caja, fuente, tamaño y color. Vacío si no hay texto (escaneado). */
   getPageText(doc: DocHandle, pageIndex: number): TextRun[];
+  /**
+   * Edita el texto de un run EN SITIO: conserva fuente, tamaño, color y posición.
+   * No crea objetos nuevos ni rasteriza. Devuelve `glyph-missing` (sin modificar)
+   * si la fuente del run no tiene algún glifo del nuevo texto.
+   */
+  editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult;
   save(doc: DocHandle): Uint8Array;
   close(doc: DocHandle): void;
 }

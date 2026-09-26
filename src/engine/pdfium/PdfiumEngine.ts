@@ -1,6 +1,6 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, type Mem } from './mem';
-import type { PdfEngine, DocHandle, SizePt, TextRun } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 
@@ -85,6 +85,37 @@ export class PdfiumEngine implements PdfEngine {
     const left = m.getValue(l, 'float'), bottom = m.getValue(bo, 'float'), right = m.getValue(ri, 'float'), top = m.getValue(to, 'float');
     [l, bo, ri, to].forEach((ptr) => m.free(ptr));
     return { runId, text, sizePt, fontName, color, boxPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom } };
+  }
+
+  editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, runId);
+      if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
+        return { ok: false, reason: 'not-a-text-run' };
+      }
+      // La fuente del propio run: garantiza que el texto nuevo se dibuja con ella.
+      const font = this.p.FPDFTextObj_GetFont(obj);
+      const fs = this.mem.malloc(4); this.p.FPDFTextObj_GetFontSize(obj, fs);
+      const size = this.mem.getValue(fs, 'float'); this.mem.free(fs);
+      // Si la fuente no tiene el glifo de algún carácter (no blanco), no editamos.
+      for (const ch of newText) {
+        if (/\s/.test(ch)) continue;
+        const cp = ch.codePointAt(0)!;
+        if (this.p.FPDFFont_GetGlyphPath(font, cp, size) === 0) {
+          return { ok: false, reason: 'glyph-missing' };
+        }
+      }
+      // Edición EN SITIO: mismo objeto → conserva fuente, tamaño, color y matriz.
+      const wptr = this.mem.wide(newText);
+      this.p.FPDFText_SetText(obj, wptr);
+      this.mem.free(wptr);
+      this.p.FPDFPage_GenerateContent(page);
+      return { ok: true };
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
   }
 
   save(doc: DocHandle): Uint8Array {
