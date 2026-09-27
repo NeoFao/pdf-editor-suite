@@ -72,6 +72,17 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
+  extractPages(doc: DocHandle, pageIndices: number[]): Uint8Array<ArrayBuffer> {
+    const dest = this.p.FPDF_CreateNewDocument();
+    try {
+      const range = pageIndices.map((i) => i + 1).join(','); // 1-based, "1,3,5"
+      this.p.FPDF_ImportPages(dest, doc, range, 0);
+      return this.save(dest);
+    } finally {
+      this.p.FPDF_CloseDocument(dest);
+    }
+  }
+
   movePage(doc: DocHandle, fromIndex: number, toIndex: number): boolean {
     const arr = this.mem.malloc(4);
     this.mem.setValue(arr, fromIndex, 'i32');

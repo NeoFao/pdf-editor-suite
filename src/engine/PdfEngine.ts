@@ -67,6 +67,8 @@ export interface PdfEngine {
   movePage(doc: DocHandle, fromIndex: number, toIndex: number): boolean;
   /** Inserta todas las páginas de otro PDF (`srcBytes`) en la posición `atIndex`. */
   importPages(doc: DocHandle, srcBytes: Uint8Array, atIndex: number): boolean;
+  /** Crea un PDF nuevo con las páginas indicadas (por índice) y devuelve sus bytes. */
+  extractPages(doc: DocHandle, pageIndices: number[]): Uint8Array<ArrayBuffer>;
   save(doc: DocHandle): Uint8Array<ArrayBuffer>;
   close(doc: DocHandle): void;
 }
