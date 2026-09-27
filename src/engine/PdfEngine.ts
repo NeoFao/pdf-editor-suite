@@ -68,6 +68,8 @@ export interface PdfEngine {
   insertText(doc: DocHandle, pageIndex: number, spec: InsertTextSpec): number;
   /** Inserta una imagen (RGBA) en la página, colocada en el rectángulo dado. */
   insertImage(doc: DocHandle, pageIndex: number, spec: InsertImageSpec): boolean;
+  /** Añade un resaltado (rectángulo de color, blend Multiply) sobre la caja dada. */
+  highlightRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean;
   /** Desplaza un run por (dxPt, dyPt) en puntos PDF. Reversible con el delta inverso. */
   moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean;
   /** Cambia el color de relleno de un run (RGB 0-255). */

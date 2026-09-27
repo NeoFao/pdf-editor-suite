@@ -355,6 +355,24 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
+  highlightRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const obj = this.p.FPDFPageObj_CreateNewRect(rect.xPt, rect.yPt, rect.wPt, rect.hPt);
+      this.p.FPDFPath_SetDrawMode(obj, 2, false); // 2 = relleno por winding, sin trazo
+      const [r, g, b] = color;
+      this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
+      // Multiply: amarillo * blanco = amarillo; el texto negro sigue negro (marcador real).
+      this.p.FPDFPageObj_SetBlendMode(obj, 'Multiply');
+      this.p.FPDFPage_InsertObject(page, obj);
+      this.p.FPDFPage_GenerateContent(page);
+      return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
   save(doc: DocHandle): Uint8Array<ArrayBuffer> {
     const chunks: Uint8Array[] = [];
     const cb = this.mem.addFunction((_pThis: number, pData: number, size: number): number => {
