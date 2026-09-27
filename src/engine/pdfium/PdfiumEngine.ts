@@ -58,6 +58,20 @@ export class PdfiumEngine implements PdfEngine {
     this.p.FPDFPage_Delete(doc, pageIndex);
   }
 
+  importPages(doc: DocHandle, srcBytes: Uint8Array, atIndex: number): boolean {
+    const srcPtr = this.mem.copyIn(srcBytes);
+    const srcDoc = this.p.FPDF_LoadMemDocument(srcPtr, srcBytes.length, '');
+    if (!srcDoc) { this.mem.free(srcPtr); throw new Error('El PDF a insertar no es válido'); }
+    try {
+      const n = this.p.FPDF_GetPageCount(srcDoc);
+      return this.p.FPDF_ImportPages(doc, srcDoc, `1-${n}`, atIndex);
+    } finally {
+      // Las páginas se copian a fondo en el destino; el origen puede cerrarse ya.
+      this.p.FPDF_CloseDocument(srcDoc);
+      this.mem.free(srcPtr);
+    }
+  }
+
   movePage(doc: DocHandle, fromIndex: number, toIndex: number): boolean {
     const arr = this.mem.malloc(4);
     this.mem.setValue(arr, fromIndex, 'i32');

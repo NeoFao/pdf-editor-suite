@@ -65,6 +65,8 @@ export interface PdfEngine {
   deletePage(doc: DocHandle, pageIndex: number): void;
   /** Mueve la página de `fromIndex` a `toIndex` (reordena). */
   movePage(doc: DocHandle, fromIndex: number, toIndex: number): boolean;
+  /** Inserta todas las páginas de otro PDF (`srcBytes`) en la posición `atIndex`. */
+  importPages(doc: DocHandle, srcBytes: Uint8Array, atIndex: number): boolean;
   save(doc: DocHandle): Uint8Array<ArrayBuffer>;
   close(doc: DocHandle): void;
 }

@@ -9,6 +9,7 @@ import { SetColorCmd } from '../commands/SetColor';
 import { RotatePageCmd } from '../commands/RotatePage';
 import { DeletePageCmd } from '../commands/DeletePage';
 import { MovePageCmd } from '../commands/MovePage';
+import { InsertPdfCmd } from '../commands/InsertPdf';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
@@ -37,7 +38,7 @@ export class App {
     rootEl.textContent = '';
     const bar = document.createElement('div');
     bar.className = 'toolbar';
-    Object.assign(bar.style, { display: 'flex', gap: '8px', alignItems: 'center', padding: '8px', borderBottom: '1px solid #ccc', font: '14px sans-serif' });
+    Object.assign(bar.style, { display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', padding: '8px', borderBottom: '1px solid #ccc', font: '14px sans-serif', flex: '0 0 auto' });
 
     const file = document.createElement('input');
     file.type = 'file'; file.accept = 'application/pdf'; file.id = 'file-input';
@@ -60,6 +61,10 @@ export class App {
     const btnDeletePage = this.button('Eliminar pág', 'btn-delete-page', () => this.deleteCurrentPage());
     const btnPageUp = this.button('Subir', 'btn-page-up', () => this.moveCurrentPage(-1));
     const btnPageDown = this.button('Bajar', 'btn-page-down', () => this.moveCurrentPage(1));
+
+    const insertPdf = document.createElement('input');
+    insertPdf.type = 'file'; insertPdf.accept = 'application/pdf'; insertPdf.id = 'btn-insert-pdf'; insertPdf.title = 'Insertar otro PDF tras la página actual';
+    insertPdf.addEventListener('change', () => { const f = insertPdf.files?.[0]; if (f) void this.handleInsertPdf(f).finally(() => { insertPdf.value = ''; }); });
     this.pageIndicator = document.createElement('span');
     this.pageIndicator.id = 'page-indicator'; this.pageIndicator.style.font = '13px sans-serif'; this.pageIndicator.textContent = '– / –';
 
@@ -72,12 +77,13 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnPageUp, btnPageDown, btnZoomOut, btnZoomIn, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnPageUp, btnPageDown, insertPdf, btnZoomOut, btnZoomIn, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
-    // Área inferior: miniaturas (izquierda) + visor (derecha).
+    // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
+    // siempre quede bajo la barra aunque esta ocupe varias filas.
     const area = document.createElement('div');
-    Object.assign(area.style, { position: 'absolute', top: '52px', bottom: '0', left: '0', right: '0', display: 'flex' });
+    Object.assign(area.style, { flex: '1', minHeight: '0', display: 'flex' });
 
     this.thumbsEl = document.createElement('div');
     this.thumbsEl.id = 'thumbs';
@@ -202,6 +208,13 @@ export class App {
     if (!this.bus || total <= 1) { this.setStatus('No se puede eliminar la única página.'); return; }
     void this.bus.execute(new DeletePageCmd(this.currentPage));
     this.setStatus('Página eliminada.');
+  }
+
+  private async handleInsertPdf(file: File): Promise<void> {
+    if (!this.bus) return;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    await this.bus.execute(new InsertPdfCmd(bytes, this.currentPage + 1));
+    this.setStatus('PDF insertado.');
   }
 
   private moveCurrentPage(delta: number): void {
