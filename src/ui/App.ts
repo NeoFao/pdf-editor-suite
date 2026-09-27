@@ -13,6 +13,7 @@ import { InsertPdfCmd } from '../commands/InsertPdf';
 import { DuplicatePageCmd } from '../commands/DuplicatePage';
 import { InsertImageCmd } from '../commands/InsertImage';
 import { HighlightRunCmd } from '../commands/HighlightRun';
+import { SignaturePad } from './SignaturePad';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
@@ -50,6 +51,7 @@ export class App {
     this.btnInsert = this.button('Insertar texto', 'btn-insert', () => this.toggleInsert());
     const btnDelete = this.button('Borrar', 'btn-delete', () => this.deleteSelected());
     const btnHighlight = this.button('Resaltar', 'btn-highlight', () => this.highlightSelected());
+    const btnSign = this.button('Firmar', 'btn-sign', () => this.openSignature());
 
     this.colorInput = document.createElement('input');
     this.colorInput.type = 'color'; this.colorInput.id = 'btn-color'; this.colorInput.title = 'Color de la línea seleccionada';
@@ -87,7 +89,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, btnHighlight, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, btnHighlight, btnSign, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -218,6 +220,20 @@ export class App {
     if (!this.bus || total <= 1) { this.setStatus('No se puede eliminar la única página.'); return; }
     void this.bus.execute(new DeletePageCmd(this.currentPage));
     this.setStatus('Página eliminada.');
+  }
+
+  private openSignature(): void {
+    const s = this.session;
+    if (!s || !this.bus) { this.setStatus('Abre un documento antes de firmar.'); return; }
+    SignaturePad.open((rgba, imgWidth, imgHeight) => {
+      const page = s.model.pages[this.currentPage]!;
+      const wPt = Math.min(page.sizePt.widthPt * 0.4, 180);
+      const hPt = wPt * (imgHeight / imgWidth);
+      const xPt = (page.sizePt.widthPt - wPt) / 2;
+      const yPt = page.sizePt.heightPt * 0.15;
+      void this.bus!.execute(new InsertImageCmd(this.currentPage, { rgba, imgWidth, imgHeight, xPt, yPt, wPt, hPt }));
+      this.setStatus('Firma insertada.');
+    });
   }
 
   private highlightSelected(): void {
