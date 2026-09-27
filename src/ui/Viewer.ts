@@ -13,6 +13,7 @@ export interface ViewerCallbacks {
   onBackgroundClick: (pageIndex: number, at: PtPoint) => void;
   onMove: (pageIndex: number, runId: number, dxPt: number, dyPt: number) => void;
   onPageChange?: (pageIndex: number) => void;
+  onStroke?: (pageIndex: number, points: PtPoint[]) => void;
 }
 
 /** Renderiza páginas visibles (canvas del motor) con su capa de texto encima. */
@@ -24,6 +25,7 @@ export class Viewer {
   private highlights = new Map<number, RectPt[]>();
   private observer: IntersectionObserver | null = null;
   private currentPage = 0;
+  private penMode = false;
 
   constructor(
     private readonly root: HTMLElement,
@@ -47,6 +49,55 @@ export class Viewer {
   /** Desplaza el visor hasta la página indicada. */
   scrollToPage(i: number): void {
     this.wrappers[i]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+
+  /** Activa/desactiva el modo pluma (la capa de dibujo captura el puntero). */
+  setPenMode(on: boolean): void {
+    this.penMode = on;
+    this.root.querySelectorAll('.pen-layer').forEach((el) => {
+      (el as HTMLElement).style.pointerEvents = on ? 'auto' : 'none';
+    });
+  }
+
+  /** Capa transparente por página que dibuja el trazo y emite los puntos en pt. */
+  private attachPenCapture(pen: HTMLElement, pageIndex: number): void {
+    let pts: Array<[number, number]> = [];
+    let drawing = false;
+    let preview: HTMLCanvasElement | null = null;
+    const at = (e: PointerEvent): [number, number] => {
+      const r = pen.getBoundingClientRect();
+      return [e.clientX - r.left, e.clientY - r.top];
+    };
+    pen.addEventListener('pointerdown', (e) => {
+      drawing = true; pts = [at(e)]; pen.setPointerCapture(e.pointerId);
+      preview = document.createElement('canvas');
+      preview.width = pen.clientWidth; preview.height = pen.clientHeight;
+      Object.assign(preview.style, { position: 'absolute', inset: '0' });
+      pen.appendChild(preview);
+    });
+    pen.addEventListener('pointermove', (e) => {
+      if (!drawing || !preview) return;
+      pts.push(at(e));
+      const ctx = preview.getContext('2d')!;
+      ctx.clearRect(0, 0, preview.width, preview.height);
+      ctx.strokeStyle = '#dc1414'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+      ctx.beginPath(); ctx.moveTo(pts[0]![0], pts[0]![1]);
+      for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
+      ctx.stroke();
+    });
+    const finish = (): void => {
+      if (!drawing) return;
+      drawing = false;
+      preview?.remove(); preview = null;
+      if (pts.length >= 2) {
+        const geom = this.geoms[pageIndex]!;
+        const ptPts = pts.map(([x, y]) => geom.cssToPt(x, y));
+        this.cb.onStroke?.(pageIndex, ptPts);
+      }
+      pts = [];
+    };
+    pen.addEventListener('pointerup', finish);
+    pen.addEventListener('pointercancel', finish);
   }
 
   private observeVisible(): void {
@@ -175,5 +226,12 @@ export class Viewer {
       }
     });
     this.drawHighlights(i); // conserva los resaltados tras un re-render
+
+    // Capa de captura de pluma (encima de todo; solo activa en modo pluma).
+    const pen = document.createElement('div');
+    pen.className = 'pen-layer';
+    Object.assign(pen.style, { position: 'absolute', inset: '0', pointerEvents: this.penMode ? 'auto' : 'none', cursor: 'crosshair' });
+    this.attachPenCapture(pen, i);
+    wrapper.appendChild(pen);
   }
 }

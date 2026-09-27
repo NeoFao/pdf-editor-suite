@@ -373,6 +373,25 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
+  drawStroke(doc: DocHandle, pageIndex: number, points: { xPt: number; yPt: number }[], color: [number, number, number], widthPt: number): boolean {
+    if (points.length < 2) return false;
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const path = this.p.FPDFPageObj_CreateNewPath(points[0]!.xPt, points[0]!.yPt);
+      for (let i = 1; i < points.length; i++) this.p.FPDFPath_LineTo(path, points[i]!.xPt, points[i]!.yPt);
+      const [r, g, b] = color;
+      this.p.FPDFPageObj_SetStrokeColor(path, r, g, b, 255);
+      this.p.FPDFPageObj_SetStrokeWidth(path, widthPt);
+      this.p.FPDFPath_SetDrawMode(path, 0, true); // sin relleno, con trazo
+      this.p.FPDFPage_InsertObject(page, path);
+      this.p.FPDFPage_GenerateContent(page);
+      return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
   save(doc: DocHandle): Uint8Array<ArrayBuffer> {
     const chunks: Uint8Array[] = [];
     const cb = this.mem.addFunction((_pThis: number, pData: number, size: number): number => {

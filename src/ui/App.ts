@@ -13,6 +13,7 @@ import { InsertPdfCmd } from '../commands/InsertPdf';
 import { DuplicatePageCmd } from '../commands/DuplicatePage';
 import { InsertImageCmd } from '../commands/InsertImage';
 import { HighlightRunCmd } from '../commands/HighlightRun';
+import { DrawStrokeCmd } from '../commands/DrawStroke';
 import { SignaturePad } from './SignaturePad';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
@@ -26,6 +27,7 @@ export class App {
   private bus: CommandBus | null = null;
   private docName = 'documento.pdf';
   private insertMode = false;
+  private penMode = false;
   private selection: { pageIndex: number; runId: number } | null = null;
   private viewer: Viewer | null = null;
   private scale = 1;
@@ -34,6 +36,7 @@ export class App {
   private readonly status: HTMLElement;
   private readonly pageIndicator: HTMLElement;
   private readonly btnInsert: HTMLButtonElement;
+  private readonly btnPen: HTMLButtonElement;
   private readonly colorInput: HTMLInputElement;
   private readonly searchInput: HTMLInputElement;
   private currentPage = 0;
@@ -52,6 +55,7 @@ export class App {
     const btnDelete = this.button('Borrar', 'btn-delete', () => this.deleteSelected());
     const btnHighlight = this.button('Resaltar', 'btn-highlight', () => this.highlightSelected());
     const btnSign = this.button('Firmar', 'btn-sign', () => this.openSignature());
+    this.btnPen = this.button('Pluma', 'btn-pen', () => this.togglePen());
 
     this.colorInput = document.createElement('input');
     this.colorInput.type = 'color'; this.colorInput.id = 'btn-color'; this.colorInput.title = 'Color de la línea seleccionada';
@@ -89,7 +93,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, btnHighlight, btnSign, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, btnHighlight, btnSign, this.btnPen, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -122,8 +126,17 @@ export class App {
 
   private toggleInsert(): void {
     this.insertMode = !this.insertMode;
+    if (this.insertMode && this.penMode) { this.penMode = false; this.btnPen.style.background = ''; this.viewer?.setPenMode(false); }
     this.btnInsert.style.background = this.insertMode ? '#c7d2fe' : '';
     this.setStatus(this.insertMode ? 'Modo insertar: haz clic donde quieras el texto.' : 'Modo insertar desactivado.');
+  }
+
+  private togglePen(): void {
+    this.penMode = !this.penMode;
+    if (this.penMode && this.insertMode) { this.insertMode = false; this.btnInsert.style.background = ''; }
+    this.btnPen.style.background = this.penMode ? '#c7d2fe' : '';
+    this.viewer?.setPenMode(this.penMode);
+    this.setStatus(this.penMode ? 'Modo pluma: arrastra para dibujar.' : 'Modo pluma desactivado.');
   }
 
   private async ensureEngine(): Promise<PdfiumEngine> {
@@ -140,6 +153,8 @@ export class App {
     this.session = await EditSession.open(engine, bytes);
     this.bus = new CommandBus(this.session);
     this.selection = null;
+    this.insertMode = false; this.penMode = false;
+    this.btnInsert.style.background = ''; this.btnPen.style.background = '';
     this.viewerEl.textContent = '';
     this.scale = 1;
     this.viewer = new Viewer(this.viewerEl, this.session, {
@@ -147,7 +162,8 @@ export class App {
       onSelect: (pageIndex, runId) => { this.selection = { pageIndex, runId }; this.reflectColor(); },
       onBackgroundClick: (pageIndex, at) => { void this.handleInsert(pageIndex, at); },
       onMove: (pageIndex, runId, dxPt, dyPt) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt)); },
-      onPageChange: (i) => { this.currentPage = i; this.updateIndicator(); this.setActiveThumb(i); }
+      onPageChange: (i) => { this.currentPage = i; this.updateIndicator(); this.setActiveThumb(i); },
+      onStroke: (pageIndex, points) => { void this.bus?.execute(new DrawStrokeCmd(pageIndex, points)); this.setStatus('Trazo dibujado.'); }
     });
     this.currentPage = 0;
     // Tras una operación de página (rotar/eliminar → refresh), rehacer miniaturas.
