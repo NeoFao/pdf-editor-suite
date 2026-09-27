@@ -70,6 +70,7 @@ export class App {
 
     const btnZoomOut = this.button('−', 'btn-zoom-out', () => this.zoom(1 / 1.25));
     const btnZoomIn = this.button('+', 'btn-zoom-in', () => this.zoom(1.25));
+    const btnExtract = this.button('Extraer pág.', 'btn-extract', () => this.extractCurrent());
     const btnSave = this.button('Guardar', 'btn-save', () => this.save());
     const btnUndo = this.button('Deshacer', 'btn-undo', () => { void this.bus?.undo(); });
     const btnRedo = this.button('Rehacer', 'btn-redo', () => { void this.bus?.redo(); });
@@ -77,7 +78,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnPageUp, btnPageDown, insertPdf, btnZoomOut, btnZoomIn, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnPageUp, btnPageDown, insertPdf, btnZoomOut, btnZoomIn, btnExtract, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -288,15 +289,25 @@ export class App {
   private save(): void {
     const s = this.session;
     if (!s) return;
-    const bytes = s.engine.save(s.doc);
-    const blob = new Blob([bytes], { type: 'application/pdf' });
-    const url = URL.createObjectURL(blob);
+    this.download(s.engine.save(s.doc), this.docName.replace(/\.pdf$/i, '') + '_editado.pdf');
+    this.setStatus('Guardado.');
+  }
+
+  private extractCurrent(): void {
+    const s = this.session;
+    if (!s) return;
+    const bytes = s.engine.extractPages(s.doc, [this.currentPage]);
+    this.download(bytes, `${this.docName.replace(/\.pdf$/i, '')}_pagina_${this.currentPage + 1}.pdf`);
+    this.setStatus(`Página ${this.currentPage + 1} extraída.`);
+  }
+
+  private download(bytes: Uint8Array<ArrayBuffer>, filename: string): void {
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = this.docName.replace(/\.pdf$/i, '') + '_editado.pdf';
+    a.download = filename;
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-    this.setStatus('Guardado.');
   }
 
   private setStatus(msg: string): void { this.status.textContent = msg; }
