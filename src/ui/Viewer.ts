@@ -3,6 +3,7 @@ import type { EditSession } from '../model/EditSession';
 import { visiblePageIndices } from './layout';
 import { TextLayer, type EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
+import type { RectPt } from '../engine/PdfEngine';
 
 const GAP = 16;
 
@@ -19,6 +20,7 @@ export class Viewer {
   private geoms: PageGeometry[] = [];
   private rendered = new Set<number>();
   private scale = 1;
+  private highlights = new Map<number, RectPt[]>();
 
   constructor(
     private readonly root: HTMLElement,
@@ -37,6 +39,36 @@ export class Viewer {
   setScale(scale: number): void {
     this.scale = scale;
     this.rebuild();
+  }
+
+  /** Fija las coincidencias de búsqueda a resaltar por página y las repinta. */
+  setHighlights(byPage: Map<number, RectPt[]>): void {
+    this.highlights = byPage;
+    for (let i = 0; i < this.wrappers.length; i++) this.drawHighlights(i);
+  }
+
+  private drawHighlights(i: number): void {
+    const wrapper = this.wrappers[i];
+    if (!wrapper) return;
+    wrapper.querySelector('.hl-layer')?.remove();
+    const rects = this.highlights.get(i);
+    if (!rects || rects.length === 0) return;
+    const geom = this.geoms[i]!;
+    const layer = document.createElement('div');
+    layer.className = 'hl-layer';
+    Object.assign(layer.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
+    for (const r of rects) {
+      const c = geom.rectPtToCss(r);
+      const box = document.createElement('div');
+      box.className = 'search-hl';
+      Object.assign(box.style, {
+        position: 'absolute', left: `${c.left}px`, top: `${c.top}px`,
+        width: `${c.width}px`, height: `${c.height}px`,
+        background: 'rgba(250, 204, 21, .45)', outline: '1px solid #eab308'
+      });
+      layer.appendChild(box);
+    }
+    wrapper.appendChild(layer);
   }
 
   private rebuild(): void {
@@ -115,5 +147,6 @@ export class Viewer {
         this.cb.onMove(pageIndex, runId, d.xPt - o.xPt, d.yPt - o.yPt);
       }
     });
+    this.drawHighlights(i); // conserva los resaltados tras un re-render
   }
 }

@@ -1,6 +1,6 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, type Mem } from './mem';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult, InsertTextSpec } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult, InsertTextSpec, RectPt } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 
@@ -81,6 +81,40 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDFBitmap_Destroy(bmp);
       this.p.FPDF_ClosePage(page);
     }
+  }
+
+  findText(doc: DocHandle, pageIndex: number, query: string): RectPt[] {
+    if (!query) return [];
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const textPage = this.p.FPDFText_LoadPage(page);
+    const wq = this.mem.wide(query);
+    const sh = this.p.FPDFText_FindStart(textPage, wq, 0, 0); // flags 0 = insensible a mayúsculas
+    const matches: RectPt[] = [];
+    try {
+      while (this.p.FPDFText_FindNext(sh)) {
+        const start = this.p.FPDFText_GetSchResultIndex(sh);
+        const count = this.p.FPDFText_GetSchCount(sh);
+        let minL = Infinity, minB = Infinity, maxR = -Infinity, maxT = -Infinity;
+        for (let k = 0; k < count; k++) {
+          const l = this.mem.malloc(8), r = this.mem.malloc(8), b = this.mem.malloc(8), t = this.mem.malloc(8);
+          this.p.FPDFText_GetCharBox(textPage, start + k, l, r, b, t); // left, right, bottom, top (doubles)
+          const L = this.mem.getValue(l, 'double'), R = this.mem.getValue(r, 'double');
+          const B = this.mem.getValue(b, 'double'), T = this.mem.getValue(t, 'double');
+          [l, r, b, t].forEach((ptr) => this.mem.free(ptr));
+          if (R <= L || T <= B) continue; // char sin caja (espacios)
+          minL = Math.min(minL, L); maxR = Math.max(maxR, R);
+          minB = Math.min(minB, B); maxT = Math.max(maxT, T);
+        }
+        if (Number.isFinite(minL)) matches.push({ xPt: minL, yPt: minB, wPt: maxR - minL, hPt: maxT - minB });
+      }
+    } finally {
+      this.p.FPDFText_FindClose(sh);
+      this.mem.free(wq);
+      this.p.FPDFText_ClosePage(textPage);
+      this.p.FPDF_ClosePage(page);
+    }
+    return matches;
   }
 
   getPageText(doc: DocHandle, pageIndex: number): TextRun[] {
