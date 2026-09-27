@@ -63,6 +63,8 @@ export interface PdfEngine {
   rotatePage(doc: DocHandle, pageIndex: number, deltaDeg: number): 0 | 90 | 180 | 270;
   /** Elimina la página del documento. */
   deletePage(doc: DocHandle, pageIndex: number): void;
+  /** Mueve la página de `fromIndex` a `toIndex` (reordena). */
+  movePage(doc: DocHandle, fromIndex: number, toIndex: number): boolean;
   save(doc: DocHandle): Uint8Array<ArrayBuffer>;
   close(doc: DocHandle): void;
 }
