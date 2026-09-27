@@ -6,6 +6,8 @@ import { DeleteRunCmd } from '../commands/DeleteRun';
 import { InsertTextCmd } from '../commands/InsertText';
 import { MoveRunCmd } from '../commands/MoveRun';
 import { SetColorCmd } from '../commands/SetColor';
+import { RotatePageCmd } from '../commands/RotatePage';
+import { DeletePageCmd } from '../commands/DeletePage';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
@@ -53,6 +55,8 @@ export class App {
 
     const btnPrev = this.button('‹', 'btn-prev', () => this.goToPage(this.currentPage - 1));
     const btnNext = this.button('›', 'btn-next', () => this.goToPage(this.currentPage + 1));
+    const btnRotate = this.button('Rotar ⟳', 'btn-rotate', () => { if (this.bus) void this.bus.execute(new RotatePageCmd(this.currentPage, 90)); });
+    const btnDeletePage = this.button('Eliminar pág', 'btn-delete-page', () => this.deleteCurrentPage());
     this.pageIndicator = document.createElement('span');
     this.pageIndicator.id = 'page-indicator'; this.pageIndicator.style.font = '13px sans-serif'; this.pageIndicator.textContent = '– / –';
 
@@ -65,7 +69,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnZoomOut, btnZoomIn, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnZoomOut, btnZoomIn, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha).
@@ -125,6 +129,14 @@ export class App {
       onPageChange: (i) => { this.currentPage = i; this.updateIndicator(); this.setActiveThumb(i); }
     });
     this.currentPage = 0;
+    // Tras una operación de página (rotar/eliminar → refresh), rehacer miniaturas.
+    this.session.model.onReload(() => {
+      const total = this.session?.model.pages.length ?? 0;
+      if (this.currentPage >= total) this.currentPage = Math.max(0, total - 1);
+      this.buildThumbnails();
+      this.setActiveThumb(this.currentPage);
+      this.updateIndicator();
+    });
     this.buildThumbnails();
     this.updateIndicator();
     this.setStatus(`${this.session.model.pages.length} página(s)`);
@@ -180,6 +192,13 @@ export class App {
     if (nuevo[0] === viejo[0] && nuevo[1] === viejo[1] && nuevo[2] === viejo[2]) return;
     void this.bus.execute(new SetColorCmd(this.selection.pageIndex, this.selection.runId, nuevo, viejo));
     this.setStatus('Color aplicado.');
+  }
+
+  private deleteCurrentPage(): void {
+    const total = this.session?.model.pages.length ?? 0;
+    if (!this.bus || total <= 1) { this.setStatus('No se puede eliminar la única página.'); return; }
+    void this.bus.execute(new DeletePageCmd(this.currentPage));
+    this.setStatus('Página eliminada.');
   }
 
   private goToPage(i: number): void {

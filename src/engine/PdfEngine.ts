@@ -59,6 +59,10 @@ export interface PdfEngine {
   moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean;
   /** Cambia el color de relleno de un run (RGB 0-255). */
   setRunColor(doc: DocHandle, pageIndex: number, runId: number, color: [number, number, number]): boolean;
+  /** Rota la página por `deltaDeg` (múltiplo de 90). Devuelve la nueva rotación en grados. */
+  rotatePage(doc: DocHandle, pageIndex: number, deltaDeg: number): 0 | 90 | 180 | 270;
+  /** Elimina la página del documento. */
+  deletePage(doc: DocHandle, pageIndex: number): void;
   save(doc: DocHandle): Uint8Array<ArrayBuffer>;
   close(doc: DocHandle): void;
 }
