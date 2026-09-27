@@ -22,10 +22,13 @@ export class App {
   private viewer: Viewer | null = null;
   private scale = 1;
   private readonly viewerEl: HTMLElement;
+  private readonly thumbsEl: HTMLElement;
   private readonly status: HTMLElement;
+  private readonly pageIndicator: HTMLElement;
   private readonly btnInsert: HTMLButtonElement;
   private readonly colorInput: HTMLInputElement;
   private readonly searchInput: HTMLInputElement;
+  private currentPage = 0;
 
   constructor(rootEl: HTMLElement) {
     rootEl.textContent = '';
@@ -48,6 +51,11 @@ export class App {
     this.searchInput.type = 'search'; this.searchInput.id = 'btn-search'; this.searchInput.placeholder = 'Buscar…';
     this.searchInput.addEventListener('input', () => this.search());
 
+    const btnPrev = this.button('‹', 'btn-prev', () => this.goToPage(this.currentPage - 1));
+    const btnNext = this.button('›', 'btn-next', () => this.goToPage(this.currentPage + 1));
+    this.pageIndicator = document.createElement('span');
+    this.pageIndicator.id = 'page-indicator'; this.pageIndicator.style.font = '13px sans-serif'; this.pageIndicator.textContent = '– / –';
+
     const btnZoomOut = this.button('−', 'btn-zoom-out', () => this.zoom(1 / 1.25));
     const btnZoomIn = this.button('+', 'btn-zoom-in', () => this.zoom(1.25));
     const btnSave = this.button('Guardar', 'btn-save', () => this.save());
@@ -57,13 +65,23 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnZoomOut, btnZoomIn, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnZoomOut, btnZoomIn, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
+
+    // Área inferior: miniaturas (izquierda) + visor (derecha).
+    const area = document.createElement('div');
+    Object.assign(area.style, { position: 'absolute', top: '52px', bottom: '0', left: '0', right: '0', display: 'flex' });
+
+    this.thumbsEl = document.createElement('div');
+    this.thumbsEl.id = 'thumbs';
+    Object.assign(this.thumbsEl.style, { width: '150px', flex: '0 0 150px', overflow: 'auto', background: '#3f4145', padding: '8px', boxSizing: 'border-box' });
 
     this.viewerEl = document.createElement('div');
     this.viewerEl.id = 'viewer';
-    Object.assign(this.viewerEl.style, { position: 'absolute', top: '52px', bottom: '0', left: '0', right: '0', overflow: 'auto', background: '#525659', padding: '16px' });
-    rootEl.appendChild(this.viewerEl);
+    Object.assign(this.viewerEl.style, { flex: '1', overflow: 'auto', background: '#525659', padding: '16px' });
+
+    area.append(this.thumbsEl, this.viewerEl);
+    rootEl.appendChild(area);
 
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); void this.bus?.undo(); }
@@ -103,8 +121,12 @@ export class App {
       onEdit: (req) => this.handleEdit(req),
       onSelect: (pageIndex, runId) => { this.selection = { pageIndex, runId }; this.reflectColor(); },
       onBackgroundClick: (pageIndex, at) => { void this.handleInsert(pageIndex, at); },
-      onMove: (pageIndex, runId, dxPt, dyPt) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt)); }
+      onMove: (pageIndex, runId, dxPt, dyPt) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt)); },
+      onPageChange: (i) => { this.currentPage = i; this.updateIndicator(); this.setActiveThumb(i); }
     });
+    this.currentPage = 0;
+    this.buildThumbnails();
+    this.updateIndicator();
     this.setStatus(`${this.session.model.pages.length} página(s)`);
   }
 
@@ -158,6 +180,45 @@ export class App {
     if (nuevo[0] === viejo[0] && nuevo[1] === viejo[1] && nuevo[2] === viejo[2]) return;
     void this.bus.execute(new SetColorCmd(this.selection.pageIndex, this.selection.runId, nuevo, viejo));
     this.setStatus('Color aplicado.');
+  }
+
+  private goToPage(i: number): void {
+    const total = this.session?.model.pages.length ?? 0;
+    if (i < 0 || i >= total) return;
+    this.viewer?.scrollToPage(i);
+  }
+
+  private updateIndicator(): void {
+    const total = this.session?.model.pages.length ?? 0;
+    this.pageIndicator.textContent = total ? `${this.currentPage + 1} / ${total}` : '– / –';
+  }
+
+  private setActiveThumb(i: number): void {
+    for (const el of Array.from(this.thumbsEl.children)) {
+      (el as HTMLElement).style.outline = Number((el as HTMLElement).dataset.page) === i ? '2px solid #6366f1' : 'none';
+    }
+  }
+
+  /** Miniaturas: un canvas pequeño por página; clic desplaza el visor. */
+  private buildThumbnails(): void {
+    this.thumbsEl.textContent = '';
+    const s = this.session;
+    if (!s) return;
+    for (const page of s.model.pages) {
+      const wide = page.sizePt.widthPt >= page.sizePt.heightPt;
+      const scale = (wide ? 120 : 90) / page.sizePt.widthPt;
+      const { width, height, data } = s.engine.renderPage(s.doc, page.index, scale);
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.dataset.page = String(page.index);
+      Object.assign(canvas.style, { display: 'block', width: '100%', height: 'auto', marginBottom: '8px', cursor: 'pointer', background: '#fff', boxSizing: 'border-box' });
+      const img = new ImageData(width, height);
+      img.data.set(data);
+      canvas.getContext('2d')!.putImageData(img, 0, 0);
+      canvas.addEventListener('click', () => this.goToPage(page.index));
+      this.thumbsEl.appendChild(canvas);
+    }
+    this.setActiveThumb(0);
   }
 
   private search(): void {
