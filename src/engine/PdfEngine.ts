@@ -70,6 +70,8 @@ export interface PdfEngine {
   insertImage(doc: DocHandle, pageIndex: number, spec: InsertImageSpec): boolean;
   /** Añade un resaltado (rectángulo de color, blend Multiply) sobre la caja dada. */
   highlightRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean;
+  /** Dibuja un trazo a mano alzada (polilínea) con el color y grosor dados. */
+  drawStroke(doc: DocHandle, pageIndex: number, points: { xPt: number; yPt: number }[], color: [number, number, number], widthPt: number): boolean;
   /** Desplaza un run por (dxPt, dyPt) en puntos PDF. Reversible con el delta inverso. */
   moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean;
   /** Cambia el color de relleno de un run (RGB 0-255). */
