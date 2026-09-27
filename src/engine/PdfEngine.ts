@@ -17,6 +17,17 @@ export type EditResult = { ok: true } | { ok: false; reason: 'glyph-missing' | '
 /** Bitmap RGBA listo para volcar en un canvas. */
 export interface RenderResult { width: number; height: number; data: Uint8ClampedArray }
 
+/** Imagen a insertar: píxeles RGBA ya decodificados + tamaño y colocación en puntos PDF. */
+export interface InsertImageSpec {
+  rgba: Uint8Array;      // imgWidth*imgHeight*4, orden RGBA
+  imgWidth: number;
+  imgHeight: number;
+  xPt: number;
+  yPt: number;
+  wPt: number;
+  hPt: number;
+}
+
 /** Especificación de un texto nuevo a insertar (coordenadas en puntos PDF). */
 export interface InsertTextSpec {
   xPt: number;
@@ -55,6 +66,8 @@ export interface PdfEngine {
   deleteRun(doc: DocHandle, pageIndex: number, runId: number): boolean;
   /** Inserta un texto nuevo en la página; devuelve el runId del objeto creado. */
   insertText(doc: DocHandle, pageIndex: number, spec: InsertTextSpec): number;
+  /** Inserta una imagen (RGBA) en la página, colocada en el rectángulo dado. */
+  insertImage(doc: DocHandle, pageIndex: number, spec: InsertImageSpec): boolean;
   /** Desplaza un run por (dxPt, dyPt) en puntos PDF. Reversible con el delta inverso. */
   moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean;
   /** Cambia el color de relleno de un run (RGB 0-255). */

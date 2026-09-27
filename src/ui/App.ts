@@ -11,6 +11,7 @@ import { DeletePageCmd } from '../commands/DeletePage';
 import { MovePageCmd } from '../commands/MovePage';
 import { InsertPdfCmd } from '../commands/InsertPdf';
 import { DuplicatePageCmd } from '../commands/DuplicatePage';
+import { InsertImageCmd } from '../commands/InsertImage';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
@@ -67,6 +68,10 @@ export class App {
     const insertPdf = document.createElement('input');
     insertPdf.type = 'file'; insertPdf.accept = 'application/pdf'; insertPdf.id = 'btn-insert-pdf'; insertPdf.title = 'Insertar otro PDF tras la página actual';
     insertPdf.addEventListener('change', () => { const f = insertPdf.files?.[0]; if (f) void this.handleInsertPdf(f).finally(() => { insertPdf.value = ''; }); });
+
+    const insertImage = document.createElement('input');
+    insertImage.type = 'file'; insertImage.accept = 'image/*'; insertImage.id = 'btn-insert-image'; insertImage.title = 'Insertar una imagen en la página actual';
+    insertImage.addEventListener('change', () => { const f = insertImage.files?.[0]; if (f) void this.handleInsertImage(f).finally(() => { insertImage.value = ''; }); });
     this.pageIndicator = document.createElement('span');
     this.pageIndicator.id = 'page-indicator'; this.pageIndicator.style.font = '13px sans-serif'; this.pageIndicator.textContent = '– / –';
 
@@ -80,7 +85,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, btnZoomOut, btnZoomIn, btnExtract, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -211,6 +216,24 @@ export class App {
     if (!this.bus || total <= 1) { this.setStatus('No se puede eliminar la única página.'); return; }
     void this.bus.execute(new DeletePageCmd(this.currentPage));
     this.setStatus('Página eliminada.');
+  }
+
+  private async handleInsertImage(file: File): Promise<void> {
+    const s = this.session;
+    if (!s || !this.bus) return;
+    const bmp = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = bmp.width; canvas.height = bmp.height;
+    canvas.getContext('2d')!.drawImage(bmp, 0, 0);
+    const { data } = canvas.getContext('2d')!.getImageData(0, 0, bmp.width, bmp.height);
+    const rgba = new Uint8Array(data);
+    const page = s.model.pages[this.currentPage]!;
+    const pageW = page.sizePt.widthPt, pageH = page.sizePt.heightPt;
+    const wPt = Math.min(pageW * 0.6, 200);
+    const hPt = wPt * (bmp.height / bmp.width);
+    const xPt = (pageW - wPt) / 2, yPt = (pageH - hPt) / 2;
+    await this.bus.execute(new InsertImageCmd(this.currentPage, { rgba, imgWidth: bmp.width, imgHeight: bmp.height, xPt, yPt, wPt, hPt }));
+    this.setStatus('Imagen insertada.');
   }
 
   private async handleInsertPdf(file: File): Promise<void> {

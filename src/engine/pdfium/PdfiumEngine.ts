@@ -1,6 +1,6 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, type Mem } from './mem';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult, InsertTextSpec, RectPt } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 
@@ -318,6 +318,39 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDFPage_GenerateContent(page);
       return this.p.FPDFPage_CountObjects(page) - 1; // el objeto insertado es el último
     } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  insertImage(doc: DocHandle, pageIndex: number, spec: InsertImageSpec): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    // FPDFBitmap_Create: formato BGRA con alfa (3 = BGRA). El motor copia los
+    // píxeles al generar el contenido, así que el bitmap puede destruirse luego.
+    const bmp = this.p.FPDFBitmap_Create(spec.imgWidth, spec.imgHeight, 1);
+    try {
+      const stride = this.p.FPDFBitmap_GetStride(bmp);
+      const buf = this.p.FPDFBitmap_GetBuffer(bmp);
+      const heap = this.mem.HEAPU8;
+      for (let y = 0; y < spec.imgHeight; y++) {
+        for (let x = 0; x < spec.imgWidth; x++) {
+          const s = (y * spec.imgWidth + x) * 4;
+          const d = buf + y * stride + x * 4;
+          heap[d] = spec.rgba[s + 2]!;     // B
+          heap[d + 1] = spec.rgba[s + 1]!; // G
+          heap[d + 2] = spec.rgba[s]!;     // R
+          heap[d + 3] = spec.rgba[s + 3]!; // A
+        }
+      }
+      const obj = this.p.FPDFPageObj_NewImageObj(doc);
+      this.p.FPDFImageObj_SetBitmap(0, 0, obj, bmp);
+      // La imagen se define en un cuadrado unidad: la matriz la escala y sitúa.
+      this.p.FPDFPageObj_Transform(obj, spec.wPt, 0, 0, spec.hPt, spec.xPt, spec.yPt);
+      this.p.FPDFPage_InsertObject(page, obj);
+      this.p.FPDFPage_GenerateContent(page);
+      return true;
+    } finally {
+      this.p.FPDFBitmap_Destroy(bmp);
       this.p.FPDF_ClosePage(page);
     }
   }

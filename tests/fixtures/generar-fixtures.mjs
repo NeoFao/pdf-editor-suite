@@ -8,7 +8,42 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import fs from 'node:fs';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
+
+/** CRC32 (tabla estándar) para los chunks PNG. */
+function crc32(buf) {
+  let c;
+  const tabla = crc32.tabla || (crc32.tabla = Array.from({ length: 256 }, (_, n) => {
+    c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    return c >>> 0;
+  }));
+  let crc = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) crc = tabla[(crc ^ buf[i]) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(tipo, data) {
+  const t = Buffer.from(tipo, 'ascii');
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length, 0);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([t, data])), 0);
+  return Buffer.concat([len, t, data, crc]);
+}
+
+/** PNG RGBA de color sólido, sin dependencias externas. */
+function pngSolido(w, h, [r, g, b]) {
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 6; // 8 bits, color tipo 6 (RGBA)
+  const raw = Buffer.alloc(h * (1 + w * 4));
+  for (let y = 0; y < h; y++) {
+    const off = y * (1 + w * 4); raw[off] = 0; // filtro none
+    for (let x = 0; x < w; x++) { const p = off + 1 + x * 4; raw[p] = r; raw[p + 1] = g; raw[p + 2] = b; raw[p + 3] = 255; }
+  }
+  return Buffer.concat([sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', zlib.deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
+}
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SALIDA = path.join(AQUI, 'generados');
@@ -86,7 +121,8 @@ async function main() {
     'nativo.pdf': await pdfNativo(),
     'hostil.pdf': await pdfHostil(),
     'apaisado.pdf': await pdfApaisado(),
-    'fuentes.pdf': await pdfFuentes()
+    'fuentes.pdf': await pdfFuentes(),
+    'rojo.png': pngSolido(16, 16, [255, 0, 0])
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {
     fs.writeFileSync(path.join(SALIDA, nombre), bytes);
