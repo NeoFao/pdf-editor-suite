@@ -12,6 +12,7 @@ export interface ViewerCallbacks {
   onSelect: (pageIndex: number, runId: number) => void;
   onBackgroundClick: (pageIndex: number, at: PtPoint) => void;
   onMove: (pageIndex: number, runId: number, dxPt: number, dyPt: number) => void;
+  onPageChange?: (pageIndex: number) => void;
 }
 
 /** Renderiza páginas visibles (canvas del motor) con su capa de texto encima. */
@@ -21,6 +22,8 @@ export class Viewer {
   private rendered = new Set<number>();
   private scale = 1;
   private highlights = new Map<number, RectPt[]>();
+  private observer: IntersectionObserver | null = null;
+  private currentPage = 0;
 
   constructor(
     private readonly root: HTMLElement,
@@ -39,6 +42,29 @@ export class Viewer {
   setScale(scale: number): void {
     this.scale = scale;
     this.rebuild();
+  }
+
+  /** Desplaza el visor hasta la página indicada. */
+  scrollToPage(i: number): void {
+    this.wrappers[i]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+
+  private observeVisible(): void {
+    this.observer?.disconnect();
+    this.observer = new IntersectionObserver((entries) => {
+      let best: IntersectionObserverEntry | null = null;
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        if (!best || e.intersectionRatio > best.intersectionRatio) best = e;
+      }
+      if (!best) return;
+      const i = Number((best.target as HTMLElement).dataset.page);
+      if (Number.isFinite(i) && i !== this.currentPage) {
+        this.currentPage = i;
+        this.cb.onPageChange?.(i);
+      }
+    }, { root: this.root, threshold: [0.2, 0.6] });
+    for (const w of this.wrappers) this.observer.observe(w);
   }
 
   /** Fija las coincidencias de búsqueda a resaltar por página y las repinta. */
@@ -109,6 +135,7 @@ export class Viewer {
       this.wrappers.push(w);
       this.geoms.push(new PageGeometry(page.sizePt.widthPt, page.sizePt.heightPt, this.scale, page.rotation));
     }
+    this.observeVisible();
   }
 
   private renderVisible(): void {
