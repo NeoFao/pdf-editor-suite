@@ -72,6 +72,17 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
+  duplicatePage(doc: DocHandle, pageIndex: number): boolean {
+    const arr = this.mem.malloc(4);
+    this.mem.setValue(arr, pageIndex, 'i32');
+    try {
+      // Importa la misma página (del propio doc) justo después de ella.
+      return this.p.FPDF_ImportPagesByIndex(doc, doc, arr, 1, pageIndex + 1);
+    } finally {
+      this.mem.free(arr);
+    }
+  }
+
   extractPages(doc: DocHandle, pageIndices: number[]): Uint8Array<ArrayBuffer> {
     const dest = this.p.FPDF_CreateNewDocument();
     try {
