@@ -10,6 +10,7 @@ import { RotatePageCmd } from '../commands/RotatePage';
 import { DeletePageCmd } from '../commands/DeletePage';
 import { MovePageCmd } from '../commands/MovePage';
 import { InsertPdfCmd } from '../commands/InsertPdf';
+import { DuplicatePageCmd } from '../commands/DuplicatePage';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
@@ -59,6 +60,7 @@ export class App {
     const btnNext = this.button('›', 'btn-next', () => this.goToPage(this.currentPage + 1));
     const btnRotate = this.button('Rotar ⟳', 'btn-rotate', () => { if (this.bus) void this.bus.execute(new RotatePageCmd(this.currentPage, 90)); });
     const btnDeletePage = this.button('Eliminar pág', 'btn-delete-page', () => this.deleteCurrentPage());
+    const btnDuplicate = this.button('Duplicar', 'btn-duplicate', () => { if (this.bus) void this.bus.execute(new DuplicatePageCmd(this.currentPage)); });
     const btnPageUp = this.button('Subir', 'btn-page-up', () => this.moveCurrentPage(-1));
     const btnPageDown = this.button('Bajar', 'btn-page-down', () => this.moveCurrentPage(1));
 
@@ -78,7 +80,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnPageUp, btnPageDown, insertPdf, btnZoomOut, btnZoomIn, btnExtract, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, btnZoomOut, btnZoomIn, btnExtract, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
