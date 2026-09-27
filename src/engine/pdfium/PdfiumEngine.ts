@@ -58,6 +58,16 @@ export class PdfiumEngine implements PdfEngine {
     this.p.FPDFPage_Delete(doc, pageIndex);
   }
 
+  movePage(doc: DocHandle, fromIndex: number, toIndex: number): boolean {
+    const arr = this.mem.malloc(4);
+    this.mem.setValue(arr, fromIndex, 'i32');
+    try {
+      return this.p.FPDF_MovePages(doc, arr, 1, toIndex);
+    } finally {
+      this.mem.free(arr);
+    }
+  }
+
   pageRotation(doc: DocHandle, pageIndex: number): 0 | 90 | 180 | 270 {
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);

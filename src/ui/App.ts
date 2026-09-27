@@ -8,6 +8,7 @@ import { MoveRunCmd } from '../commands/MoveRun';
 import { SetColorCmd } from '../commands/SetColor';
 import { RotatePageCmd } from '../commands/RotatePage';
 import { DeletePageCmd } from '../commands/DeletePage';
+import { MovePageCmd } from '../commands/MovePage';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
@@ -57,6 +58,8 @@ export class App {
     const btnNext = this.button('›', 'btn-next', () => this.goToPage(this.currentPage + 1));
     const btnRotate = this.button('Rotar ⟳', 'btn-rotate', () => { if (this.bus) void this.bus.execute(new RotatePageCmd(this.currentPage, 90)); });
     const btnDeletePage = this.button('Eliminar pág', 'btn-delete-page', () => this.deleteCurrentPage());
+    const btnPageUp = this.button('Subir', 'btn-page-up', () => this.moveCurrentPage(-1));
+    const btnPageDown = this.button('Bajar', 'btn-page-down', () => this.moveCurrentPage(1));
     this.pageIndicator = document.createElement('span');
     this.pageIndicator.id = 'page-indicator'; this.pageIndicator.style.font = '13px sans-serif'; this.pageIndicator.textContent = '– / –';
 
@@ -69,7 +72,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnZoomOut, btnZoomIn, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnPageUp, btnPageDown, btnZoomOut, btnZoomIn, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha).
@@ -199,6 +202,16 @@ export class App {
     if (!this.bus || total <= 1) { this.setStatus('No se puede eliminar la única página.'); return; }
     void this.bus.execute(new DeletePageCmd(this.currentPage));
     this.setStatus('Página eliminada.');
+  }
+
+  private moveCurrentPage(delta: number): void {
+    const total = this.session?.model.pages.length ?? 0;
+    const from = this.currentPage;
+    const to = from + delta;
+    if (!this.bus || to < 0 || to >= total) return;
+    this.currentPage = to; // seguir la página movida
+    void this.bus.execute(new MovePageCmd(from, to));
+    this.setStatus('Página reordenada.');
   }
 
   private goToPage(i: number): void {
