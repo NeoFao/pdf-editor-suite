@@ -9,6 +9,7 @@ import { SetColorCmd } from '../commands/SetColor';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
+import type { RectPt } from '../engine/PdfEngine';
 
 /** Orquesta motor + sesión + comandos + visor. Punto de entrada de la app nueva. */
 export class App {
@@ -24,6 +25,7 @@ export class App {
   private readonly status: HTMLElement;
   private readonly btnInsert: HTMLButtonElement;
   private readonly colorInput: HTMLInputElement;
+  private readonly searchInput: HTMLInputElement;
 
   constructor(rootEl: HTMLElement) {
     rootEl.textContent = '';
@@ -42,6 +44,10 @@ export class App {
     this.colorInput.type = 'color'; this.colorInput.id = 'btn-color'; this.colorInput.title = 'Color de la línea seleccionada';
     this.colorInput.addEventListener('input', () => this.applyColor());
 
+    this.searchInput = document.createElement('input');
+    this.searchInput.type = 'search'; this.searchInput.id = 'btn-search'; this.searchInput.placeholder = 'Buscar…';
+    this.searchInput.addEventListener('input', () => this.search());
+
     const btnZoomOut = this.button('−', 'btn-zoom-out', () => this.zoom(1 / 1.25));
     const btnZoomIn = this.button('+', 'btn-zoom-in', () => this.zoom(1.25));
     const btnSave = this.button('Guardar', 'btn-save', () => this.save());
@@ -51,7 +57,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, this.colorInput, btnZoomOut, btnZoomIn, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, this.colorInput, this.searchInput, btnZoomOut, btnZoomIn, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     this.viewerEl = document.createElement('div');
@@ -152,6 +158,19 @@ export class App {
     if (nuevo[0] === viejo[0] && nuevo[1] === viejo[1] && nuevo[2] === viejo[2]) return;
     void this.bus.execute(new SetColorCmd(this.selection.pageIndex, this.selection.runId, nuevo, viejo));
     this.setStatus('Color aplicado.');
+  }
+
+  private search(): void {
+    if (!this.session || !this.viewer) return;
+    const q = this.searchInput.value.trim();
+    const byPage = new Map<number, RectPt[]>();
+    let total = 0;
+    for (const page of this.session.model.pages) {
+      const rects = q ? this.session.engine.findText(this.session.doc, page.index, q) : [];
+      if (rects.length) { byPage.set(page.index, rects); total += rects.length; }
+    }
+    this.viewer.setHighlights(byPage);
+    this.setStatus(q ? `${total} coincidencia(s)` : '');
   }
 
   private zoom(factor: number): void {
