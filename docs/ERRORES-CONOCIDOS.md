@@ -745,6 +745,104 @@ de reposo (`left/top/height/lineHeight` de `boxPt`), igual con Escape.
 
 ---
 
+### E-032 · Clic en una miniatura y "Eliminar página" borraba otra página distinta
+
+**Síntoma.** El usuario hacía clic en la miniatura 3, el indicador seguía
+mostrando la página que ya estaba abierta, pulsaba "Eliminar página" y se
+borraba la página 1 (o cualquier otra, la que estuviera activa antes del
+clic) en vez de la 3. Lo mismo con prev/next y con los marcadores: el PR #49
+tuvo que usar páginas A4 grandes en su fixture (`marcadores.pdf`) para que su
+propio test E2E no fuera flaky por este defecto.
+
+**Causa raíz.** `App.goToPage(i)` (`src/ui/App.ts`) solo llamaba a
+`viewer.scrollToPage(i)` y confiaba en que el `IntersectionObserver` del
+`Viewer` (`src/ui/Viewer.ts`) actualizara `currentPage` al detectar la
+página "más visible" tras el scroll. Pero si el scroll no se movía —porque
+el destino ya estaba visible, porque todas las páginas cabían a la vez en el
+viewport, o porque el scroll ya estaba al final— el observer nunca disparaba
+y `currentPage` se quedaba con el valor anterior. Todas las operaciones "de
+la página actual" (eliminar, rotar, duplicar, subir/bajar, extraer, OCR,
+insertar imagen…) actúan sobre `currentPage`, así que la UI mostraba una
+selección que no era la que de verdad iban a afectar los botones.
+
+**Arreglo.** `goToPage` pasa a ser el único punto de entrada para cambiar de
+página (prev/next, clic en miniatura, clic en marcador ya pasaban todos por
+ahí) y ahora fija `currentPage`, el indicador y la miniatura activa **antes**
+de tocar el scroll — la selección explícita del usuario manda,
+independientemente de si el scroll se mueve o no. `Viewer.scrollToPage`
+fija además un "pin" (`pinnedPage`): mientras esté activo, el
+`IntersectionObserver` no puede reafirmar una página distinta, ni siquiera
+si calcula que "la más visible" es otra. Solo un scroll real del usuario
+libera el pin y devuelve el control al observer; el pin también se limpia en
+`Viewer.rebuild()`, porque una operación de página puede renumerar los
+índices y `App.onReload` recalcula `currentPage` por su cuenta en ese caso.
+
+**Corrección de revisión (mismo defecto, otro disparador).** La primera
+versión de este arreglo solo liberaba el pin con los eventos `wheel` y
+`touchmove`. Eso dejaba fuera CUALQUIER otra forma de desplazar el visor:
+teclado (PageDown/flechas/Home/End/espacio con el visor enfocado) o arrastrar
+la barra de scroll con el ratón. Tras una navegación explícita, si el
+usuario seguía con el teclado o la barra en vez de la rueda, el indicador
+volvía a quedarse congelado y "Eliminar página" podía volver a actuar sobre
+la página equivocada — la revisión de código de este PR lo encontró antes de
+fusionar.
+
+La solución no depende de enumerar gestos de entrada, sino de distinguir
+**scroll programático** de **scroll del usuario** por su origen, no por su
+disparador. `Viewer.scrollToPage()` marca `programmaticScroll = true` justo
+antes de llamar a `scrollIntoView` y arma un temporizador de respaldo de
+~150ms (`armScrollEndFallback()`); ese respaldo se reinicia en cada evento
+`scroll` mientras el flag siga activo y se cierra de inmediato con el evento
+nativo `scrollend` en cuanto el navegador lo soporta (Chromium/Firefox). El
+listener de `scroll` del visor consulta ese flag: si sigue `true`, el evento
+es un eco del propio `scrollToPage` y no toca el pin; si ya es `false`, es
+scroll real del usuario —venga de teclado, barra de scroll, o cualquier otra
+vía— y libera el pin. `wheel`/`touchmove` se conservan como liberación
+inmediata aparte, porque son intención del usuario incluso si ocurren
+*durante* un `scrollToPage` todavía en vuelo (p. ej., el usuario mueve la
+rueda mientras el smooth-scroll programático sigue animando). Si
+`scrollIntoView` no dispara ningún `scroll` porque el destino ya era
+visible, el temporizador de respaldo —armado también dentro de
+`scrollToPage`, no solo en el listener de `scroll`— es quien cierra la
+ventana igualmente.
+
+**Cómo se detecta ahora.** `tests/e2e/next/pagina-actual.spec.ts`:
+- El test del defecto destructivo: abre `paginas-pequenas.pdf` (4 páginas de
+  200×120 pt que caben todas a la vez en el viewport de 1440×900, fixture
+  nuevo en `tests/fixtures/generar-fixtures.mjs`, cada página con un texto
+  único "PAGINA-1".."PAGINA-4"), clic en la miniatura 3, `#page-indicator`
+  debe decir "3 / 4"; pulsa "Eliminar página" y comprueba que "PAGINA-3" ya
+  no existe en la capa de texto mientras las otras tres siguen ahí. Antes del
+  arreglo fallaba con el indicador en "1 / 4" (nunca cambiaba) y, si se
+  seguía el flujo hasta el final, se borraba la página equivocada.
+- `#btn-next`/`#btn-prev` avanzan `currentPage` aunque las 4 páginas quepan
+  en pantalla.
+- Clic en un marcador (`paginas-pequenas-marcadores.pdf`, mismo tamaño de
+  página con un outline de un nodo por página) fija el indicador a su
+  página.
+- El scroll manual con la rueda (`page.mouse.wheel`) sobre `nativo.pdf`
+  (páginas A4, que no caben todas) sigue actualizando el indicador con
+  normalidad.
+- (Corrección de revisión) El teclado (`page.keyboard.press('End')` con el
+  visor enfocado — `#viewer` gana `tabIndex = -1` en `App.ts` para poder
+  recibir foco por script) libera el pin y actualiza el indicador. Antes de
+  esta corrección se quedaba en "1 / 2".
+- (Corrección de revisión) Un scroll inyectado directamente en `scrollTop`
+  sin pasar por `scrollToPage()` ni disparar `wheel`/`touchmove` —lo mismo
+  que hace el navegador al arrastrar el thumb de la barra de scroll— también
+  libera el pin. Antes de esta corrección se quedaba en "1 / 2".
+
+Regla `navegacion-por-gotopage`: `Viewer.scrollToPage()` solo se puede llamar
+desde dentro de `App.goToPage()`. No cubre el invariante completo (el orden
+"fijar `currentPage` antes de desplazar" no es una firma sintáctica que un
+grep pueda verificar sin falsos positivos — de eso responde el test E2E de
+arriba), pero sí cierra la vía más probable de que vuelva a romperse: que un
+botón o un manejador nuevo llame a `viewer.scrollToPage(i)` directamente en
+vez de pasar por `goToPage(i)`, saltándose por completo la fijación de
+`currentPage`.
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que

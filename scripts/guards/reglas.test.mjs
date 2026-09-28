@@ -246,6 +246,31 @@ describe('pdfium-buffer-fijo', () => {
   });
 });
 
+describe('navegacion-por-gotopage', () => {
+  const regla = detectarEn('navegacion-por-gotopage');
+  // Mismo patrón que usa la regla: una llamada real siempre lleva el punto
+  // del receptor delante (`viewer.scrollToPage(` o `viewer?.scrollToPage(`);
+  // la propia declaración del método (`scrollToPage(i: number)`) no lo lleva.
+  const patron = /\.scrollToPage\(/;
+
+  test('detecta la llamada con receptor que produciría el defecto de E-032 si se saltara goToPage()', () => {
+    assert.match('    this.viewer?.scrollToPage(pageIndex); // fuera de goToPage: prohibido', patron);
+    assert.ok(regla.comoArreglar.includes('goToPage'));
+  });
+
+  test('no confunde el camino correcto (goToPage) con una llamada directa a scrollToPage', () => {
+    assert.doesNotMatch('    canvas.addEventListener(\'click\', () => this.goToPage(page.index));', patron);
+  });
+
+  test('no confunde la propia declaración del método con una llamada', () => {
+    assert.doesNotMatch('  scrollToPage(i: number): void {', patron);
+  });
+
+  test('sobre el repo real no encuentra nada: solo App.goToPage() llama a Viewer.scrollToPage()', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega

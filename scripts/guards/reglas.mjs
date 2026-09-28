@@ -479,6 +479,56 @@ export const conPdfiumBufferFijo = {
   }
 };
 
+/* ── E-032 · toda navegación de página pasa por App.goToPage() ─────────── */
+export const conNavegacionPorGoToPage = {
+  id: 'navegacion-por-gotopage',
+  titulo: 'Viewer.scrollToPage() solo se llama desde dentro de App.goToPage()',
+  comoArreglar:
+    'Llama a this.goToPage(i), nunca a this.viewer?.scrollToPage(i) directamente. ' +
+    'goToPage() fija currentPage, el indicador y la miniatura activa ANTES de tocar ' +
+    'el scroll; si algo llama a scrollToPage() por fuera, currentPage se queda ' +
+    'desincronizado en cuanto el scroll no se mueve o el observer elige otra página ' +
+    '— el defecto destructivo de E-032 (clic en una miniatura y "Eliminar página" ' +
+    'borraba otra distinta).',
+  ejecutar() {
+    const ruta = 'src/ui/App.ts';
+    if (!existe(ruta)) return [];
+    const contenido = leer(ruta);
+    if (tieneDeuda(ruta, this.id)) return [];
+    const exentas = lineasExentas(contenido, this.id);
+    const lineas = contenido.split('\n');
+
+    // Rango (0-indexed) del cuerpo de goToPage, por conteo de llaves: la
+    // única línea con "scrollToPage(" permitida en todo el fichero cae ahí.
+    const inicio = lineas.findIndex((l) => /\bgoToPage\(/.test(l) && /\bprivate\b/.test(l));
+    if (inicio === -1) {
+      return [hallazgo(ruta, null, 'no se encuentra el método goToPage() — la regla no puede verificar el invariante')];
+    }
+    let profundidad = 0;
+    let fin = lineas.length - 1;
+    for (let i = inicio; i < lineas.length; i++) {
+      for (const ch of lineas[i]) {
+        if (ch === '{') profundidad++;
+        else if (ch === '}') {
+          profundidad--;
+          if (profundidad === 0) { fin = i; break; }
+        }
+      }
+      if (profundidad === 0 && fin !== lineas.length - 1) break;
+    }
+
+    const hallazgos = [];
+    lineas.forEach((linea, i) => {
+      const n = i + 1;
+      if (exentas.has(n)) return;
+      if (!/\.scrollToPage\(/.test(linea)) return;
+      if (i >= inicio && i <= fin) return; // dentro de goToPage: permitido
+      hallazgos.push(hallazgo(ruta, n, 'llama a scrollToPage() fuera de goToPage()'));
+    });
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -494,5 +544,6 @@ export const TODAS = [
   conDeudaAcotada,
   conPdfJsSinEval,
   conMotorEncapsulado,
-  conPdfiumBufferFijo
+  conPdfiumBufferFijo,
+  conNavegacionPorGoToPage
 ];

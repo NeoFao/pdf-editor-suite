@@ -200,21 +200,54 @@ async function pdfSubconjunto() {
 }
 
 /**
+ * Construye un árbol de marcadores (outline) de bajo nivel en `doc` y lo
+ * registra en el catálogo. pdf-lib no tiene API de alto nivel para esto: hay
+ * que armar a mano los diccionarios /Outlines, /First, /Last, /Next, /Prev,
+ * /Parent, /Title (`PDFHexString.fromText`) y /Dest (`[pageRef /Fit]`).
+ *
+ * `nodos`: array de `{ titulo, pagina, hijos? }`, incluido `pdfOutlineCiclo`
+ * NO la usa: ese fixture necesita un /Next que apunte hacia atrás a propósito
+ * (un ciclo), que esta función por construcción no puede producir.
+ */
+function construirOutline(doc, nodos) {
+  const { context, catalog } = doc;
+  const dest = (page) => context.obj([page.ref, PDFName.of('Fit')]);
+
+  function construirNivel(lista, parentRef) {
+    const refs = lista.map(() => context.nextRef());
+    lista.forEach((nodo, i) => {
+      const obj = { Title: PDFHexString.fromText(nodo.titulo), Parent: parentRef };
+      if (i > 0) obj.Prev = refs[i - 1];
+      if (i < lista.length - 1) obj.Next = refs[i + 1];
+      if (nodo.pagina) obj.Dest = dest(nodo.pagina);
+      if (nodo.hijos?.length) {
+        const hijosRefs = construirNivel(nodo.hijos, refs[i]);
+        obj.First = hijosRefs[0];
+        obj.Last = hijosRefs[hijosRefs.length - 1];
+        obj.Count = nodo.hijos.length;
+      }
+      context.assign(refs[i], context.obj(obj));
+    });
+    return refs;
+  }
+
+  const rootRef = context.nextRef();
+  const refsNivel = construirNivel(nodos, rootRef);
+  context.assign(rootRef, context.obj({
+    Type: 'Outlines', First: refsNivel[0], Last: refsNivel[refsNivel.length - 1], Count: nodos.length
+  }));
+  catalog.set(PDFName.of('Outlines'), rootRef);
+}
+
+/**
  * PDF de 3 páginas con un árbol de marcadores (outline) de dos niveles:
  * "Capítulo 1" (página 1) con un hijo "Sección 1.1" (página 2), y
  * "Capítulo 2 — Ñandú" (página 3, con Ñ y raya para probar el UTF-16 del
- * título). pdf-lib no tiene API de alto nivel para outlines: se construye
- * con su API de bajo nivel — diccionarios /Outlines, /First, /Last, /Next,
- * /Parent, /Title como `PDFHexString.fromText` y /Dest `[pageRef /Fit]` —
- * registrados en el catálogo bajo /Outlines.
+ * título).
  */
 async function pdfMarcadores() {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
-  // Tamaño A4, como pdfNativo(): con páginas pequeñas las tres caben a la vez
-  // en el viewport de escritorio y el IntersectionObserver del visor nunca ve
-  // un cambio de página al desplazarse (E2E flaky por diseño del fixture, no
-  // del código bajo prueba).
   const p1 = doc.addPage([595.28, 841.89]);
   p1.drawText('Pagina 1', { x: 60, y: 760, size: 20, font });
   const p2 = doc.addPage([595.28, 841.89]);
@@ -222,46 +255,51 @@ async function pdfMarcadores() {
   const p3 = doc.addPage([595.28, 841.89]);
   p3.drawText('Pagina 3', { x: 60, y: 760, size: 20, font });
 
-  const { context, catalog } = doc;
-  const dest = (page) => context.obj([page.ref, PDFName.of('Fit')]);
+  construirOutline(doc, [
+    { titulo: 'Capítulo 1', pagina: p1, hijos: [{ titulo: 'Sección 1.1', pagina: p2 }] },
+    { titulo: 'Capítulo 2 — Ñandú', pagina: p3 }
+  ]);
 
-  const rootRef = context.nextRef();
-  const cap1Ref = context.nextRef();
-  const sec11Ref = context.nextRef();
-  const cap2Ref = context.nextRef();
+  return doc.save();
+}
 
-  context.assign(rootRef, context.obj({
-    Type: 'Outlines',
-    First: cap1Ref,
-    Last: cap2Ref,
-    Count: 2
-  }));
+/** Texto único de cada página de `paginas-pequenas.pdf` / `*-marcadores.pdf`. */
+export const TEXTOS_PAGINAS_PEQUENAS = ['PAGINA-1', 'PAGINA-2', 'PAGINA-3', 'PAGINA-4'];
 
-  context.assign(cap1Ref, context.obj({
-    Title: PDFHexString.fromText('Capítulo 1'),
-    Parent: rootRef,
-    Next: cap2Ref,
-    First: sec11Ref,
-    Last: sec11Ref,
-    Count: 1,
-    Dest: dest(p1)
-  }));
+/**
+ * 4 páginas pequeñas (200×120 pt) que caben TODAS a la vez en el viewport del
+ * proyecto `next` (1440×900, ver playwright.config.js): abrir este documento
+ * no requiere scroll para ver cualquiera de sus páginas.
+ *
+ * Fija E-032 (docs/ERRORES-CONOCIDOS.md): `goToPage()` dependía de que el
+ * `IntersectionObserver` del visor reaccionara a un scroll real para
+ * actualizar `currentPage`. Si el destino ya estaba visible (como aquí, con
+ * las 4 páginas a la vez), el scroll no se movía, el observer nunca disparaba
+ * y `currentPage` se quedaba con el valor anterior — clic en la miniatura 3 y
+ * "Eliminar página" borraba la 1. Cada página lleva un texto único
+ * ("PAGINA-1".."PAGINA-4") para poder comprobar, tras borrar, cuál sigue
+ * existiendo en la capa de texto y cuál no.
+ */
+async function pdfPaginasPequenas() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (const texto of TEXTOS_PAGINAS_PEQUENAS) {
+    const p = doc.addPage([200, 120]);
+    p.drawText(texto, { x: 20, y: 60, size: 14, font });
+  }
+  return doc.save();
+}
 
-  context.assign(sec11Ref, context.obj({
-    Title: PDFHexString.fromText('Sección 1.1'),
-    Parent: cap1Ref,
-    Dest: dest(p2)
-  }));
-
-  context.assign(cap2Ref, context.obj({
-    Title: PDFHexString.fromText('Capítulo 2 — Ñandú'),
-    Parent: rootRef,
-    Prev: cap1Ref,
-    Dest: dest(p3)
-  }));
-
-  catalog.set(PDFName.of('Outlines'), rootRef);
-
+/** Igual que `paginas-pequenas.pdf`, con un marcador por página (E-032, caso (c) de pagina-actual.spec.ts). */
+async function pdfPaginasPequenasMarcadores() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const paginas = TEXTOS_PAGINAS_PEQUENAS.map((texto) => {
+    const p = doc.addPage([200, 120]);
+    p.drawText(texto, { x: 20, y: 60, size: 14, font });
+    return p;
+  });
+  construirOutline(doc, paginas.map((pagina, i) => ({ titulo: `Marcador ${i + 1}`, pagina })));
   return doc.save();
 }
 
@@ -306,6 +344,8 @@ async function main() {
     'subconjunto.pdf': await pdfSubconjunto(),
     'marcadores.pdf': await pdfMarcadores(),
     'outline-ciclo.pdf': await pdfOutlineCiclo(),
+    'paginas-pequenas.pdf': await pdfPaginasPequenas(),
+    'paginas-pequenas-marcadores.pdf': await pdfPaginasPequenasMarcadores(),
     'rojo.png': pngSolido(16, 16, [255, 0, 0])
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {
