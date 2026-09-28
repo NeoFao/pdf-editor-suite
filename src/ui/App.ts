@@ -15,6 +15,7 @@ import { InsertImageCmd } from '../commands/InsertImage';
 import { HighlightRunCmd } from '../commands/HighlightRun';
 import { DrawStrokeCmd } from '../commands/DrawStroke';
 import { SignaturePad } from './SignaturePad';
+import { parseRange } from './pageRange';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
@@ -39,6 +40,7 @@ export class App {
   private readonly btnPen: HTMLButtonElement;
   private readonly colorInput: HTMLInputElement;
   private readonly searchInput: HTMLInputElement;
+  private readonly rangeInput: HTMLInputElement;
   private currentPage = 0;
 
   constructor(rootEl: HTMLElement) {
@@ -86,6 +88,9 @@ export class App {
     const btnZoomOut = this.button('−', 'btn-zoom-out', () => this.zoom(1 / 1.25));
     const btnZoomIn = this.button('+', 'btn-zoom-in', () => this.zoom(1.25));
     const btnExtract = this.button('Extraer pág.', 'btn-extract', () => this.extractCurrent());
+    this.rangeInput = document.createElement('input');
+    this.rangeInput.type = 'text'; this.rangeInput.id = 'btn-range'; this.rangeInput.placeholder = '1-3,5'; this.rangeInput.size = 6;
+    const btnSplit = this.button('Dividir', 'btn-split', () => this.splitByRange());
     const btnSave = this.button('Guardar', 'btn-save', () => this.save());
     const btnUndo = this.button('Deshacer', 'btn-undo', () => { void this.bus?.undo(); });
     const btnRedo = this.button('Rehacer', 'btn-redo', () => { void this.bus?.redo(); });
@@ -93,7 +98,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, btnHighlight, btnSign, this.btnPen, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, this.btnInsert, btnDelete, btnHighlight, btnSign, this.btnPen, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, this.rangeInput, btnSplit, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -357,6 +362,15 @@ export class App {
     if (!s) return;
     this.download(s.engine.save(s.doc), this.docName.replace(/\.pdf$/i, '') + '_editado.pdf');
     this.setStatus('Guardado.');
+  }
+
+  private splitByRange(): void {
+    const s = this.session;
+    if (!s) return;
+    const idx = parseRange(this.rangeInput.value, s.model.pages.length);
+    if (idx.length === 0) { this.setStatus('Rango no válido (ej.: 1-3,5).'); return; }
+    this.download(s.engine.extractPages(s.doc, idx), `${this.docName.replace(/\.pdf$/i, '')}_seleccion.pdf`);
+    this.setStatus(`${idx.length} página(s) extraídas.`);
   }
 
   private extractCurrent(): void {
