@@ -53,6 +53,10 @@ export class App {
     file.type = 'file'; file.accept = 'application/pdf'; file.id = 'file-input';
     file.addEventListener('change', () => { const f = file.files?.[0]; if (f) void this.openFile(f); });
 
+    const openImg = document.createElement('input');
+    openImg.type = 'file'; openImg.accept = 'image/*'; openImg.id = 'btn-open-image'; openImg.title = 'Abrir una imagen como PDF';
+    openImg.addEventListener('change', () => { const f = openImg.files?.[0]; if (f) void this.openImage(f).finally(() => { openImg.value = ''; }); });
+
     this.btnInsert = this.button('Insertar texto', 'btn-insert', () => this.toggleInsert());
     const btnDelete = this.button('Borrar', 'btn-delete', () => this.deleteSelected());
     const btnHighlight = this.button('Resaltar', 'btn-highlight', () => this.highlightSelected());
@@ -98,7 +102,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, this.btnInsert, btnDelete, btnHighlight, btnSign, this.btnPen, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, this.rangeInput, btnSplit, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, openImg, this.btnInsert, btnDelete, btnHighlight, btnSign, this.btnPen, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, this.rangeInput, btnSplit, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -150,11 +154,33 @@ export class App {
   }
 
   async openFile(file: File): Promise<void> {
+    await this.openBytes(new Uint8Array(await file.arrayBuffer()), file.name || 'documento.pdf');
+  }
+
+  /** Decodifica una imagen a RGBA usando el canvas del navegador. */
+  private async decodeImage(file: File): Promise<{ rgba: Uint8Array; width: number; height: number }> {
+    const bmp = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = bmp.width; canvas.height = bmp.height;
+    canvas.getContext('2d')!.drawImage(bmp, 0, 0);
+    const { data } = canvas.getContext('2d')!.getImageData(0, 0, bmp.width, bmp.height);
+    return { rgba: new Uint8Array(data), width: bmp.width, height: bmp.height };
+  }
+
+  /** Abre una imagen convirtiéndola en un PDF de una página. */
+  private async openImage(file: File): Promise<void> {
+    const engine = await this.ensureEngine();
+    const { rgba, width, height } = await this.decodeImage(file);
+    const bytes = engine.imageToPdf(rgba, width, height);
+    await this.openBytes(bytes, (file.name || 'imagen').replace(/\.[^.]+$/, '') + '.pdf');
+    this.setStatus('Imagen abierta como PDF.');
+  }
+
+  private async openBytes(bytes: Uint8Array, name: string): Promise<void> {
     this.setStatus('Cargando…');
     const engine = await this.ensureEngine();
     if (this.session) engine.close(this.session.doc);
-    this.docName = file.name || 'documento.pdf';
-    const bytes = new Uint8Array(await file.arrayBuffer());
+    this.docName = name;
     this.session = await EditSession.open(engine, bytes);
     this.bus = new CommandBus(this.session);
     this.selection = null;
@@ -267,18 +293,13 @@ export class App {
   private async handleInsertImage(file: File): Promise<void> {
     const s = this.session;
     if (!s || !this.bus) return;
-    const bmp = await createImageBitmap(file);
-    const canvas = document.createElement('canvas');
-    canvas.width = bmp.width; canvas.height = bmp.height;
-    canvas.getContext('2d')!.drawImage(bmp, 0, 0);
-    const { data } = canvas.getContext('2d')!.getImageData(0, 0, bmp.width, bmp.height);
-    const rgba = new Uint8Array(data);
+    const { rgba, width, height } = await this.decodeImage(file);
     const page = s.model.pages[this.currentPage]!;
     const pageW = page.sizePt.widthPt, pageH = page.sizePt.heightPt;
     const wPt = Math.min(pageW * 0.6, 200);
-    const hPt = wPt * (bmp.height / bmp.width);
+    const hPt = wPt * (height / width);
     const xPt = (pageW - wPt) / 2, yPt = (pageH - hPt) / 2;
-    await this.bus.execute(new InsertImageCmd(this.currentPage, { rgba, imgWidth: bmp.width, imgHeight: bmp.height, xPt, yPt, wPt, hPt }));
+    await this.bus.execute(new InsertImageCmd(this.currentPage, { rgba, imgWidth: width, imgHeight: height, xPt, yPt, wPt, hPt }));
     this.setStatus('Imagen insertada.');
   }
 
