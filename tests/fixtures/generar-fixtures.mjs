@@ -147,6 +147,27 @@ async function pdfFormulario() {
   return doc.save();
 }
 
+/**
+ * PDF con una línea en una fuente ESTÁNDAR a la que le faltan TODOS los
+ * glifos latinos: ZapfDingbats (ISO 32000-1 Anexo D, tabla D.6). No hay
+ * ningún .ttf en el repo ni en node_modules que se pueda incrustar como
+ * subconjunto sin descargar nada de internet (prohibido por AGENTS.md §5), así
+ * que se elige esta vía, sugerida por el propio spec: ZapfDingbats tiene su
+ * propia codificación de símbolos y NO cubre el rango latino — el mismo
+ * síntoma que sufre un subconjunto real al que le falta un glifo. Verificado
+ * con el motor real: `editTextRun` a 'Mañana €' o a CJK ('漢字') devuelve
+ * `glyph-missing` sobre este run; pdf-lib ya rechaza codificar letras latinas
+ * con esta fuente al generar el fixture, así que el texto original son
+ * símbolos dingbat codificables (✁✂✃✄, U+2701-U+2704).
+ */
+async function pdfSubconjunto() {
+  const doc = await PDFDocument.create();
+  const dingbats = await doc.embedFont(StandardFonts.ZapfDingbats);
+  const p = doc.addPage([320, 200]);
+  p.drawText('✁✂✃✄', { x: 40, y: 130, size: 18, font: dingbats, color: rgb(0, 0, 0) });
+  return doc.save();
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -155,6 +176,7 @@ async function main() {
     'apaisado.pdf': await pdfApaisado(),
     'fuentes.pdf': await pdfFuentes(),
     'formulario.pdf': await pdfFormulario(),
+    'subconjunto.pdf': await pdfSubconjunto(),
     'rojo.png': pngSolido(16, 16, [255, 0, 0])
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {
