@@ -843,6 +843,48 @@ vez de pasar por `goToPage(i)`, saltándose por completo la fijación de
 
 ---
 
+### E-033 · `npm run verify` en local podía probar un build viejo de la app nueva
+
+**Síntoma.** `playwright.config.js` define dos `webServer`. El de la app nueva
+ejecuta `npm run build:next && npm run preview:next` en el puerto 4173 con
+`reuseExistingServer: !process.env.CI`. En local, si quedaba vivo un
+`vite preview` de una sesión anterior escuchando en 4173, Playwright lo
+**reutilizaba sin reconstruir**, y los E2E de `tests/e2e/next/` corrían contra
+el `dist/` viejo. `npm run verify` podía dar verde (o rojo) sobre código que ya
+no existía. Ocurrió en el PR #52: un test "antes del arreglo" daba un
+resultado falso hasta matar el puerto a mano y reconstruir.
+
+**Causa raíz.** A diferencia de `node server.js` (el webServer de la app
+vieja), que lee los ficheros del disco en cada petición y por tanto nunca
+sirve algo desactualizado aunque se reutilice el proceso, `vite preview` sirve
+un `dist/` **congelado en el instante del build**. `reuseExistingServer: true`
+(o `!process.env.CI`, que es `true` en local) asume que "un servidor vivo en
+ese puerto es equivalente a arrancarlo de nuevo" — una suposición correcta
+para `server.js` y falsa para `vite preview`, porque el build no vuelve a
+correr. AGENTS.md dice que `npm run verify` es la verdad; este supuesto lo
+rompía en local para cualquier IA o humano.
+
+**Cómo se detecta ahora.**
+- El webServer de `build:next` en `playwright.config.js` fija
+  `reuseExistingServer: false` **siempre**, incluso en local. Si el puerto
+  4173 ya está ocupado, Playwright falla alto con "puerto ya en uso" en vez de
+  probar código viejo en silencio — el fallo es el comportamiento correcto.
+- `node server.js` (app vieja) sigue con `reuseExistingServer: !process.env.CI`
+  a propósito: sirve el disco en vivo, así que reutilizarlo nunca da código
+  viejo.
+- `scripts/liberar-puertos.mjs` (`npm run e2e:liberar`) libera 4173 (y 3100)
+  cuando el fallo por puerto ocupado estorba, pero **no** se ejecuta dentro de
+  `verify`: matar procesos automáticamente en un pipeline es invasivo, y el
+  propio mensaje de error de Playwright ya explica qué comando ejecutar. Solo
+  mata el proceso que escucha en el puerto si su nombre es `node` o `vite`;
+  si no puede determinar el nombre, avisa y no lo toca.
+- Regla `webserver-next-no-reusar` — exige `reuseExistingServer: false` en la
+  entrada de `webServer` cuyo `command` contenga `build:next`.
+- Test `sobre el repo real no encuentra nada: playwright.config.js ya tiene
+  reuseExistingServer: false en build:next` en `reglas.test.mjs`.
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que
