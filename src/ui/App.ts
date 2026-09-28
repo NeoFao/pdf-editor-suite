@@ -16,6 +16,8 @@ import { InsertImageCmd } from '../commands/InsertImage';
 import { AddNoteCmd } from '../commands/AddNote';
 import { SetFormTextCmd } from '../commands/SetFormText';
 import { SetFormCheckedCmd } from '../commands/SetFormChecked';
+import { SetFormChoiceCmd } from '../commands/SetFormChoice';
+import { SetFormRadioCmd } from '../commands/SetFormRadio';
 import { HighlightRunCmd } from '../commands/HighlightRun';
 import { UnderlineRunCmd } from '../commands/UnderlineRun';
 import { StrikethroughRunCmd } from '../commands/StrikethroughRun';
@@ -227,6 +229,20 @@ export class App {
       onFormChecked: (pageIndex, annotIndex, checked) => {
         void this.bus?.execute(new SetFormCheckedCmd(pageIndex, annotIndex, checked));
         this.setStatus('Casilla actualizada.');
+      },
+      onFormChoice: (pageIndex, annotIndex, values) => {
+        const fields = this.session!.engine.listFormFields(this.session!.doc, pageIndex);
+        const field = fields.find((f) => f.annotIndex === annotIndex);
+        const oldValues = field ? field.options.filter((o) => o.selected).map((o) => o.value) : [];
+        void this.bus?.execute(new SetFormChoiceCmd(pageIndex, annotIndex, values, oldValues));
+        this.setStatus('Campo de elección actualizado.');
+      },
+      onFormRadio: (pageIndex, annotIndex) => {
+        const fields = this.session!.engine.listFormFields(this.session!.doc, pageIndex);
+        const target = fields.find((f) => f.annotIndex === annotIndex);
+        const prev = target ? fields.find((f) => f.name === target.name && f.checked) : undefined;
+        void this.bus?.execute(new SetFormRadioCmd(pageIndex, annotIndex, prev ? prev.annotIndex : null));
+        this.setStatus('Opción marcada.');
       }
     });
     this.currentPage = 0;
