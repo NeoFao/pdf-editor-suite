@@ -386,6 +386,23 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
+  fillRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const obj = this.p.FPDFPageObj_CreateNewRect(rect.xPt, rect.yPt, rect.wPt, rect.hPt);
+      this.p.FPDFPath_SetDrawMode(obj, 2, false); // 2 = relleno por winding, sin trazo
+      const [r, g, b] = color;
+      this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
+      // Blend normal (sin SetBlendMode): rectángulo opaco, base de subrayado/tachado.
+      this.p.FPDFPage_InsertObject(page, obj);
+      this.p.FPDFPage_GenerateContent(page);
+      return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
   drawStroke(doc: DocHandle, pageIndex: number, points: { xPt: number; yPt: number }[], color: [number, number, number], widthPt: number): boolean {
     if (points.length < 2) return false;
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
