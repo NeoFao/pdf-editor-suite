@@ -7,6 +7,8 @@ import { DeleteRunCmd } from '../commands/DeleteRun';
 import { InsertTextCmd } from '../commands/InsertText';
 import { MoveRunCmd } from '../commands/MoveRun';
 import { SetColorCmd } from '../commands/SetColor';
+import { SetRunFontSizeCmd } from '../commands/SetRunFontSize';
+import { SetRunFontCmd } from '../commands/SetRunFont';
 import { RotatePageCmd } from '../commands/RotatePage';
 import { DeletePageCmd } from '../commands/DeletePage';
 import { MovePageCmd } from '../commands/MovePage';
@@ -30,6 +32,8 @@ import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
 import type { RectPt, OutlineItem } from '../engine/PdfEngine';
+import { STANDARD_FONTS } from '../engine/standardFontFor';
+import { stripSubsetPrefix } from '../engine/fontClassify';
 
 /** Orquesta motor + sesión + comandos + visor. Punto de entrada de la app nueva. */
 export class App {
@@ -41,6 +45,17 @@ export class App {
   private penMode = false;
   private noteMode = false;
   private selection: { pageIndex: number; runId: number } | null = null;
+  /**
+   * Nombre de la fuente estándar aplicada explícitamente desde `#prop-font`
+   * a la selección ACTUAL, o `null` si no se ha tocado (o si cambió la
+   * selección desde entonces). Sin este rastro, `reflectPropsPanel` no
+   * podría distinguir "el run ya tenía por casualidad el nombre de una de
+   * las 14 fuentes estándar" (p. ej. un PDF que incrusta 'Times-Roman' tal
+   * cual, como el fixture de fuentes.pdf) de "el usuario eligió esa fuente
+   * en el panel": en ambos casos `run.fontName` vale lo mismo, pero solo el
+   * segundo caso debe mostrar esa fuente seleccionada en vez de "Original".
+   */
+  private appliedFontLabel: string | null = null;
   private viewer: Viewer | null = null;
   private scale = 1;
   private readonly viewerEl: HTMLElement;
@@ -55,6 +70,9 @@ export class App {
   private readonly btnNote: HTMLButtonElement;
   private readonly btnOcr: HTMLButtonElement;
   private readonly colorInput: HTMLInputElement;
+  private readonly propsPanel: HTMLElement;
+  private readonly propFont: HTMLSelectElement;
+  private readonly propSize: HTMLInputElement;
   private readonly searchInput: HTMLInputElement;
   private readonly rangeInput: HTMLInputElement;
   private currentPage = 0;
@@ -86,6 +104,41 @@ export class App {
     this.colorInput = document.createElement('input');
     this.colorInput.type = 'color'; this.colorInput.id = 'btn-color'; this.colorInput.title = 'Color de la línea seleccionada';
     this.colorInput.addEventListener('input', () => this.applyColor());
+
+    // Panel de propiedades de la línea seleccionada (fuente, tamaño, color),
+    // como en Acrobat. Vive dentro de la propia barra de herramientas —igual
+    // que el resto de controles de esta app, que no usa paneles flotantes—
+    // así no tapa el documento ni rompe el flex existente; solo aparece
+    // (`display: flex`) mientras haya una línea seleccionada
+    // (`reflectPropsPanel`, llamado desde `onSelect`).
+    this.propsPanel = document.createElement('div');
+    this.propsPanel.id = 'props-panel';
+    Object.assign(this.propsPanel.style, {
+      display: 'none', alignItems: 'center', gap: '6px',
+      padding: '2px 8px', border: '1px solid #ccc', borderRadius: '4px'
+    });
+
+    const fontLabel = document.createElement('label');
+    fontLabel.textContent = 'Fuente:';
+    fontLabel.style.fontSize = '12px';
+    this.propFont = document.createElement('select');
+    this.propFont.id = 'prop-font';
+    this.propFont.title = 'Fuente de la línea seleccionada';
+    this.propFont.addEventListener('change', () => void this.applyFont());
+    fontLabel.appendChild(this.propFont);
+
+    const sizeLabel = document.createElement('label');
+    sizeLabel.textContent = 'Tamaño:';
+    sizeLabel.style.fontSize = '12px';
+    this.propSize = document.createElement('input');
+    this.propSize.type = 'number'; this.propSize.id = 'prop-size';
+    this.propSize.min = '1'; this.propSize.max = '400'; this.propSize.step = '0.5';
+    this.propSize.title = 'Tamaño (pt) de la línea seleccionada';
+    this.propSize.style.width = '4.5em';
+    this.propSize.addEventListener('change', () => void this.applyFontSize());
+    sizeLabel.appendChild(this.propSize);
+
+    this.propsPanel.append(fontLabel, sizeLabel, this.colorInput);
 
     this.searchInput = document.createElement('input');
     this.searchInput.type = 'search'; this.searchInput.id = 'btn-search'; this.searchInput.placeholder = 'Buscar…';
@@ -122,7 +175,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, this.btnPen, this.btnNote, this.btnOcr, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, this.rangeInput, btnSplit, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, this.btnPen, this.btnNote, this.btnOcr, this.propsPanel, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, this.rangeInput, btnSplit, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -241,13 +294,14 @@ export class App {
     this.session = await EditSession.open(engine, bytes);
     this.bus = new CommandBus(this.session);
     this.selection = null;
+    this.reflectPropsPanel();
     this.insertMode = false; this.penMode = false; this.noteMode = false;
     this.btnInsert.style.background = ''; this.btnPen.style.background = ''; this.btnNote.style.background = '';
     this.viewerEl.textContent = '';
     this.scale = 1;
     this.viewer = new Viewer(this.viewerEl, this.session, {
       onEdit: (req) => this.handleEdit(req),
-      onSelect: (pageIndex, runId) => { this.selection = { pageIndex, runId }; this.reflectColor(); },
+      onSelect: (pageIndex, runId) => { this.selection = { pageIndex, runId }; this.appliedFontLabel = null; this.reflectPropsPanel(); },
       onBackgroundClick: (pageIndex, at) => { this.handleBackgroundClick(pageIndex, at); },
       onMove: (pageIndex, runId, dxPt, dyPt) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt)); },
       onPageChange: (i) => { this.currentPage = i; this.updateIndicator(); this.setActiveThumb(i); },
@@ -348,6 +402,7 @@ export class App {
     if (!this.bus || !this.selection) { this.setStatus('Selecciona primero una línea (haz clic en ella).'); return; }
     const { pageIndex, runId } = this.selection;
     this.selection = null;
+    this.reflectPropsPanel();
     await this.bus.execute(new DeleteRunCmd(pageIndex, runId));
     this.setStatus('Línea borrada del documento.');
   }
@@ -358,10 +413,82 @@ export class App {
     return page?.runs.find((r) => r.runId === this.selection!.runId) ?? null;
   }
 
-  /** Refleja en el selector el color de la línea seleccionada. */
-  private reflectColor(): void {
+  /**
+   * Refleja en el panel (§3 del encargo) la fuente, tamaño y color REALES de
+   * la línea seleccionada, releídos del modelo — nunca de lo que había antes
+   * del último cambio. Oculta el panel entero cuando no hay selección. Se
+   * llama tras `onSelect`, tras abrir/cerrar documento, tras borrar la
+   * selección y tras cada cambio de fuente/tamaño (con la selección ya
+   * reapuntada al runId nuevo, ver `applyFont`/`applyFontSize`).
+   */
+  private reflectPropsPanel(): void {
     const run = this.selectedRun();
-    if (run) this.colorInput.value = rgbToHex(run.color[0], run.color[1], run.color[2]);
+    if (!run) { this.propsPanel.style.display = 'none'; return; }
+    this.propsPanel.style.display = 'flex';
+
+    this.propFont.textContent = '';
+    const original = document.createElement('option');
+    original.value = '__original__';
+    original.textContent = `Original (${stripSubsetPrefix(run.fontName)})`;
+    this.propFont.appendChild(original);
+    for (const name of STANDARD_FONTS) {
+      const opt = document.createElement('option');
+      opt.value = name;
+      opt.textContent = name;
+      this.propFont.appendChild(opt);
+    }
+    // Solo si el USUARIO eligió explícitamente una fuente estándar en este
+    // panel para la selección actual (`appliedFontLabel`) se muestra esa
+    // marcada; en cualquier otro caso, "Original" — aunque `run.fontName`
+    // coincida por casualidad con el nombre de una fuente estándar (ver el
+    // comentario del campo).
+    this.propFont.value = this.appliedFontLabel ?? '__original__';
+
+    this.propSize.value = String(Math.round(run.sizePt * 2) / 2);
+    this.colorInput.value = rgbToHex(run.color[0], run.color[1], run.color[2]);
+  }
+
+  /** `#prop-font` change: aplica la fuente estándar elegida al run seleccionado. */
+  private async applyFont(): Promise<void> {
+    const run = this.selectedRun();
+    if (!run || !this.bus || !this.selection) return;
+    const chosen = this.propFont.value;
+    // "Original", o la fuente que ya se había aplicado desde este panel: no hay nada que cambiar.
+    if (chosen === '__original__' || chosen === this.appliedFontLabel) return;
+    const { pageIndex, runId } = this.selection;
+    const cmd = new SetRunFontCmd(pageIndex, runId, chosen);
+    await this.bus.execute(cmd);
+    if (cmd.ok && cmd.fontName) {
+      this.selection = { pageIndex, runId: cmd.runId };
+      this.appliedFontLabel = cmd.fontName;
+      this.setStatus(`Fuente cambiada a ${cmd.fontName}.`);
+    } else {
+      this.setStatus('Esa fuente no tiene todos los caracteres de esta línea; sin cambios.');
+    }
+    this.reflectPropsPanel();
+  }
+
+  /** `#prop-size` change: valida el rango (1-400 pt) y aplica el tamaño nuevo. */
+  private async applyFontSize(): Promise<void> {
+    const run = this.selectedRun();
+    if (!run || !this.bus || !this.selection) return;
+    const value = parseFloat(this.propSize.value);
+    if (!Number.isFinite(value) || value < 1 || value > 400) {
+      this.setStatus('Tamaño no válido: debe estar entre 1 y 400 pt.');
+      this.reflectPropsPanel(); // repone el valor válido anterior en el input
+      return;
+    }
+    if (Math.abs(value - run.sizePt) < 0.01) return;
+    const { pageIndex, runId } = this.selection;
+    const cmd = new SetRunFontSizeCmd(pageIndex, runId, value);
+    await this.bus.execute(cmd);
+    if (cmd.ok) {
+      this.selection = { pageIndex, runId: cmd.runId };
+      this.setStatus('Tamaño cambiado.');
+    } else {
+      this.setStatus('Tamaño no válido: debe estar entre 1 y 400 pt.');
+    }
+    this.reflectPropsPanel();
   }
 
   private applyColor(): void {
