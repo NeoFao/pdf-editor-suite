@@ -212,6 +212,40 @@ describe('motor-encapsulado', () => {
   });
 });
 
+describe('pdfium-buffer-fijo', () => {
+  const regla = detectarEn('pdfium-buffer-fijo');
+  // Reproduce la heurística de la regla sobre texto suelto (mismo patrón que ejecutar()).
+  const patron = /FPDF\w*_Get\w*(?:Text|Name|StringValue|MetaText|Label)\w*\(([^)]*)\)/g;
+  function ultimoArgEsBufferFijo(linea) {
+    for (const m of linea.matchAll(patron)) {
+      const args = m[1].split(',').map((a) => a.trim());
+      const ultimo = args[args.length - 1];
+      if (/^\d+$/.test(ultimo) && Number(ultimo) !== 0) return true;
+    }
+    return false;
+  }
+
+  test('detecta el patrón exacto que produjo E-028: FPDFTextObj_GetText con buffer de 1024', () => {
+    const linea = '    this.p.FPDFTextObj_GetText(obj, textPage, tbuf, 1024);';
+    assert.ok(ultimoArgEsBufferFijo(linea));
+    assert.ok(regla.comoArreglar.includes('leerCadenaPdfium'));
+  });
+
+  test('no señala la llamada de sondeo (buffer=0, buflen=0)', () => {
+    const linea = "const needed = this.p.FPDFAnnot_GetStringValue(annot, 'Contents', 0, 0);";
+    assert.equal(ultimoArgEsBufferFijo(linea), false);
+  });
+
+  test('no señala el patrón correcto de dos llamadas (buffer=buf, buflen=needed)', () => {
+    const linea = "this.p.FPDFAnnot_GetStringValue(annot, 'Contents', buf, needed);";
+    assert.equal(ultimoArgEsBufferFijo(linea), false);
+  });
+
+  test('sobre el repo real no encuentra nada: los tres getters usan leerCadenaPdfium', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega

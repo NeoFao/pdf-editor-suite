@@ -33,3 +33,28 @@ export function makeMem(p: Pdfium): Mem {
     }
   };
 }
+
+/**
+ * Patrón de dos llamadas obligatorio para los getters de cadena de PDFium
+ * (FPDFTextObj_GetText, FPDFFont_GetBaseFontName, FPDFAnnot_GetStringValue,
+ * FPDFText_GetText...). Llamar con buffer=0/buflen=0 devuelve el tamaño exacto
+ * necesario; un buffer menor que ese tamaño NO se rellena — a diferencia de
+ * otras APIs C que truncan, PDFium deja el buffer tal cual estaba, es decir,
+ * memoria sin inicializar (E-028). `llamar(bufPtr, bufLen)` debe invocar el
+ * getter real pasando esos dos como sus últimos argumentos.
+ */
+export function leerCadenaPdfium(
+  mem: Mem,
+  llamar: (bufPtr: number, bufLen: number) => number,
+  decodificar: (ptr: number) => string
+): string {
+  const needed = llamar(0, 0);
+  if (needed <= 0) return '';
+  const buf = mem.malloc(needed);
+  try {
+    llamar(buf, needed);
+    return decodificar(buf);
+  } finally {
+    mem.free(buf);
+  }
+}

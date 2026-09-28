@@ -567,6 +567,46 @@ defensa en profundidad y necesita permiso explícito (AGENTS.md §5).
 
 ---
 
+## Motor PDFium
+
+### E-028 · Los getters de cadena de PDFium devolvían basura con textos largos
+
+**Síntoma.** Ya se sufrió una vez en el PR #42: `getNotes` con un buffer fijo de
+4096 bytes devolvía 4 caracteres de basura para una nota de 5000. El mismo
+patrón seguía vivo en `getPageText`: un run de texto de más de ~511 caracteres
+UTF-16 (buffer fijo de 1024 bytes) o un nombre de fuente de más de 255 bytes
+(buffer fijo de 256 bytes) se leían truncados o directamente como basura.
+
+**Causa raíz.** Los getters de cadena de PDFium (`FPDFTextObj_GetText`,
+`FPDFFont_GetBaseFontName`, `FPDFAnnot_GetStringValue`, `FPDFText_GetText`...)
+no truncan como una API de cadenas en C convencional: si el buffer es menor
+que lo necesario, **no escriben nada en él**. Leer ese buffer da memoria WASM
+sin inicializar —basura—, no un texto cortado por la mitad. Cualquier tamaño
+fijo elegido "a ojo" (1024, 256, 4096...) es solo cuestión de tiempo hasta que
+un documento real lo supere.
+
+**Cómo se detecta ahora.**
+- Test `getPageText no trunca ni devuelve basura en un run de texto largo
+  (>511 caracteres UTF-16)` en `tests/unit/PdfiumEngine.longtext.test.ts` —
+  falló con `expected 4 to be 1200` antes del arreglo, el mismo síntoma que el
+  PR #42.
+- El caso de `FPDFFont_GetBaseFontName` con un nombre largo no tiene test de
+  comportamiento: `FPDFPageObj_NewTextObj` exige un nombre de la familia
+  estándar de 14 fuentes y rechaza (objeto nulo) cualquier nombre no
+  reconocido, incluso uno corto, así que no hay ruta para producirlo desde
+  este motor en pruebas. Queda cubierto por el arreglo por construcción
+  (mismo helper que el resto) y por la regla determinista.
+- Regla `pdfium-buffer-fijo` — bloquea cualquier llamada a un getter de cadena
+  de PDFium (`FPDF\w*_Get\w*(Text|Name|StringValue|MetaText|Label)\w*\(`) cuyo
+  último argumento sea un literal numérico distinto de 0.
+- `leerCadenaPdfium()` en `src/engine/pdfium/mem.ts` implementa el patrón de
+  dos llamadas una sola vez (sondeo con tamaño 0 → tamaño exacto → buffer
+  justo) y lo usan los tres getters de `PdfiumEngine.ts`: `readTextRun()`
+  (texto y nombre de fuente) y `getNotes()`. Antes `getNotes` ya tenía el
+  patrón correcto pero duplicado a mano; ahora hay un único sitio.
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que
