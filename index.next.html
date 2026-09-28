@@ -7,6 +7,50 @@
     <style>
       html, body { height: 100%; margin: 0; }
       #app { height: 100%; display: flex; flex-direction: column; }
+
+      /*
+       * Capa de texto vivo (E-029): estados por CSS, no por JS inline.
+       * En reposo el motor (PDFium) ya pintó la línea en el canvas de abajo;
+       * `.run` es solo el hitbox (texto transparente, sin fondo). Al pasar
+       * el ratón o seleccionar, un contorno sutil y el tirador se hacen
+       * visibles. Al editar, el fondo blanco tapa la línea original (la
+       * caja sale SIEMPRE de la geometría original del run, nunca de
+       * `offsetHeight` en edición — E-002) y el texto se ve con la mejor
+       * aproximación de su tipografía real (fijada en línea por
+       * TextLayer/cssFontFor, como la geometría).
+       */
+      .run {
+        color: transparent;
+        background: transparent;
+        outline: none;
+        box-sizing: border-box;
+        border: none;
+        padding: 0;
+        cursor: text;
+        white-space: pre;
+      }
+      .run:hover,
+      .run.selected {
+        outline: 1px dashed #6366f1;
+      }
+      .run.editing {
+        background: #fff;
+        outline: 1px solid #6366f1;
+      }
+      .run-drag {
+        border-radius: 50%;
+        background: #6366f1;
+        border: 2px solid #fff;
+        cursor: move;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity .1s;
+      }
+      .run:hover .run-drag,
+      .run.selected .run-drag {
+        opacity: 1;
+        pointer-events: auto;
+      }
     </style>
   </head>
   <body>
