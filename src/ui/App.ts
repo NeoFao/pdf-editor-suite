@@ -29,7 +29,7 @@ import { parseRange } from './pageRange';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
-import type { RectPt } from '../engine/PdfEngine';
+import type { RectPt, OutlineItem } from '../engine/PdfEngine';
 
 /** Orquesta motor + sesión + comandos + visor. Punto de entrada de la app nueva. */
 export class App {
@@ -45,6 +45,9 @@ export class App {
   private scale = 1;
   private readonly viewerEl: HTMLElement;
   private readonly thumbsEl: HTMLElement;
+  private readonly outlineEl: HTMLElement;
+  private readonly tabPages: HTMLButtonElement;
+  private readonly tabOutline: HTMLButtonElement;
   private readonly status: HTMLElement;
   private readonly pageIndicator: HTMLElement;
   private readonly btnInsert: HTMLButtonElement;
@@ -127,16 +130,37 @@ export class App {
     const area = document.createElement('div');
     Object.assign(area.style, { flex: '1', minHeight: '0', display: 'flex' });
 
+    // Panel lateral: dos pestañas ("Páginas"/"Marcadores") que alternan entre
+    // las miniaturas y el árbol de marcadores dentro del mismo hueco.
+    const sidebar = document.createElement('div');
+    sidebar.id = 'sidebar';
+    Object.assign(sidebar.style, { width: '150px', flex: '0 0 150px', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#3f4145', boxSizing: 'border-box' });
+
+    const tabs = document.createElement('div');
+    Object.assign(tabs.style, { display: 'flex', flex: '0 0 auto', borderBottom: '1px solid #2a2c2f' });
+    this.tabPages = this.button('Páginas', 'tab-pages', () => this.showSidebarTab('pages'));
+    this.tabOutline = this.button('Marcadores', 'tab-outline', () => this.showSidebarTab('outline'));
+    Object.assign(this.tabPages.style, { flex: '1', padding: '6px 4px' });
+    Object.assign(this.tabOutline.style, { flex: '1', padding: '6px 4px' });
+    tabs.append(this.tabPages, this.tabOutline);
+
     this.thumbsEl = document.createElement('div');
     this.thumbsEl.id = 'thumbs';
-    Object.assign(this.thumbsEl.style, { width: '150px', flex: '0 0 150px', overflow: 'auto', background: '#3f4145', padding: '8px', boxSizing: 'border-box' });
+    Object.assign(this.thumbsEl.style, { flex: '1', overflow: 'auto', padding: '8px', boxSizing: 'border-box' });
+
+    this.outlineEl = document.createElement('div');
+    this.outlineEl.id = 'outline-panel';
+    Object.assign(this.outlineEl.style, { flex: '1', overflow: 'auto', padding: '8px', boxSizing: 'border-box', display: 'none', color: '#eee', font: '13px sans-serif' });
+
+    sidebar.append(tabs, this.thumbsEl, this.outlineEl);
 
     this.viewerEl = document.createElement('div');
     this.viewerEl.id = 'viewer';
     Object.assign(this.viewerEl.style, { flex: '1', overflow: 'auto', background: '#525659', padding: '16px' });
 
-    area.append(this.thumbsEl, this.viewerEl);
+    area.append(sidebar, this.viewerEl);
     rootEl.appendChild(area);
+    this.showSidebarTab('pages');
 
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); void this.bus?.undo(); }
@@ -251,10 +275,13 @@ export class App {
       const total = this.session?.model.pages.length ?? 0;
       if (this.currentPage >= total) this.currentPage = Math.max(0, total - 1);
       this.buildThumbnails();
+      this.buildOutline();
       this.setActiveThumb(this.currentPage);
       this.updateIndicator();
     });
     this.buildThumbnails();
+    this.buildOutline();
+    this.showSidebarTab('pages');
     this.updateIndicator();
     this.setStatus(`${this.session.model.pages.length} página(s)`);
   }
@@ -443,6 +470,83 @@ export class App {
     for (const el of Array.from(this.thumbsEl.children)) {
       (el as HTMLElement).style.outline = Number((el as HTMLElement).dataset.page) === i ? '2px solid #6366f1' : 'none';
     }
+  }
+
+  /** Alterna el panel lateral entre miniaturas de página y árbol de marcadores. */
+  private showSidebarTab(which: 'pages' | 'outline'): void {
+    this.thumbsEl.style.display = which === 'pages' ? 'block' : 'none';
+    this.outlineEl.style.display = which === 'outline' ? 'block' : 'none';
+    this.tabPages.style.background = which === 'pages' ? '#c7d2fe' : '';
+    this.tabOutline.style.background = which === 'outline' ? '#c7d2fe' : '';
+  }
+
+  /** Árbol de marcadores del documento. Se reconstruye al abrir otro documento y tras cualquier `onReload` (borrar/mover página cambia los índices). */
+  private buildOutline(): void {
+    this.outlineEl.textContent = '';
+    const s = this.session;
+    if (!s) return;
+    const items = s.engine.getOutline(s.doc);
+    if (items.length === 0) {
+      const p = document.createElement('p');
+      p.textContent = 'Este documento no tiene marcadores.';
+      this.outlineEl.appendChild(p);
+      return;
+    }
+    this.outlineEl.appendChild(this.buildOutlineList(items, 0));
+  }
+
+  /** Nivel de la lista de marcadores: un `<ul>` con un `<li>` por nodo, recursivo para los hijos. */
+  private buildOutlineList(items: OutlineItem[], depth: number): HTMLUListElement {
+    const ul = document.createElement('ul');
+    Object.assign(ul.style, { listStyle: 'none', margin: '0', padding: '0' });
+    for (const item of items) {
+      const li = document.createElement('li');
+      const row = document.createElement('div');
+      Object.assign(row.style, { display: 'flex', alignItems: 'center', paddingLeft: `${depth * 14}px` });
+
+      let childrenUl: HTMLUListElement | null = null;
+      if (item.children.length > 0) {
+        const toggle = document.createElement('button');
+        toggle.className = 'outline-toggle';
+        toggle.textContent = '▸';
+        toggle.setAttribute('aria-expanded', 'false');
+        toggle.title = 'Desplegar/plegar';
+        Object.assign(toggle.style, { border: 'none', background: 'none', color: 'inherit', cursor: 'pointer', width: '16px', flex: '0 0 16px', padding: '0' });
+        toggle.addEventListener('click', () => {
+          const expandido = toggle.getAttribute('aria-expanded') === 'true';
+          const siguiente = !expandido;
+          toggle.setAttribute('aria-expanded', String(siguiente));
+          toggle.textContent = siguiente ? '▾' : '▸';
+          if (childrenUl) childrenUl.style.display = siguiente ? 'block' : 'none';
+        });
+        row.appendChild(toggle);
+      } else {
+        const spacer = document.createElement('span');
+        Object.assign(spacer.style, { width: '16px', flex: '0 0 16px', display: 'inline-block' });
+        row.appendChild(spacer);
+      }
+
+      const btn = document.createElement('button');
+      btn.className = 'outline-item';
+      btn.textContent = item.title;
+      Object.assign(btn.style, { border: 'none', background: 'none', color: 'inherit', textAlign: 'left', flex: '1', padding: '2px 0', cursor: item.pageIndex !== null ? 'pointer' : 'default' });
+      if (item.pageIndex !== null) {
+        const pageIndex = item.pageIndex;
+        btn.addEventListener('click', () => this.goToPage(pageIndex));
+      } else {
+        btn.disabled = true;
+      }
+      row.appendChild(btn);
+      li.appendChild(row);
+
+      if (item.children.length > 0) {
+        childrenUl = this.buildOutlineList(item.children, depth + 1);
+        childrenUl.style.display = 'none';
+        li.appendChild(childrenUl);
+      }
+      ul.appendChild(li);
+    }
+    return ul;
   }
 
   /** Miniaturas: un canvas pequeño por página; clic desplaza el visor. */

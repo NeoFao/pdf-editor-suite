@@ -110,6 +110,17 @@ export interface InsertTextSpec {
   invisible?: boolean;
 }
 
+/**
+ * Nodo del árbol de marcadores (outline) de Acrobat. `pageIndex` es `null`
+ * cuando el marcador no tiene destino resoluble (sin `/Dest` ni acción GoTo
+ * con destino, o un destino que no apunta a ninguna página del documento).
+ */
+export interface OutlineItem {
+  title: string;
+  pageIndex: number | null;
+  children: OutlineItem[];
+}
+
 /** Puntero opaco al documento dentro del motor. */
 export type DocHandle = number;
 
@@ -125,6 +136,14 @@ export interface PdfEngine {
   findText(doc: DocHandle, pageIndex: number, query: string): RectPt[];
   /** Runs de texto de la página, con su caja, fuente, tamaño y color. Vacío si no hay texto (escaneado). */
   getPageText(doc: DocHandle, pageIndex: number): TextRun[];
+  /**
+   * Árbol de marcadores (outline) del documento, en el orden en que Acrobat
+   * lo muestra. `[]` si el documento no tiene marcadores. Fase 1: solo
+   * lectura y navegación, sin editar. Protegido contra outlines hostiles
+   * (ciclos, profundidad o cantidad de nodos excesivas) — ver la
+   * implementación del motor.
+   */
+  getOutline(doc: DocHandle): OutlineItem[];
   /**
    * Edita el texto de un run EN SITIO: conserva fuente, tamaño, color y posición.
    * No crea objetos nuevos ni rasteriza. Devuelve `glyph-missing` (sin modificar)
