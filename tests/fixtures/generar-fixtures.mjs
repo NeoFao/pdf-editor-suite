@@ -5,7 +5,7 @@
  * cada corrida (`npm run test:fixtures`). Así el repo no acumula binarios y
  * cualquier máquina obtiene exactamente el mismo documento.
  */
-import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb, PDFName, PDFHexString } from 'pdf-lib';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -199,6 +199,102 @@ async function pdfSubconjunto() {
   return doc.save();
 }
 
+/**
+ * PDF de 3 páginas con un árbol de marcadores (outline) de dos niveles:
+ * "Capítulo 1" (página 1) con un hijo "Sección 1.1" (página 2), y
+ * "Capítulo 2 — Ñandú" (página 3, con Ñ y raya para probar el UTF-16 del
+ * título). pdf-lib no tiene API de alto nivel para outlines: se construye
+ * con su API de bajo nivel — diccionarios /Outlines, /First, /Last, /Next,
+ * /Parent, /Title como `PDFHexString.fromText` y /Dest `[pageRef /Fit]` —
+ * registrados en el catálogo bajo /Outlines.
+ */
+async function pdfMarcadores() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  // Tamaño A4, como pdfNativo(): con páginas pequeñas las tres caben a la vez
+  // en el viewport de escritorio y el IntersectionObserver del visor nunca ve
+  // un cambio de página al desplazarse (E2E flaky por diseño del fixture, no
+  // del código bajo prueba).
+  const p1 = doc.addPage([595.28, 841.89]);
+  p1.drawText('Pagina 1', { x: 60, y: 760, size: 20, font });
+  const p2 = doc.addPage([595.28, 841.89]);
+  p2.drawText('Pagina 2', { x: 60, y: 760, size: 20, font });
+  const p3 = doc.addPage([595.28, 841.89]);
+  p3.drawText('Pagina 3', { x: 60, y: 760, size: 20, font });
+
+  const { context, catalog } = doc;
+  const dest = (page) => context.obj([page.ref, PDFName.of('Fit')]);
+
+  const rootRef = context.nextRef();
+  const cap1Ref = context.nextRef();
+  const sec11Ref = context.nextRef();
+  const cap2Ref = context.nextRef();
+
+  context.assign(rootRef, context.obj({
+    Type: 'Outlines',
+    First: cap1Ref,
+    Last: cap2Ref,
+    Count: 2
+  }));
+
+  context.assign(cap1Ref, context.obj({
+    Title: PDFHexString.fromText('Capítulo 1'),
+    Parent: rootRef,
+    Next: cap2Ref,
+    First: sec11Ref,
+    Last: sec11Ref,
+    Count: 1,
+    Dest: dest(p1)
+  }));
+
+  context.assign(sec11Ref, context.obj({
+    Title: PDFHexString.fromText('Sección 1.1'),
+    Parent: cap1Ref,
+    Dest: dest(p2)
+  }));
+
+  context.assign(cap2Ref, context.obj({
+    Title: PDFHexString.fromText('Capítulo 2 — Ñandú'),
+    Parent: rootRef,
+    Prev: cap1Ref,
+    Dest: dest(p3)
+  }));
+
+  catalog.set(PDFName.of('Outlines'), rootRef);
+
+  return doc.save();
+}
+
+/**
+ * Outline hostil para el test de seguridad del recorrido: el /Next del
+ * segundo nodo apunta de vuelta al primero, formando un ciclo entre
+ * hermanos. Sin protección, seguir /NextSibling entraría en bucle infinito.
+ */
+async function pdfOutlineCiclo() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const p1 = doc.addPage([320, 200]);
+  p1.drawText('Pagina 1', { x: 40, y: 150, size: 14, font });
+  const p2 = doc.addPage([320, 200]);
+  p2.drawText('Pagina 2', { x: 40, y: 150, size: 14, font });
+
+  const { context, catalog } = doc;
+  const dest = (page) => context.obj([page.ref, PDFName.of('Fit')]);
+
+  const rootRef = context.nextRef();
+  const nodoARef = context.nextRef();
+  const nodoBRef = context.nextRef();
+
+  context.assign(rootRef, context.obj({ Type: 'Outlines', First: nodoARef, Last: nodoBRef, Count: 2 }));
+  context.assign(nodoARef, context.obj({ Title: PDFHexString.fromText('Nodo A'), Parent: rootRef, Next: nodoBRef, Dest: dest(p1) }));
+  // Hostil: el segundo nodo, en vez de terminar la lista, vuelve a apuntar al primero.
+  context.assign(nodoBRef, context.obj({ Title: PDFHexString.fromText('Nodo B'), Parent: rootRef, Next: nodoARef, Dest: dest(p2) }));
+
+  catalog.set(PDFName.of('Outlines'), rootRef);
+
+  return doc.save();
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -208,6 +304,8 @@ async function main() {
     'fuentes.pdf': await pdfFuentes(),
     'formulario.pdf': await pdfFormulario(),
     'subconjunto.pdf': await pdfSubconjunto(),
+    'marcadores.pdf': await pdfMarcadores(),
+    'outline-ciclo.pdf': await pdfOutlineCiclo(),
     'rojo.png': pngSolido(16, 16, [255, 0, 0])
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {

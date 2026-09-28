@@ -1,7 +1,7 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor } from '../standardFontFor';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_ANNOT_TEXT = 1;    // FPDF_ANNOTATION_SUBTYPE: nota adhesiva ("sticky note")
@@ -22,6 +22,15 @@ const FPDF_FORMFIELD_KIND: Record<number, FormFieldKind> = {
 };
 const FPDF_FORMFLAG_READONLY = 0x01; // bit 1 de /Ff (PDF 32000-1, tabla 221).
 const FPDF_FORMFLAG_CHOICE_MULTISELECT = 0x200000; // bit 22 de /Ff (tabla 231, solo campos de elección).
+
+const PDFACTION_GOTO = 1; // FPDFAction_GetType: acción "ir a" (destino dentro del propio documento).
+
+// Cotas del recorrido del outline (E-031, ver docs/ERRORES-CONOCIDOS.md): un
+// PDF hostil puede definir un outline con ciclos (un /Next o /First que
+// apunta hacia atrás) o una profundidad/cantidad de nodos desmedida. Sin
+// estas cotas, un `while` que sigue /NextSibling entraría en bucle infinito.
+const OUTLINE_MAX_DEPTH = 32;
+const OUTLINE_MAX_NODES = 10000;
 
 /**
  * Implementación de PdfEngine sobre @embedpdf/pdfium (WASM).
@@ -301,6 +310,61 @@ export class PdfiumEngine implements PdfEngine {
     const originPt = { xPt: m.getValue(mat + 16, 'float'), yPt: m.getValue(mat + 20, 'float') };
     m.free(mat);
     return { runId, text, sizePt, fontName, color, boxPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom }, originPt };
+  }
+
+  /**
+   * Árbol de marcadores del documento. Recorre `FPDFBookmark_GetFirstChild` /
+   * `FPDFBookmark_GetNextSibling` con tres protecciones contra un outline
+   * hostil (E-031): un `Set` de handles ya visitados corta cualquier ciclo
+   * (hermano o hijo que apunte hacia atrás — los handles de PDFium son punteros
+   * estables dentro del documento mientras dure el recorrido), un límite de
+   * profundidad (`OUTLINE_MAX_DEPTH`) acota la recursión (no puede desbordar
+   * la pila: JS ya rompe mucho antes de 32 niveles) y un límite total de nodos
+   * (`OUTLINE_MAX_NODES`) acota el trabajo aunque no haya ciclo, por ejemplo
+   * una lista de hermanos artificialmente larga.
+   */
+  getOutline(doc: DocHandle): OutlineItem[] {
+    const visitados = new Set<number>();
+    let total = 0;
+    const leerHermanos = (padre: number, profundidad: number): OutlineItem[] => {
+      if (profundidad > OUTLINE_MAX_DEPTH) return [];
+      const items: OutlineItem[] = [];
+      let marcador = this.p.FPDFBookmark_GetFirstChild(doc, padre);
+      while (marcador) {
+        if (visitados.has(marcador) || total >= OUTLINE_MAX_NODES) break;
+        visitados.add(marcador);
+        total++;
+        const title = leerCadenaPdfium(
+          this.mem,
+          (buf, len) => this.p.FPDFBookmark_GetTitle(marcador, buf, len),
+          (ptr) => this.mem.readU16(ptr)
+        );
+        const pageIndex = this.bookmarkPageIndex(doc, marcador);
+        const children = leerHermanos(marcador, profundidad + 1);
+        items.push({ title, pageIndex, children });
+        marcador = this.p.FPDFBookmark_GetNextSibling(doc, marcador);
+      }
+      return items;
+    };
+    return leerHermanos(0, 0);
+  }
+
+  /**
+   * Página de destino de un marcador, o `null` si no resuelve a ninguna.
+   * Primero el destino directo (`/Dest`); si no hay, la acción GoTo del
+   * marcador (`/A`) — un marcador solo tiene uno de los dos, nunca ambos.
+   */
+  private bookmarkPageIndex(doc: DocHandle, marcador: number): number | null {
+    let dest = this.p.FPDFBookmark_GetDest(doc, marcador);
+    if (!dest) {
+      const action = this.p.FPDFBookmark_GetAction(marcador);
+      if (action && this.p.FPDFAction_GetType(action) === PDFACTION_GOTO) {
+        dest = this.p.FPDFAction_GetDest(doc, action);
+      }
+    }
+    if (!dest) return null;
+    const pageIndex = this.p.FPDFDest_GetDestPageIndex(doc, dest);
+    return pageIndex >= 0 ? pageIndex : null;
   }
 
   editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult {

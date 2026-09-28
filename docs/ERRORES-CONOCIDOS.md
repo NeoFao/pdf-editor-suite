@@ -607,6 +607,35 @@ un documento real lo supere.
 
 ---
 
+### E-031 · Un outline (marcadores) hostil con un ciclo colgaría el recorrido
+
+**Síntoma.** No llegó a producirse: se previno al implementar el panel de
+marcadores (fase 1, solo lectura y navegación). Un PDF construido a mala fe
+puede definir un árbol de marcadores donde el `/Next` de un hermano, o el
+`/First` de un hijo, apunte hacia atrás a un nodo ya visitado — un ciclo. Un
+recorrido que siga esos punteros sin más entraría en bucle infinito y colgaría
+la pestaña al abrir ese documento.
+
+**Causa raíz (de diseño, anticipada).** El árbol de marcadores de PDFium se
+recorre con punteros (`FPDFBookmark_GetFirstChild`/`GetNextSibling`) que
+vienen directamente del propio documento — que es entrada no confiable, igual
+que el texto (E-003) o las fuentes que compilan con `eval` (E-027). Nada en la
+API del motor garantiza que ese grafo sea realmente un árbol.
+
+**Cómo se detecta ahora.** `PdfiumEngine.getOutline()`
+(`src/engine/pdfium/PdfiumEngine.ts`) recorre con tres cotas: un `Set` de
+handles de marcador ya visitados corta cualquier ciclo (hermano o hijo que
+apunte hacia atrás), un límite de profundidad (`OUTLINE_MAX_DEPTH = 32`) acota
+la recursión, y un límite total de nodos (`OUTLINE_MAX_NODES = 10000`) acota
+el trabajo aunque no haya ciclo. El fixture `outline-ciclo.pdf`
+(`tests/fixtures/generar-fixtures.mjs`) construye un outline de dos nodos cuyo
+segundo `/Next` apunta de vuelta al primero; el test `getOutline termina sin
+colgarse ante un outline hostil con un ciclo...`
+(`tests/unit/PdfiumEngine.outline.test.ts`) comprueba que el recorrido termina
+y que cada nodo aparece como mucho una vez.
+
+---
+
 ## Capa de texto vivo (app nueva)
 
 ### E-029 · La capa de texto duplicaba cada línea en negro sans-serif encima del render
