@@ -16,6 +16,8 @@ import { HighlightRunCmd } from '../commands/HighlightRun';
 import { UnderlineRunCmd } from '../commands/UnderlineRun';
 import { StrikethroughRunCmd } from '../commands/StrikethroughRun';
 import { DrawStrokeCmd } from '../commands/DrawStroke';
+import { OcrPageCmd } from '../commands/OcrPage';
+import { TesseractOcr } from '../ocr/TesseractOcr';
 import { SignaturePad } from './SignaturePad';
 import { parseRange } from './pageRange';
 import { Viewer } from './Viewer';
@@ -40,6 +42,7 @@ export class App {
   private readonly pageIndicator: HTMLElement;
   private readonly btnInsert: HTMLButtonElement;
   private readonly btnPen: HTMLButtonElement;
+  private readonly btnOcr: HTMLButtonElement;
   private readonly colorInput: HTMLInputElement;
   private readonly searchInput: HTMLInputElement;
   private readonly rangeInput: HTMLInputElement;
@@ -66,6 +69,7 @@ export class App {
     const btnStrike = this.button('Tachar', 'btn-strike', () => this.strikeSelected());
     const btnSign = this.button('Firmar', 'btn-sign', () => this.openSignature());
     this.btnPen = this.button('Pluma', 'btn-pen', () => this.togglePen());
+    this.btnOcr = this.button('OCR', 'btn-ocr', () => void this.runOcr());
 
     this.colorInput = document.createElement('input');
     this.colorInput.type = 'color'; this.colorInput.id = 'btn-color'; this.colorInput.title = 'Color de la línea seleccionada';
@@ -106,7 +110,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, this.btnPen, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, this.rangeInput, btnSplit, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, this.btnPen, this.btnOcr, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, this.rangeInput, btnSplit, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -306,6 +310,21 @@ export class App {
     if (!run || !this.bus || !this.selection) { this.setStatus('Selecciona una línea para tacharla.'); return; }
     void this.bus.execute(new StrikethroughRunCmd(this.selection.pageIndex, run.boxPt));
     this.setStatus('Tachado.');
+  }
+
+  private async runOcr(): Promise<void> {
+    if (!this.session || !this.bus) { this.setStatus('Abre un documento antes del OCR.'); return; }
+    this.btnOcr.disabled = true;
+    this.setStatus('Reconociendo texto… (puede tardar)');
+    try {
+      const cmd = new OcrPageCmd(this.currentPage, new TesseractOcr());
+      await this.bus.execute(cmd);
+      this.setStatus(`${cmd.recognized} línea(s) reconocida(s).`);
+    } catch {
+      this.setStatus('Error de OCR.');
+    } finally {
+      this.btnOcr.disabled = false;
+    }
   }
 
   private async handleInsertImage(file: File): Promise<void> {
