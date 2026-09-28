@@ -1,6 +1,21 @@
 import { classifyFont } from './fontClassify';
 
 /**
+ * Las 14 fuentes estándar PDF que todo motor conforme crea sin incrustar
+ * nada (Anexo D de la especificación PDF 32000-1). Lista cerrada: el panel
+ * de propiedades de la UI (`#prop-font`) y `PdfiumEngine.setRunFont` la usan
+ * para validar el nombre elegido por el usuario antes de tocar el motor.
+ */
+export const STANDARD_FONTS = [
+  'Helvetica', 'Helvetica-Bold', 'Helvetica-Oblique', 'Helvetica-BoldOblique',
+  'Times-Roman', 'Times-Bold', 'Times-Italic', 'Times-BoldItalic',
+  'Courier', 'Courier-Bold', 'Courier-Oblique', 'Courier-BoldOblique',
+  'Symbol', 'ZapfDingbats'
+] as const;
+
+export type StandardFontName = typeof STANDARD_FONTS[number];
+
+/**
  * Traduce el nombre de fuente de un run PDF a la fuente estándar PDF más
  * parecida, de las 14 que todo motor conforme crea sin incrustar nada
  * (`FPDFPageObj_NewTextObj(doc, nombre, size)` las acepta directamente —

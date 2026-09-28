@@ -15,10 +15,19 @@ export interface FontClass {
   italic: boolean;
 }
 
+/**
+ * Quita el prefijo de subconjunto incrustado (6 letras mayúsculas + '+', p.
+ * ej. "ABCDEF+Calibri" → "Calibri", PDF 32000-1 §9.6.4) si lo hay. Exportada
+ * aparte porque el panel de propiedades de la UI (`App.buildPropsPanel`)
+ * necesita mostrar el nombre real de la fuente original sin ese prefijo
+ * técnico, no solo clasificarla.
+ */
+export function stripSubsetPrefix(fontName: string): string {
+  return fontName.replace(/^[A-Z]{6}\+/, '');
+}
+
 export function classifyFont(fontName: string): FontClass {
-  // Los subconjuntos incrustados llevan un prefijo de 6 letras mayúsculas
-  // y un '+' (p. ej. "ABCDEF+Calibri"); no aporta nada a la clasificación.
-  const bare = fontName.replace(/^[A-Z]{6}\+/, '');
+  const bare = stripSubsetPrefix(fontName);
 
   const family: FontFamily = /times|serif|georgia|garamond|cambria|minion/i.test(bare)
     ? 'serif'

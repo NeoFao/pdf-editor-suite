@@ -30,7 +30,17 @@ export type EditResult = { ok: true } | { ok: false; reason: 'glyph-missing' | '
  */
 export type ReplaceFontResult =
   | { ok: true; fontName: string; runId: number }
-  | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' };
+  | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' | 'invalid-font' };
+
+/**
+ * Resultado de `setRunFontSize`. Igual que `ReplaceFontResult`, `runId` en el
+ * caso `ok` es el del objeto NUEVO: el motor recrea el objeto de texto para
+ * cambiar el tamaño (ver `PdfiumEngine.setRunFontSize`), así que el original
+ * se elimina y el runId cambia.
+ */
+export type SetSizeResult =
+  | { ok: true; runId: number }
+  | { ok: false; reason: 'not-a-text-run' | 'invalid-size' };
 
 /** Nota adhesiva (anotación PDF real de subtipo Text). `index` es su índice entre TODAS las anotaciones de la página. */
 export interface NoteInfo { index: number; text: string; rectPt: RectPt }
@@ -161,6 +171,28 @@ export interface PdfEngine {
    * (el original se elimina del flujo de contenido).
    */
   replaceRunWithStandardFont(doc: DocHandle, pageIndex: number, runId: number, newText: string): ReplaceFontResult;
+  /**
+   * Cambia el tamaño de fuente de un run, conservando la MISMA fuente
+   * incrustada del run original (no la sustituye por una estándar). Recrea
+   * el objeto de texto porque PDFium no expone un setter de tamaño en sitio;
+   * conserva texto, color, matriz de posición (solo cambia el tamaño en la
+   * matriz de fuente) y modo de render. `runId` en el resultado `ok` es el
+   * del objeto NUEVO. Rango válido de `sizePt`: 1 a 400; fuera de rango
+   * devuelve `invalid-size` sin modificar nada.
+   */
+  setRunFontSize(doc: DocHandle, pageIndex: number, runId: number, sizePt: number): SetSizeResult;
+  /**
+   * Cambia la fuente de un run a una de las 14 fuentes estándar PDF elegida
+   * por el usuario (`standardFontName` debe ser uno de `STANDARD_FONTS`, ver
+   * `standardFontFor.ts`; cualquier otro valor devuelve `invalid-font` sin
+   * modificar nada). A diferencia de `replaceRunWithStandardFont` (que
+   * sustituye also el TEXTO porque viene de una edición con glifo faltante),
+   * este método conserva el texto ACTUAL del run y solo cambia la fuente.
+   * Igual que `replaceRunWithStandardFont`, si la fuente elegida no cubre
+   * algún carácter del texto actual, no modifica nada y devuelve
+   * `glyph-missing`. `runId` en el resultado `ok` es el del objeto NUEVO.
+   */
+  setRunFont(doc: DocHandle, pageIndex: number, runId: number, standardFontName: string): ReplaceFontResult;
   /**
    * Redacción real: elimina el objeto de texto del flujo de contenido (no lo tapa).
    * Tras guardar, el texto ya no es extraíble. Devuelve true si eliminó un run.

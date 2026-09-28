@@ -1,7 +1,7 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, leerCadenaPdfium, type Mem } from './mem';
-import { standardFontFor } from '../standardFontFor';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem } from '../PdfEngine';
+import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_ANNOT_TEXT = 1;    // FPDF_ANNOTATION_SUBTYPE: nota adhesiva ("sticky note")
@@ -420,20 +420,6 @@ export class PdfiumEngine implements PdfEngine {
       const fsPtr = m.malloc(4); this.p.FPDFTextObj_GetFontSize(obj, fsPtr);
       const size = m.getValue(fsPtr, 'float'); m.free(fsPtr);
 
-      // Color de relleno original (RGBA 0-255, out uints).
-      const r = m.malloc(4), g = m.malloc(4), b = m.malloc(4), a = m.malloc(4);
-      this.p.FPDFPageObj_GetFillColor(obj, r, g, b, a);
-      const color: [number, number, number, number] = [m.getValue(r, 'i32'), m.getValue(g, 'i32'), m.getValue(b, 'i32'), m.getValue(a, 'i32')];
-      [r, g, b, a].forEach((ptr) => m.free(ptr));
-
-      // Matriz completa original (FS_MATRIX: a,b,c,d,e,f — 6 floats de 4 bytes,
-      // contiguos): posición, escala, rotación y sesgo. Se copia tal cual al
-      // objeto nuevo para que la línea no se mueva ni un punto (E-030).
-      const getMatBuf = m.malloc(24);
-      this.p.FPDFPageObj_GetMatrix(obj, getMatBuf);
-      const mat = [0, 4, 8, 12, 16, 20].map((off) => m.getValue(getMatBuf + off, 'float'));
-      m.free(getMatBuf);
-
       // Nombre de fuente original (bytes UTF-8/Latin-1), para clasificar con
       // el mismo criterio que cssFontFor (E-028: patrón de dos llamadas).
       const font = this.p.FPDFTextObj_GetFont(obj);
@@ -444,58 +430,211 @@ export class PdfiumEngine implements PdfEngine {
       );
 
       const target = standardFontFor(fontName);
-      // FPDFPageObj_NewTextObj con un nombre de la familia estándar de 14
-      // fuentes no incrusta nada: PDFium las trae consigo.
-      const newObj = this.p.FPDFPageObj_NewTextObj(doc, target, size);
-
-      // Comprueba que la fuente ESTÁNDAR sí tiene todos los glifos del texto
-      // nuevo (misma técnica que editTextRun) ANTES de tocar el original: si
-      // falta alguno (p. ej. CJK), se destruye el objeto nuevo sin insertarlo
-      // y no se modifica nada.
-      const newFont = this.p.FPDFTextObj_GetFont(newObj);
-      for (const ch of newText) {
-        if (/\s/.test(ch)) continue;
-        const cp = ch.codePointAt(0)!;
-        if (this.p.FPDFFont_GetGlyphPath(newFont, cp, size) === 0) {
-          this.p.FPDFPageObj_Destroy(newObj);
-          return { ok: false, reason: 'glyph-missing' };
-        }
-      }
-
-      const wptr = m.wide(newText);
-      this.p.FPDFText_SetText(newObj, wptr);
-      m.free(wptr);
-      this.p.FPDFPageObj_SetFillColor(newObj, color[0], color[1], color[2], color[3]);
-      const setMatBuf = m.malloc(24);
-      mat.forEach((v, i) => m.setValue(setMatBuf + i * 4, v, 'float'));
-      this.p.FPDFPageObj_SetMatrix(newObj, setMatBuf);
-      m.free(setMatBuf);
-
-      // Elimina el original: RemoveObject transfiere la propiedad al
-      // llamante (igual que deleteRun), así que hay que destruirlo.
-      this.p.FPDFPage_RemoveObject(page, obj);
-      this.p.FPDFPageObj_Destroy(obj);
-
-      // Inserta el nuevo EN LA MISMA POSICIÓN del orden de dibujo (z-order):
-      // tras quitar el original, el índice `runId` quedó libre (todo lo
-      // posterior se desplazó una posición hacia abajo); reinsertar ahí lo
-      // devuelve exactamente a su sitio en la pila de dibujo. Si el build de
-      // PDFium no lo permite (devuelve false), se añade al final — esa línea
-      // pasa a dibujarse por encima de todo lo demás en vez de en su lugar
-      // original; solo se nota si otro objeto se solapa visualmente con ella,
-      // caso raro para una línea de texto suelta.
-      let newRunId = runId;
-      const insertedAtIndex = this.p.FPDFPage_InsertObjectAtIndex(page, newObj, runId);
-      if (!insertedAtIndex) {
-        this.p.FPDFPage_InsertObject(page, newObj);
-        newRunId = this.p.FPDFPage_CountObjects(page) - 1;
-      }
-
-      this.p.FPDFPage_GenerateContent(page);
-      return { ok: true, fontName: target, runId: newRunId };
+      const res = this.swapTextObject(doc, page, obj, runId, newText, size, () => this.p.FPDFPageObj_NewTextObj(doc, target, size));
+      if (!res.ok) return res;
+      return { ok: true, fontName: target, runId: res.runId };
     } finally {
       this.p.FPDF_ClosePage(page);
     }
+  }
+
+  /**
+   * Cambia el tamaño de fuente de un run conservando la MISMA fuente
+   * incrustada: `FPDFTextObj_GetFont(obj)` da el handle de esa fuente y
+   * `FPDFPageObj_CreateTextObj(doc, font, sizePt)` crea el objeto nuevo con
+   * ella (a diferencia de `FPDFPageObj_NewTextObj`, que solo acepta el
+   * NOMBRE de una de las 14 fuentes estándar — no serviría aquí porque
+   * cambiaría la fuente, no solo el tamaño). El handle de `GetFont` es una
+   * referencia PRESTADA (ver `swapTextObject`): no se libera con
+   * `FPDFFont_Close`.
+   */
+  setRunFontSize(doc: DocHandle, pageIndex: number, runId: number, sizePt: number): SetSizeResult {
+    if (!Number.isFinite(sizePt) || sizePt < 1 || sizePt > 400) {
+      return { ok: false, reason: 'invalid-size' };
+    }
+    const m = this.mem;
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const textPage = this.p.FPDFText_LoadPage(page);
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, runId);
+      if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
+        return { ok: false, reason: 'not-a-text-run' };
+      }
+      // Texto actual del run (patrón de dos llamadas, E-028): se conserva tal cual.
+      const text = leerCadenaPdfium(
+        m,
+        (buf, len) => this.p.FPDFTextObj_GetText(obj, textPage, buf, len),
+        (ptr) => m.readU16(ptr)
+      );
+      // Fuente incrustada ORIGINAL (referencia prestada, ver comentario de arriba).
+      const font = this.p.FPDFTextObj_GetFont(obj);
+      const res = this.swapTextObject(doc, page, obj, runId, text, sizePt, () => this.p.FPDFPageObj_CreateTextObj(doc, font, sizePt));
+      // Mismo texto y misma fuente que ya tenían el glifo a otro tamaño: la
+      // comprobación de glifos de `swapTextObject` no debería fallar nunca
+      // aquí (la existencia de un glifo no depende del tamaño), pero el
+      // contrato de `setRunFontSize` no tiene 'glyph-missing' — se traduce a
+      // 'not-a-text-run' por si el build del motor lo produjera igualmente.
+      if (!res.ok) return { ok: false, reason: 'not-a-text-run' };
+      return { ok: true, runId: res.runId };
+    } finally {
+      this.p.FPDFText_ClosePage(textPage);
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /**
+   * Cambia la fuente de un run a una de las 14 fuentes estándar PDF elegida
+   * por el usuario, conservando el texto ACTUAL del run (a diferencia de
+   * `replaceRunWithStandardFont`, que sustituye también el texto porque
+   * viene de una edición con glifo faltante). Comparte `swapTextObject` con
+   * ambos métodos.
+   */
+  setRunFont(doc: DocHandle, pageIndex: number, runId: number, standardFontName: string): ReplaceFontResult {
+    if (!(STANDARD_FONTS as readonly string[]).includes(standardFontName)) {
+      return { ok: false, reason: 'invalid-font' };
+    }
+    const m = this.mem;
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const textPage = this.p.FPDFText_LoadPage(page);
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, runId);
+      if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
+        return { ok: false, reason: 'not-a-text-run' };
+      }
+      const fsPtr = m.malloc(4); this.p.FPDFTextObj_GetFontSize(obj, fsPtr);
+      const size = m.getValue(fsPtr, 'float'); m.free(fsPtr);
+      const text = leerCadenaPdfium(
+        m,
+        (buf, len) => this.p.FPDFTextObj_GetText(obj, textPage, buf, len),
+        (ptr) => m.readU16(ptr)
+      );
+      const res = this.swapTextObject(doc, page, obj, runId, text, size, () => this.p.FPDFPageObj_NewTextObj(doc, standardFontName, size));
+      if (!res.ok) return res;
+      return { ok: true, fontName: standardFontName, runId: res.runId };
+    } finally {
+      this.p.FPDFText_ClosePage(textPage);
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /**
+   * Núcleo compartido de `replaceRunWithStandardFont`, `setRunFont` y
+   * `setRunFontSize`: los tres sustituyen un objeto de texto por uno nuevo
+   * (PDFium no permite cambiar la fuente ni recrear con otro tamaño en
+   * sitio) conservando color de relleno, color de trazo (si lo hay), modo de
+   * render y matriz de posición completa (E-030) del objeto original.
+   *
+   * `newObjFactory` decide cómo se crea el objeto nuevo (por nombre de fuente
+   * estándar, o por el handle de una fuente incrustada existente) — es lo
+   * único que difiere entre los tres métodos. `checkSizePt` es el tamaño con
+   * el que se comprueba que la fuente nueva cubre `newText` (mismo criterio
+   * que `editTextRun`).
+   *
+   * Comprueba los glifos ANTES de tocar el original: si falta alguno, destruye
+   * el objeto nuevo sin insertarlo y no modifica nada. Inserta el objeto
+   * nuevo en el mismo índice de `runId` para conservar el z-order (ver el
+   * comentario original en `replaceRunWithStandardFont`, mismo mecanismo).
+   *
+   * Nunca llama a `FPDFFont_Close`: en los tres casos la fuente del objeto
+   * NUEVO sale de `FPDFTextObj_GetFont(newObj)` — una referencia PRESTADA
+   * mientras ese objeto exista (el propio nombre de la función en el header
+   * de PDFium, "Get", ya lo indica: no hay un "New"/"Load" de por medio que
+   * transfiera la propiedad al llamante). `FPDFFont_Close` solo hace falta
+   * para una fuente devuelta por `FPDFText_LoadFont`/`FPDFText_LoadStandardFont`,
+   * que sí crean una referencia propia del llamante — ninguno de los tres
+   * métodos usa esas funciones.
+   */
+  private swapTextObject(
+    doc: DocHandle,
+    page: number,
+    obj: number,
+    runId: number,
+    newText: string,
+    checkSizePt: number,
+    newObjFactory: () => number
+  ): { ok: true; runId: number } | { ok: false; reason: 'glyph-missing' } {
+    const m = this.mem;
+
+    // Color de relleno original (RGBA 0-255, out uints).
+    const r = m.malloc(4), g = m.malloc(4), b = m.malloc(4), a = m.malloc(4);
+    this.p.FPDFPageObj_GetFillColor(obj, r, g, b, a);
+    const fillColor: [number, number, number, number] = [m.getValue(r, 'i32'), m.getValue(g, 'i32'), m.getValue(b, 'i32'), m.getValue(a, 'i32')];
+    [r, g, b, a].forEach((ptr) => m.free(ptr));
+
+    // Color de trazo, si el objeto original lo tiene (la mayoría de texto no
+    // tiene trazo propio: FPDFPageObj_GetStrokeColor devuelve false y no se
+    // copia nada — el objeto nuevo se queda con su trazo por defecto).
+    let strokeColor: [number, number, number, number] | null = null;
+    {
+      const sr = m.malloc(4), sg = m.malloc(4), sb = m.malloc(4), sa = m.malloc(4);
+      const leido = this.p.FPDFPageObj_GetStrokeColor(obj, sr, sg, sb, sa);
+      if (leido) strokeColor = [m.getValue(sr, 'i32'), m.getValue(sg, 'i32'), m.getValue(sb, 'i32'), m.getValue(sa, 'i32')];
+      [sr, sg, sb, sa].forEach((ptr) => m.free(ptr));
+    }
+
+    // Modo de render (normal/invisible/trazo/...): FPDFTextObj_GetTextRenderMode
+    // devuelve un entero de la enumeración FPDF_TEXT_RENDERMODE (-1 si falla).
+    const renderMode = this.p.FPDFTextObj_GetTextRenderMode(obj);
+
+    // Matriz completa original (FS_MATRIX: a,b,c,d,e,f — 6 floats de 4 bytes,
+    // contiguos): posición, escala, rotación y sesgo. Se copia tal cual al
+    // objeto nuevo para que la línea no se mueva ni un punto (E-030).
+    const getMatBuf = m.malloc(24);
+    this.p.FPDFPageObj_GetMatrix(obj, getMatBuf);
+    const mat = [0, 4, 8, 12, 16, 20].map((off) => m.getValue(getMatBuf + off, 'float'));
+    m.free(getMatBuf);
+
+    const newObj = newObjFactory();
+
+    // Comprueba que la fuente nueva sí tiene todos los glifos del texto
+    // (misma técnica que editTextRun) ANTES de tocar el original: si falta
+    // alguno (p. ej. CJK), se destruye el objeto nuevo sin insertarlo y no
+    // se modifica nada.
+    const newFont = this.p.FPDFTextObj_GetFont(newObj);
+    for (const ch of newText) {
+      if (/\s/.test(ch)) continue;
+      const cp = ch.codePointAt(0)!;
+      if (this.p.FPDFFont_GetGlyphPath(newFont, cp, checkSizePt) === 0) {
+        this.p.FPDFPageObj_Destroy(newObj);
+        return { ok: false, reason: 'glyph-missing' };
+      }
+    }
+
+    const wptr = m.wide(newText);
+    this.p.FPDFText_SetText(newObj, wptr);
+    m.free(wptr);
+    this.p.FPDFPageObj_SetFillColor(newObj, fillColor[0], fillColor[1], fillColor[2], fillColor[3]);
+    if (strokeColor) this.p.FPDFPageObj_SetStrokeColor(newObj, strokeColor[0], strokeColor[1], strokeColor[2], strokeColor[3]);
+    if (renderMode >= 0) this.p.FPDFTextObj_SetTextRenderMode(newObj, renderMode);
+    const setMatBuf = m.malloc(24);
+    mat.forEach((v, i) => m.setValue(setMatBuf + i * 4, v, 'float'));
+    this.p.FPDFPageObj_SetMatrix(newObj, setMatBuf);
+    m.free(setMatBuf);
+
+    // Elimina el original: RemoveObject transfiere la propiedad al llamante
+    // (igual que deleteRun), así que hay que destruirlo.
+    this.p.FPDFPage_RemoveObject(page, obj);
+    this.p.FPDFPageObj_Destroy(obj);
+
+    // Inserta el nuevo EN LA MISMA POSICIÓN del orden de dibujo (z-order):
+    // tras quitar el original, el índice `runId` quedó libre (todo lo
+    // posterior se desplazó una posición hacia abajo); reinsertar ahí lo
+    // devuelve exactamente a su sitio en la pila de dibujo. Si el build de
+    // PDFium no lo permite (devuelve false), se añade al final — esa línea
+    // pasa a dibujarse por encima de todo lo demás en vez de en su lugar
+    // original; solo se nota si otro objeto se solapa visualmente con ella,
+    // caso raro para una línea de texto suelta.
+    let newRunId = runId;
+    const insertedAtIndex = this.p.FPDFPage_InsertObjectAtIndex(page, newObj, runId);
+    if (!insertedAtIndex) {
+      this.p.FPDFPage_InsertObject(page, newObj);
+      newRunId = this.p.FPDFPage_CountObjects(page) - 1;
+    }
+
+    this.p.FPDFPage_GenerateContent(page);
+    return { ok: true, runId: newRunId };
   }
 
   moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean {
