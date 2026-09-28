@@ -607,6 +607,66 @@ un documento real lo supere.
 
 ---
 
+## Capa de texto vivo (app nueva)
+
+### E-029 · La capa de texto duplicaba cada línea en negro sans-serif encima del render
+
+**Síntoma.** En reposo (sin tocar nada) cada línea del PDF se veía dos veces:
+el render real del motor (PDFium, con su fuente y color) y, superpuesto en la
+misma posición, el mismo texto otra vez en negro `sans-serif` con el alto de
+la caja como tamaño de fuente. Además, un tirador morado (`.run-drag`) quedaba
+visible sobre cada línea aunque no se estuviera interactuando con ella. Es la
+queja central del dueño del producto: "al editar cambia la fuente / no queda
+como estaba". Acrobat y PDF Agile no hacen esto: en reposo se ve solo el PDF;
+un contorno aparece al pasar el ratón; el texto solo se hace visible —con su
+tipografía real— mientras se edita esa línea.
+
+**Causa raíz.** `TextLayer.build()` (`src/ui/TextLayer.ts`) ponía
+`block.textContent = run.text` y `font: ${r.height}px sans-serif` **siempre**,
+no solo durante la edición. El `<div class="run">` es el hitbox necesario para
+seleccionar/editar/arrastrar esa línea, pero no tenía ninguna razón para pintar
+el texto en reposo: ese texto ya está en el `<canvas>` de abajo, pintado por el
+motor con la fuente, el tamaño y el color reales. Pintarlo dos veces con una
+aproximación (altura de caja como tamaño, `sans-serif` fija) es exactamente el
+"cambia la fuente" que se reporta.
+
+**Arreglo.** En reposo la `.run` es invisible: `color: transparent`, sin
+fondo, sin contorno, tirador en `opacity: 0` — todo por clase CSS en
+`index.next.html`, no inline. Al pasar el ratón o al seleccionar (clase
+`.selected`, que `TextLayer` pone en clic y quita de las demás runs de la
+página) aparece un contorno sutil y el tirador. Solo al entrar en edición
+(`.editing`) el fondo se vuelve blanco — la caja de esa máscara sigue saliendo
+de la geometría **original** del run (`run.boxPt` → `geom.rectPtToCss`), nunca
+de `offsetHeight` en edición (E-002) — y el texto se hace visible con la mejor
+aproximación de su tipografía real: color = `run.color`, tamaño = `run.sizePt`
+convertido a px CSS con `geom.scale` (no con el alto de la caja), familia
+deducida de `run.fontName` en la función pura `cssFontFor()`
+(`src/ui/cssFontFor.ts`: Times/serif → `serif`, Courier/mono → `monospace`,
+resto → `sans-serif`; `Bold` → peso 700; `Italic`/`Oblique` → cursiva). Esas
+tres propiedades (color, fuente, tamaño) son datos del documento, no estado de
+UI, así que se fijan en línea igual que la geometría — el resto de estados
+(reposo/hover/seleccionada/edición) es CSS puro por clase.
+
+**Cómo se detecta ahora.**
+- `tests/e2e/next/fidelidad-reposo.spec.ts`, prueba de oro de píxeles: capturar
+  la página en reposo, ocultar toda `.run` por script (`visibility: hidden`) y
+  volver a capturar — **antes del arreglo los dos PNG diferían** (texto
+  fantasma); ahora `Buffer.compare` da `0`. Las otras dos pruebas del mismo
+  fichero fijan `getComputedStyle(run).color === 'rgba(0, 0, 0, 0)'` y el
+  tirador en `opacity: '0'` en reposo, y que al editar el fondo sea blanco, el
+  color rojo del fixture, la familia contenga `serif` sin ser `sans-serif` y el
+  tamaño ronde `18 × escala` px.
+- `tests/unit/cssFontFor.test.ts` — la función pura de mapeo fuente → CSS.
+- No hay regla determinista nueva: el patrón (pintar datos del documento en
+  una capa que se superpone al render del motor) no se presta a un grep
+  estático fiable — no hay una firma sintáctica única que lo distinga de un uso
+  legítimo de `textContent`/`color` en otra capa (notas, formularios, resaltado
+  ya lo usan con intención). La defensa es la prueba de oro de píxeles de
+  arriba, que además cubre cualquier regresión futura del mismo síntoma aunque
+  cambie el mecanismo.
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que
