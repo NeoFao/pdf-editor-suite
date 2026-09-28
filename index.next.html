@@ -68,6 +68,22 @@
         opacity: 1;
         pointer-events: auto;
       }
+
+      /*
+       * Arrastrar miniaturas para reordenar páginas (App.beginThumbDrag):
+       * la miniatura que se arrastra se atenúa in situ (nunca se mueve del
+       * DOM hasta soltar) y una línea de inserción se coloca entre las
+       * miniaturas en el punto exacto donde caería.
+       */
+      .thumb-dragging {
+        opacity: 0.35;
+      }
+      .thumb-drop-indicator {
+        height: 3px;
+        margin-bottom: 8px;
+        border-radius: 2px;
+        background: #6366f1;
+      }
     </style>
   </head>
   <body>
