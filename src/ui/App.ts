@@ -339,11 +339,39 @@ export class App {
       this.setActiveThumb(this.currentPage);
       this.updateIndicator();
     });
+    // Tras CUALQUIER recarga del modelo (deshacer/rehacer de un cambio de
+    // fuente/tamaño/página, que recrean el documento desde una copia —
+    // `EditSession.reload`— o lo reconstruyen en sitio —`refresh`—) el
+    // panel de propiedades puede haber quedado desincronizado del documento
+    // real: `appliedFontLabel` recordaba la última fuente elegida por el
+    // usuario para la selección ANTERIOR al reload, y `this.selection.runId`
+    // puede haber dejado de existir (el objeto de texto se recreó con otro
+    // índice, o desapareció). Sin esto, deshacer un cambio de fuente volvía
+    // el DOCUMENTO a la fuente original pero el panel seguía mostrando la
+    // fuente descartada — mentía sobre el estado real (bug de revisión de
+    // PR #51). Único punto de enganche: cubre execute Y undo/redo de todos
+    // los comandos que reindexan runs (ver grep de `c.refresh()`/`c.reload()`
+    // en src/commands/*.ts), no solo los de fuente/tamaño.
+    this.session.model.onReload(() => this.reconcileSelectionAfterReload());
     this.buildThumbnails();
     this.buildOutline();
     this.showSidebarTab('pages');
     this.updateIndicator();
     this.setStatus(`${this.session.model.pages.length} página(s)`);
+  }
+
+  /**
+   * Reconcilia selección y panel de propiedades con el documento real tras
+   * un `onReload` del modelo (ver el comentario en `openBytes`). Nunca
+   * confía en `appliedFontLabel` ni en `this.selection.runId` de antes del
+   * reload: los descarta y, si el runId seleccionado ya no existe en la
+   * página, limpia la selección entera (oculta el panel) en vez de dejarla
+   * apuntando por casualidad a otro run.
+   */
+  private reconcileSelectionAfterReload(): void {
+    this.appliedFontLabel = null;
+    if (this.selection && !this.selectedRun()) this.selection = null;
+    this.reflectPropsPanel();
   }
 
   private async handleEdit(req: EditRequest): Promise<void> {

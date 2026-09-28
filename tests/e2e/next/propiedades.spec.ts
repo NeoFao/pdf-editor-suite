@@ -88,3 +88,29 @@ test('propiedades: deshacer dos veces (fuente y tamaño) vuelve a Times-Roman 18
   await expect(page.locator('#prop-size')).toHaveValue('18');
   void seleccion;
 });
+
+/**
+ * Encontrado en revisión de PR #51: `appliedFontLabel` (qué opción de
+ * `#prop-font` mostrar como "aplicada") solo se reiniciaba en `onSelect`.
+ * Deshacer un cambio de fuente vuelve el DOCUMENTO a la fuente original, pero
+ * sin re-seleccionar la línea a mano el panel seguía mostrando "Helvetica":
+ * mentía sobre el estado real del documento. A diferencia del test anterior
+ * (que sí vuelve a seleccionar la línea tras deshacer, lo que esconde el
+ * defecto porque `onSelect` también resetea `appliedFontLabel`), este NO
+ * vuelve a seleccionar: comprueba el panel tal cual queda inmediatamente
+ * después de `#btn-undo`.
+ */
+test('propiedades: deshacer un cambio de fuente refresca el panel sin necesidad de reseleccionar', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(FIXTURE);
+  await seleccionar(page);
+
+  await page.locator('#prop-font').selectOption('Helvetica');
+  await expect(page.locator('#status')).toHaveText('Fuente cambiada a Helvetica.');
+
+  await page.locator('#btn-undo').click(); // deshace el cambio de fuente, SIN volver a seleccionar la línea
+
+  const opcionSeleccionada = await page.locator('#prop-font').evaluate((el) => (el as HTMLSelectElement).selectedOptions[0]!.textContent);
+  expect(opcionSeleccionada).toBe('Original (Times-Roman)');
+  await expect(page.locator('#prop-size')).toHaveValue('18');
+});
