@@ -327,6 +327,10 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
       // Matriz identidad + traslación a (x, y) en puntos PDF.
       this.p.FPDFPageObj_Transform(obj, 1, 0, 0, 1, spec.xPt, spec.yPt);
+      if (spec.invisible) {
+        // Modo de render 3 = invisible: el texto queda extraíble/buscable pero no se pinta. Para capas de OCR.
+        this.p.FPDFTextObj_SetTextRenderMode(obj, 3);
+      }
       this.p.FPDFPage_InsertObject(page, obj);
       this.p.FPDFPage_GenerateContent(page);
       return this.p.FPDFPage_CountObjects(page) - 1; // el objeto insertado es el último
