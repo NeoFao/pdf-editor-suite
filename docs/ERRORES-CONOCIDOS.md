@@ -667,6 +667,55 @@ UI, así que se fijan en línea igual que la geometría — el resto de estados
 
 ---
 
+### E-030 · El texto en edición quedaba desplazado en vertical respecto al original
+
+**Síntoma.** Al hacer clic sobre una línea para editarla, el texto (con su
+tipografía real, arreglo de E-029) aparecía descolocado: el contorno de la
+caja no enmarcaba las letras, las cruzaba, y la línea base no coincidía con
+la del PDF de debajo. En Acrobat y PDF Agile, al editar, el texto cae EXACTO
+en su sitio — misma línea base, mismo x de inicio.
+
+**Causa raíz.** El bloque en edición se posicionaba y dimensionaba con
+`run.boxPt` — la caja ajustada a los GLIFOS (`FPDFPageObj_GetBounds`), que
+para la mayoría de fuentes es más baja que el tamaño real de fuente (no
+incluye el hueco de línea ni, a veces, ascendentes/descendentes completos) —
+y con `line-height` igual a ese alto. Como `sizePt` real es mayor que
+`boxPt.hPt`, la línea base que el navegador calcula para ese `line-height`
+no coincide con la línea base real del PDF.
+
+**Arreglo.** `TextRun` (`src/engine/PdfEngine.ts`) gana `originPt`: el origen
+real de la línea base del objeto de texto — (e, f) de su matriz
+(`FPDFPageObj_GetMatrix`), leído en `readTextRun()`
+(`src/engine/pdfium/PdfiumEngine.ts`). Al ENTRAR en edición, `TextLayer`
+(`src/ui/TextLayer.ts`) reposiciona el bloque para que su línea base caiga en
+`originPt` convertido a px CSS con `PageGeometry.ptToCss` (nunca con
+`boxPt`), con `line-height` = ascenso + descenso MEDIDOS de la fuente
+(`measureFontAscent()`, `src/ui/measureFontAscent.ts`, vía
+`CanvasRenderingContext2D.measureText().fontBoundingBox{Ascent,Descent}`) —
+no el tamaño de fuente a secas, que deja un "half-leading" desconocido y
+desalinea unos px. `top = líneaBase − ascenso`; `left = origen.x`.
+
+Como el bloque ahora se MUEVE al editar, ya no garantiza por sí solo tapar la
+caja original (E-002). Un elemento `.run-mask` aparte, posicionado SIEMPRE
+con la caja original `boxPt` (nunca reposicionado, nunca derivado del bloque
+en edición), es quien tapa el texto original pase lo que pase con el bloque.
+Al salir de edición (`commit()`), el bloque restaura exactamente sus valores
+de reposo (`left/top/height/lineHeight` de `boxPt`), igual con Escape.
+
+**Cómo se detecta ahora.**
+- Test `getPageText devuelve originPt = punto de inserción del texto` en
+  `tests/unit/PdfiumEngine.originPt.test.ts` (motor real): inserta texto en
+  (72, 700) y exige `originPt` ≈ (72, 700), ±0.5 pt.
+- Test E2E `linea-base-edicion: al editar, la línea base y el x de inicio
+  coinciden con el original` en `tests/e2e/next/linea-base-edicion.spec.ts`:
+  mide la línea base REAL con un marcador de alto 0 y `vertical-align:
+  baseline`, y la compara con `originPt` convertido a px CSS. Tolerancia
+  ±1.5 px, para línea base y para x de inicio.
+- La prueba de oro de píxeles de `fidelidad-reposo.spec.ts` sigue en verde:
+  la geometría de reposo no cambia, solo la de edición.
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que

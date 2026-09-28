@@ -18,6 +18,12 @@
        * `offsetHeight` en edición — E-002) y el texto se ve con la mejor
        * aproximación de su tipografía real (fijada en línea por
        * TextLayer/cssFontFor, como la geometría).
+       *
+       * E-030 — Al editar, `.run` se REPOSICIONA (línea base = `run.originPt`,
+       * no el borde de `boxPt`), así que ya no cubre de forma fiable la caja
+       * ORIGINAL. `.run-mask` es un elemento aparte, siempre fijo en `boxPt`
+       * (nunca se mueve ni se reposiciona), que es quien de verdad garantiza
+       * E-002: tapar la línea original pase lo que pase con `.run`.
        */
       .run {
         color: transparent;
@@ -36,6 +42,15 @@
       .run.editing {
         background: #fff;
         outline: 1px solid #6366f1;
+        z-index: 1;
+      }
+      .run-mask {
+        background: transparent;
+        pointer-events: none;
+        box-sizing: border-box;
+      }
+      .run-mask.active {
+        background: #fff;
       }
       .run-drag {
         border-radius: 50%;

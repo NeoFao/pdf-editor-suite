@@ -290,7 +290,15 @@ export class PdfiumEngine implements PdfEngine {
     this.p.FPDFPageObj_GetBounds(obj, l, bo, ri, to);
     const left = m.getValue(l, 'float'), bottom = m.getValue(bo, 'float'), right = m.getValue(ri, 'float'), top = m.getValue(to, 'float');
     [l, bo, ri, to].forEach((ptr) => m.free(ptr));
-    return { runId, text, sizePt, fontName, color, boxPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom } };
+    // Matriz del objeto (FS_MATRIX: a,b,c,d,e,f — 6 floats de 4 bytes, contiguos).
+    // (e, f) es el origen de la línea base en puntos PDF (E-030). Se asume texto
+    // horizontal: si hay rotación/sesgo (b≠0 o c≠0) igual se usa (e, f) tal cual;
+    // la alineación de edición no corrige esos casos.
+    const mat = m.malloc(24);
+    this.p.FPDFPageObj_GetMatrix(obj, mat);
+    const originPt = { xPt: m.getValue(mat + 16, 'float'), yPt: m.getValue(mat + 20, 'float') };
+    m.free(mat);
+    return { runId, text, sizePt, fontName, color, boxPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom }, originPt };
   }
 
   editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult {
