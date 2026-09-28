@@ -87,6 +87,8 @@ export class App {
     file.type = 'file'; file.accept = 'application/pdf'; file.id = 'file-input';
     file.addEventListener('change', () => { const f = file.files?.[0]; if (f) void this.openFile(f); });
 
+    const btnNew = this.button('Nuevo', 'btn-new', () => void this.newBlank());
+
     const openImg = document.createElement('input');
     openImg.type = 'file'; openImg.accept = 'image/*'; openImg.id = 'btn-open-image'; openImg.title = 'Abrir una imagen como PDF';
     openImg.addEventListener('change', () => { const f = openImg.files?.[0]; if (f) void this.openImage(f).finally(() => { openImg.value = ''; }); });
@@ -164,18 +166,20 @@ export class App {
 
     const btnZoomOut = this.button('−', 'btn-zoom-out', () => this.zoom(1 / 1.25));
     const btnZoomIn = this.button('+', 'btn-zoom-in', () => this.zoom(1.25));
+    const btnFitWidth = this.button('Ajustar ancho', 'btn-fit-width', () => this.fitWidth());
     const btnExtract = this.button('Extraer pág.', 'btn-extract', () => this.extractCurrent());
     this.rangeInput = document.createElement('input');
     this.rangeInput.type = 'text'; this.rangeInput.id = 'btn-range'; this.rangeInput.placeholder = '1-3,5'; this.rangeInput.size = 6;
     const btnSplit = this.button('Dividir', 'btn-split', () => this.splitByRange());
     const btnSave = this.button('Guardar', 'btn-save', () => this.save());
+    const btnPrint = this.button('Imprimir', 'btn-print', () => this.print());
     const btnUndo = this.button('Deshacer', 'btn-undo', () => { void this.bus?.undo(); });
     const btnRedo = this.button('Rehacer', 'btn-redo', () => { void this.bus?.redo(); });
 
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, this.btnPen, this.btnNote, this.btnOcr, this.propsPanel, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, this.rangeInput, btnSplit, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, btnNew, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, this.btnPen, this.btnNote, this.btnOcr, this.propsPanel, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnFitWidth, btnExtract, this.rangeInput, btnSplit, btnSave, btnPrint, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -225,6 +229,42 @@ export class App {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); void this.bus?.undo(); }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); void this.bus?.redo(); }
     });
+
+    // Arrastrar y soltar un fichero (PDF o imagen) sobre la ventana entera.
+    // `dragover` necesita `preventDefault()` para que el navegador permita el
+    // `drop` (si no, su acción por defecto es navegar al fichero); la clase
+    // `drop-activo` (ver CSS en index.next.html) es la única indicación
+    // visual, discreta, de que soltar aquí va a abrir el fichero.
+    rootEl.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      rootEl.classList.add('drop-activo');
+    });
+    rootEl.addEventListener('dragleave', () => { rootEl.classList.remove('drop-activo'); });
+    rootEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      rootEl.classList.remove('drop-activo');
+      const f = e.dataTransfer?.files?.[0];
+      if (f) void this.handleDroppedFile(f);
+    });
+  }
+
+  /** Un PDF abre normal; una imagen se convierte a PDF de una página (mismo flujo que `#btn-open-image`). Otro tipo: aviso en `#status`, sin romper nada. */
+  private async handleDroppedFile(file: File): Promise<void> {
+    const esPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+    if (esPdf) { await this.openFile(file); return; }
+    const esImagen = file.type.startsWith('image/') || /\.(png|jpe?g|jpeg|gif|webp)$/i.test(file.name);
+    if (esImagen) { await this.openImage(file); return; }
+    this.setStatus('Tipo de archivo no admitido para soltar aquí (usa un PDF o una imagen).');
+  }
+
+  /** `#btn-new`: documento de 1 página A4 (595×842 pt) en blanco, abierto como cualquier otro. */
+  private async newBlank(): Promise<void> {
+    const engine = await this.ensureEngine();
+    // Posible mejora futura: avisar si el documento actual tiene cambios sin
+    // guardar antes de reemplazarlo (fuera de alcance de este PR).
+    const bytes = engine.createBlank(595, 842);
+    await this.openBytes(bytes, 'documento.pdf');
+    this.setStatus('Documento en blanco creado.');
   }
 
   private button(label: string, id: string, onClick: () => void): HTMLButtonElement {
@@ -330,6 +370,12 @@ export class App {
       }
     });
     this.currentPage = 0;
+    // Ajuste al ancho también al ABRIR (no solo con el botón): antes la
+    // escala inicial era fija (1); ahora la página ocupa el ancho útil del
+    // visor desde el primer render, en cualquier tamaño de ventana (escritorio
+    // o móvil) — ver `fitWidth`. Necesita el wrapper de la página ya en el DOM
+    // (lo crea `new Viewer(...)` de forma síncrona, arriba) para medir.
+    this.fitWidth();
     // Tras una operación de página (rotar/eliminar → refresh), rehacer miniaturas.
     this.session.model.onReload(() => {
       const total = this.session?.model.pages.length ?? 0;
@@ -779,6 +825,100 @@ export class App {
     this.scale = Math.min(4, Math.max(0.25, Math.round(this.scale * factor * 100) / 100));
     this.viewer?.setScale(this.scale);
     this.setStatus(`Zoom ${Math.round(this.scale * 100)}%`);
+  }
+
+  /**
+   * `#btn-fit-width`: calcula la escala para que la página ACTUAL ocupe el
+   * ancho útil del visor (su `clientWidth` —ya sin la barra de scroll— menos
+   * el padding CSS a los lados) y la aplica. También se llama al abrir un
+   * documento (ver `openBytes`).
+   *
+   * Unidades: `page.sizePt.widthPt` es la anchura de la página en PUNTOS PDF;
+   * `disponible` es px CSS del visor. La escala que iguala ambos en px CSS es
+   * `disponible / widthPt` (mismo significado que `PageGeometry.scale`, que
+   * multiplica puntos PDF por esta escala para obtener px CSS).
+   */
+  private fitWidth(): void {
+    const s = this.session;
+    const page = s?.model.pages[this.currentPage];
+    if (!s || !this.viewer || !page) return;
+    const cs = getComputedStyle(this.viewerEl);
+    const paddingX = parseFloat(cs.paddingLeft || '0') + parseFloat(cs.paddingRight || '0');
+    const disponible = this.viewerEl.clientWidth - paddingX;
+    if (disponible <= 0) return;
+    this.scale = Math.min(4, Math.max(0.25, Math.round((disponible / page.sizePt.widthPt) * 100) / 100));
+    this.viewer.setScale(this.scale);
+    this.setStatus(`Ajustado al ancho (${Math.round(this.scale * 100)}%).`);
+  }
+
+  /**
+   * `#btn-print`: genera el PDF actual (`engine.save`, sobre una copia — no
+   * muta el documento vivo, igual que `save()`), lo carga en un `<iframe>`
+   * oculto vía blob: y llama a `iframe.contentWindow.print()`. El visor PDF
+   * NATIVO del navegador imprime así el PDF VECTORIAL real: mejor que
+   * `window.print()` a secas, que solo pintaría el DOM y esta app únicamente
+   * pinta las páginas visibles (visor virtualizado, ver `Viewer.renderVisible`).
+   *
+   * Pendiente de permiso del dueño (AGENTS.md §5, no se toca la CSP en este
+   * PR): la CSP de producción (`vercel.json`) no declara `frame-src`, que cae
+   * en `default-src 'self'` — no está confirmado si eso basta para navegar un
+   * iframe a un blob: del propio origen o si el navegador lo bloquea. Por eso
+   * hay dos redes de seguridad, ninguna de las cuales requiere tocar la CSP:
+   * el oyente de `securitypolicyviolation` (el bloqueo no lanza excepción, así
+   * que sin esto el usuario vería un iframe vacío y ningún diálogo) y el
+   * `catch` de la llamada a `print()`. Ambas caen a abrir el PDF en una
+   * pestaña nueva, desde donde el usuario imprime con el propio visor del
+   * navegador (Ctrl/Cmd+P).
+   */
+  private print(): void {
+    const s = this.session;
+    if (!s) { this.setStatus('Abre un documento antes de imprimir.'); return; }
+    const bytes = s.engine.save(s.doc);
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+
+    const iframe = document.createElement('iframe');
+    Object.assign(iframe.style, { position: 'fixed', right: '0', bottom: '0', width: '0', height: '0', border: '0' });
+    iframe.setAttribute('aria-hidden', 'true');
+
+    let limpiado = false;
+    const limpiar = (): void => {
+      if (limpiado) return;
+      limpiado = true;
+      iframe.remove();
+      URL.revokeObjectURL(url);
+      document.removeEventListener('securitypolicyviolation', onCsp);
+    };
+    const abrirEnPestana = (motivo: string): void => {
+      limpiar();
+      window.open(url, '_blank');
+      this.setStatus(motivo);
+    };
+    const onCsp = (e: SecurityPolicyViolationEvent): void => {
+      if (!e.blockedURI.startsWith('blob')) return; // otro recurso, no el nuestro
+      abrirEnPestana('La política de seguridad bloqueó la vista previa; se abrió el PDF en una pestaña nueva para imprimir desde ahí.');
+    };
+    document.addEventListener('securitypolicyviolation', onCsp);
+
+    iframe.addEventListener('load', () => {
+      try {
+        iframe.contentWindow?.focus();
+        iframe.contentWindow?.print();
+      } catch {
+        abrirEnPestana('No se pudo imprimir desde el visor embebido; se abrió el PDF en una pestaña nueva.');
+        return;
+      }
+      // No hay un evento fiable de "impresión terminada" para el print() de un
+      // iframe con blob: (afterprint no siempre llega aquí); se limpia tras
+      // un margen prudente en vez de esperarlo.
+      setTimeout(limpiar, 2000);
+    });
+
+    // `src` ANTES de insertar en el DOM: si se insertara primero sin `src`,
+    // el iframe dispara un `load` inicial para `about:blank` y el manejador
+    // de arriba llamaría a `print()` demasiado pronto, sobre un frame vacío.
+    iframe.src = url;
+    document.body.appendChild(iframe);
+    this.setStatus('Abriendo el diálogo de impresión…');
   }
 
   private save(): void {
