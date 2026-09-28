@@ -23,6 +23,15 @@ export interface TextRun {
 
 export type EditResult = { ok: true } | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' };
 
+/**
+ * Resultado de `replaceRunWithStandardFont`. `fontName` es la fuente estándar
+ * PDF realmente usada (de las 14) y `runId` el índice del objeto NUEVO — el
+ * original se elimina, así que el runId cambia.
+ */
+export type ReplaceFontResult =
+  | { ok: true; fontName: string; runId: number }
+  | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' };
+
 /** Nota adhesiva (anotación PDF real de subtipo Text). `index` es su índice entre TODAS las anotaciones de la página. */
 export interface NoteInfo { index: number; text: string; rectPt: RectPt }
 
@@ -92,6 +101,17 @@ export interface PdfEngine {
    * si la fuente del run no tiene algún glifo del nuevo texto.
    */
   editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult;
+  /**
+   * Sustituye un run cuyo `editTextRun` devolvió `glyph-missing` por un
+   * objeto de texto NUEVO en la fuente estándar PDF más parecida (de las 14
+   * que todo motor crea sin incrustar nada — ver `standardFontFor`). Conserva
+   * posición (matriz completa: escala, rotación y sesgo incluidos), tamaño y
+   * color del run original; solo cambia la fuente y el texto. Si la fuente
+   * estándar tampoco cubre `newText` (p. ej. CJK), no modifica nada y
+   * devuelve `glyph-missing`. `runId` en el resultado es el del objeto NUEVO
+   * (el original se elimina del flujo de contenido).
+   */
+  replaceRunWithStandardFont(doc: DocHandle, pageIndex: number, runId: number, newText: string): ReplaceFontResult;
   /**
    * Redacción real: elimina el objeto de texto del flujo de contenido (no lo tapa).
    * Tras guardar, el texto ya no es extraíble. Devuelve true si eliminó un run.

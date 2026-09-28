@@ -2,6 +2,7 @@ import { PdfiumEngine } from '../engine/pdfium/PdfiumEngine';
 import { EditSession } from '../model/EditSession';
 import { CommandBus } from '../commands/Command';
 import { EditTextRunCmd } from '../commands/EditTextRun';
+import { ReplaceRunFontCmd } from '../commands/ReplaceRunFont';
 import { DeleteRunCmd } from '../commands/DeleteRun';
 import { InsertTextCmd } from '../commands/InsertText';
 import { MoveRunCmd } from '../commands/MoveRun';
@@ -242,20 +243,34 @@ export class App {
     this.setStatus(`${this.session.model.pages.length} página(s)`);
   }
 
-  private handleEdit(req: EditRequest): void {
+  private async handleEdit(req: EditRequest): Promise<void> {
     const s = this.session;
     if (!s || !this.bus) return;
     const res = s.engine.editTextRun(s.doc, req.pageIndex, req.runId, req.newText);
-    if (!res.ok) {
-      req.el.textContent = req.oldText;
-      this.setStatus(res.reason === 'glyph-missing'
-        ? 'La fuente de esa línea no tiene alguno de esos caracteres; edición no aplicada.'
-        : 'No se puede editar ese elemento.');
+    if (res.ok) {
+      s.model.updateRunText(req.pageIndex, req.runId, req.newText);
+      this.bus.pushExecuted(new EditTextRunCmd(req.pageIndex, req.runId, req.newText, req.oldText));
+      this.setStatus('Editado.');
       return;
     }
-    s.model.updateRunText(req.pageIndex, req.runId, req.newText);
-    this.bus.pushExecuted(new EditTextRunCmd(req.pageIndex, req.runId, req.newText, req.oldText));
-    this.setStatus('Editado.');
+    if (res.reason === 'glyph-missing') {
+      // La fuente incrustada (subconjunto) no trae ese glifo: como Acrobat,
+      // se sustituye la línea por la fuente estándar PDF más parecida en vez
+      // de rendirse. `execute` directo (no `bus.execute`) para no dejar un
+      // comando fallido en la pila de deshacer si tampoco cubre `newText`
+      // (p. ej. CJK) — ahí el motor no modifica nada.
+      const cmd = new ReplaceRunFontCmd(req.pageIndex, req.runId, req.newText);
+      await cmd.execute(s);
+      if (cmd.ok && cmd.fontName) {
+        this.bus.pushExecuted(cmd);
+        this.setStatus(`La fuente original no tiene algún carácter; la línea usa ${cmd.fontName}.`);
+        return;
+      }
+    }
+    req.el.textContent = req.oldText;
+    this.setStatus(res.reason === 'glyph-missing'
+      ? 'La fuente de esa línea no tiene alguno de esos caracteres; edición no aplicada.'
+      : 'No se puede editar ese elemento.');
   }
 
   private async handleInsert(pageIndex: number, at: PtPoint): Promise<void> {
