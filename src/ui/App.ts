@@ -58,6 +58,8 @@ export class App {
   private appliedFontLabel: string | null = null;
   private viewer: Viewer | null = null;
   private scale = 1;
+  /** Limpieza pendiente (iframe + oyentes) del intento de impresión anterior, si quedó alguno sin cerrar. Ver `print`. */
+  private limpiarImpresionAnterior: (() => void) | null = null;
   private readonly viewerEl: HTMLElement;
   private readonly thumbsEl: HTMLElement;
   private readonly outlineEl: HTMLElement;
@@ -869,27 +871,57 @@ export class App {
    * `catch` de la llamada a `print()`. Ambas caen a abrir el PDF en una
    * pestaña nueva, desde donde el usuario imprime con el propio visor del
    * navegador (Ctrl/Cmd+P).
+   *
+   * Limpieza (revisión de PR #52, dos bugs corregidos):
+   * - Revocar la blob: URL se retrasa un margen largo (60s) en TODOS los
+   *   caminos, incluido el de respaldo: revocarla de inmediato, como antes,
+   *   le arrancaba el PDF a la pestaña nueva de `window.open` antes de que
+   *   terminara de cargarlo — recibía una blob: URL ya muerta y no mostraba
+   *   nada. Quitar el iframe y sus oyentes es lo único que ocurre "ya".
+   * - El iframe se retira cuando el navegador avisa con `afterprint` (se
+   *   escucha en la ventana del propio iframe Y en la ventana principal, lo
+   *   que llegue antes — algunos navegadores lo emiten en la que llamó a
+   *   `print()`, otros en la de arriba), nunca con un temporizador corto: en
+   *   un navegador donde `print()` no bloquea hasta cerrar el diálogo, un
+   *   temporizador de pocos segundos podía vaciar la vista previa o cancelar
+   *   la impresión a medio camino. Un respaldo largo (60s) evita dejar el
+   *   iframe (y sus oyentes) para siempre si `afterprint` nunca llega.
+   * - Una impresión nueva limpia primero cualquier intento anterior sin
+   *   terminar (`limpiarImpresionAnterior`), para no ir acumulando iframes
+   *   ocultos ni oyentes globales (E-014/E-020, AGENTS.md §2.6).
    */
   private print(): void {
     const s = this.session;
     if (!s) { this.setStatus('Abre un documento antes de imprimir.'); return; }
+
+    this.limpiarImpresionAnterior?.();
+    this.limpiarImpresionAnterior = null;
+
     const bytes = s.engine.save(s.doc);
     const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
 
     const iframe = document.createElement('iframe');
+    iframe.className = 'print-frame'; // identifica el iframe de impresión (limpieza de intentos previos, tests)
     Object.assign(iframe.style, { position: 'fixed', right: '0', bottom: '0', width: '0', height: '0', border: '0' });
     iframe.setAttribute('aria-hidden', 'true');
 
     let limpiado = false;
-    const limpiar = (): void => {
+    let winImpresion: Window | null = null; // capturado tras 'load'; usado por quitarTodo para desengancharse de él
+    const onAfterPrint = (): void => quitarTodo();
+    const quitarTodo = (): void => {
       if (limpiado) return;
       limpiado = true;
-      iframe.remove();
-      URL.revokeObjectURL(url);
+      winImpresion?.removeEventListener?.('afterprint', onAfterPrint);
+      window.removeEventListener('afterprint', onAfterPrint);
       document.removeEventListener('securitypolicyviolation', onCsp);
+      iframe.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      if (this.limpiarImpresionAnterior === quitarTodo) this.limpiarImpresionAnterior = null;
     };
+    this.limpiarImpresionAnterior = quitarTodo;
+
     const abrirEnPestana = (motivo: string): void => {
-      limpiar();
+      quitarTodo();
       window.open(url, '_blank');
       this.setStatus(motivo);
     };
@@ -901,16 +933,16 @@ export class App {
 
     iframe.addEventListener('load', () => {
       try {
-        iframe.contentWindow?.focus();
-        iframe.contentWindow?.print();
+        winImpresion = iframe.contentWindow;
+        winImpresion?.focus();
+        winImpresion?.print();
       } catch {
         abrirEnPestana('No se pudo imprimir desde el visor embebido; se abrió el PDF en una pestaña nueva.');
         return;
       }
-      // No hay un evento fiable de "impresión terminada" para el print() de un
-      // iframe con blob: (afterprint no siempre llega aquí); se limpia tras
-      // un margen prudente en vez de esperarlo.
-      setTimeout(limpiar, 2000);
+      winImpresion?.addEventListener?.('afterprint', onAfterPrint);
+      window.addEventListener('afterprint', onAfterPrint);
+      setTimeout(onAfterPrint, 60_000); // respaldo si `afterprint` nunca llega
     });
 
     // `src` ANTES de insertar en el DOM: si se insertara primero sin `src`,
