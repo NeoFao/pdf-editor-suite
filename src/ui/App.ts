@@ -13,6 +13,8 @@ import { InsertPdfCmd } from '../commands/InsertPdf';
 import { DuplicatePageCmd } from '../commands/DuplicatePage';
 import { InsertImageCmd } from '../commands/InsertImage';
 import { AddNoteCmd } from '../commands/AddNote';
+import { SetFormTextCmd } from '../commands/SetFormText';
+import { SetFormCheckedCmd } from '../commands/SetFormChecked';
 import { HighlightRunCmd } from '../commands/HighlightRun';
 import { UnderlineRunCmd } from '../commands/UnderlineRun';
 import { StrikethroughRunCmd } from '../commands/StrikethroughRun';
@@ -216,7 +218,15 @@ export class App {
       onBackgroundClick: (pageIndex, at) => { this.handleBackgroundClick(pageIndex, at); },
       onMove: (pageIndex, runId, dxPt, dyPt) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt)); },
       onPageChange: (i) => { this.currentPage = i; this.updateIndicator(); this.setActiveThumb(i); },
-      onStroke: (pageIndex, points) => { void this.bus?.execute(new DrawStrokeCmd(pageIndex, points)); this.setStatus('Trazo dibujado.'); }
+      onStroke: (pageIndex, points) => { void this.bus?.execute(new DrawStrokeCmd(pageIndex, points)); this.setStatus('Trazo dibujado.'); },
+      onFormText: (pageIndex, annotIndex, value, oldValue) => {
+        void this.bus?.execute(new SetFormTextCmd(pageIndex, annotIndex, value, oldValue));
+        this.setStatus('Campo de formulario actualizado.');
+      },
+      onFormChecked: (pageIndex, annotIndex, checked) => {
+        void this.bus?.execute(new SetFormCheckedCmd(pageIndex, annotIndex, checked));
+        this.setStatus('Casilla actualizada.');
+      }
     });
     this.currentPage = 0;
     // Tras una operación de página (rotar/eliminar → refresh), rehacer miniaturas.

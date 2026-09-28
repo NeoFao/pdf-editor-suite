@@ -115,6 +115,38 @@ async function pdfFuentes() {
   return doc.save();
 }
 
+/**
+ * PDF con un AcroForm: dos campos de texto ('nombre' vacío, 'ciudad' con valor
+ * inicial 'Lima') y una casilla ('acepto') sin marcar, con apariencias
+ * generadas — ejercita el relleno de formularios (listFormFields/setFormText/
+ * setFormChecked).
+ */
+async function pdfFormulario() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const p = doc.addPage([320, 260]);
+  p.drawText('Formulario de prueba', { x: 20, y: 220, size: 16, font: bold });
+
+  const form = doc.getForm();
+
+  p.drawText('Nombre', { x: 20, y: 185, size: 10, font });
+  const nombre = form.createTextField('nombre');
+  nombre.addToPage(p, { x: 20, y: 160, width: 260, height: 20 });
+
+  p.drawText('Ciudad', { x: 20, y: 135, size: 10, font });
+  const ciudad = form.createTextField('ciudad');
+  ciudad.addToPage(p, { x: 20, y: 110, width: 260, height: 20 });
+  ciudad.setText('Lima');
+
+  const acepto = form.createCheckBox('acepto');
+  acepto.addToPage(p, { x: 20, y: 70, width: 20, height: 20 });
+  p.drawText('Acepto los terminos', { x: 46, y: 74, size: 10, font });
+
+  form.updateFieldAppearances(font);
+  return doc.save();
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -122,6 +154,7 @@ async function main() {
     'hostil.pdf': await pdfHostil(),
     'apaisado.pdf': await pdfApaisado(),
     'fuentes.pdf': await pdfFuentes(),
+    'formulario.pdf': await pdfFormulario(),
     'rojo.png': pngSolido(16, 16, [255, 0, 0])
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {

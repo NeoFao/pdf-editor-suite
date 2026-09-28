@@ -1,11 +1,25 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, leerCadenaPdfium, type Mem } from './mem';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_ANNOT_TEXT = 1;    // FPDF_ANNOTATION_SUBTYPE: nota adhesiva ("sticky note")
 const FPDF_ANNOT_FLAG = 0x01; // flag de FPDF_RenderPageBitmap: pinta también las anotaciones
 const FPDFANNOT_COLORTYPE_Color = 0;
+
+// FPDF_FORMFIELD_* (fpdf_formfill.h): tipo devuelto por FPDFAnnot_GetFormFieldType.
+// -1 (o cualquier valor fuera de esta tabla) significa "no es un campo de formulario".
+const FPDF_FORMFIELD_KIND: Record<number, FormFieldKind> = {
+  0: 'unknown',
+  1: 'button',
+  2: 'checkbox',
+  3: 'radio',
+  4: 'combo',
+  5: 'list',
+  6: 'text',
+  7: 'signature'
+};
+const FPDF_FORMFLAG_READONLY = 0x01; // bit 1 de /Ff (PDF 32000-1, tabla 221).
 
 /**
  * Implementación de PdfEngine sobre @embedpdf/pdfium (WASM).
@@ -14,6 +28,12 @@ const FPDFANNOT_COLORTYPE_Color = 0;
  */
 export class PdfiumEngine implements PdfEngine {
   private readonly srcPtr = new Map<DocHandle, number>();
+  // Entorno de formularios (AcroForm), uno por documento. `info` es el struct
+  // FPDF_FORMFILLINFO reservado por PDFiumExt_OpenFormFillInfo; `form` es el
+  // FPDF_FORMHANDLE que exigen todas las FPDFAnnot_GetFormField*/EPDFAnnot_*
+  // relacionadas con campos. 0 si el motor de este build no trae el extra o
+  // si la inicialización falló: entonces listFormFields devuelve siempre [].
+  private readonly formEnv = new Map<DocHandle, { info: number; form: number }>();
 
   private constructor(private readonly p: Pdfium, private readonly mem: Mem) {}
 
@@ -27,7 +47,32 @@ export class PdfiumEngine implements PdfEngine {
     const doc = this.p.FPDF_LoadMemDocument(ptr, bytes.length, '') as DocHandle;
     if (!doc) { this.mem.free(ptr); throw new Error('PDF no válido o cifrado no soportado'); }
     this.srcPtr.set(doc, ptr);
+    const info = this.p.PDFiumExt_OpenFormFillInfo();
+    const form = info ? this.p.PDFiumExt_InitFormFillEnvironment(doc, info) : 0;
+    this.formEnv.set(doc, { info, form: form || 0 });
     return doc;
+  }
+
+  /** FPDF_FORMHANDLE del documento, o 0 si no hay entorno de formularios disponible. */
+  private formHandle(doc: DocHandle): number {
+    return this.formEnv.get(doc)?.form ?? 0;
+  }
+
+  /**
+   * Carga la página emparejándola con el entorno de formularios (FORM_OnAfterLoadPage)
+   * cuando existe, y la cierra en el orden inverso correcto (§2.6: cierra lo que abres).
+   */
+  private withFormPage<T>(doc: DocHandle, pageIndex: number, fn: (page: number, form: number) => T): T {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const form = this.formHandle(doc);
+    if (form) this.p.FORM_OnAfterLoadPage(page, form);
+    try {
+      return fn(page, form);
+    } finally {
+      if (form) this.p.FORM_OnBeforeClosePage(page, form);
+      this.p.FPDF_ClosePage(page);
+    }
   }
 
   pageCount(doc: DocHandle): number {
@@ -478,6 +523,104 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
+  listFormFields(doc: DocHandle, pageIndex: number): FormField[] {
+    return this.withFormPage(doc, pageIndex, (page, form) => {
+      const fields: FormField[] = [];
+      if (!form) return fields; // sin entorno de formularios: ningún campo es legible
+      const n = this.p.FPDFPage_GetAnnotCount(page);
+      for (let i = 0; i < n; i++) {
+        const annot = this.p.FPDFPage_GetAnnot(page, i);
+        if (!annot) continue;
+        try {
+          const field = this.readFormField(form, annot, i);
+          if (field) fields.push(field);
+        } finally {
+          this.p.FPDFPage_CloseAnnot(annot);
+        }
+      }
+      return fields;
+    });
+  }
+
+  /** Lee un campo de formulario a partir de su anotación (widget). null si `annot` no es un campo. */
+  private readFormField(form: number, annot: number, annotIndex: number): FormField | null {
+    const type = this.p.FPDFAnnot_GetFormFieldType(form, annot); // -1 = no es un campo de formulario
+    const kind = FPDF_FORMFIELD_KIND[type];
+    if (!kind) return null;
+    const m = this.mem;
+    // Patrón de dos llamadas: ver leerCadenaPdfium (E-028).
+    const name = leerCadenaPdfium(
+      m,
+      (buf, len) => this.p.FPDFAnnot_GetFormFieldName(form, annot, buf, len),
+      (ptr) => m.readU16(ptr)
+    );
+    const value = leerCadenaPdfium(
+      m,
+      (buf, len) => this.p.FPDFAnnot_GetFormFieldValue(form, annot, buf, len),
+      (ptr) => m.readU16(ptr)
+    );
+    const flags = this.p.FPDFAnnot_GetFormFieldFlags(form, annot);
+    const readOnly = (flags & FPDF_FORMFLAG_READONLY) !== 0;
+    const checked = (kind === 'checkbox' || kind === 'radio') ? this.p.FPDFAnnot_IsChecked(form, annot) : false;
+    // FS_RECTF = {left, top, right, bottom} en puntos PDF (floats, 16 bytes), como en getNotes().
+    const rectPtr = m.malloc(16);
+    this.p.FPDFAnnot_GetRect(annot, rectPtr);
+    const left = m.getValue(rectPtr, 'float'), top = m.getValue(rectPtr + 4, 'float');
+    const right = m.getValue(rectPtr + 8, 'float'), bottom = m.getValue(rectPtr + 12, 'float');
+    m.free(rectPtr);
+    return { annotIndex, name, kind, value, checked, readOnly, rectPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom } };
+  }
+
+  setFormText(doc: DocHandle, pageIndex: number, annotIndex: number, value: string): boolean {
+    return this.withFormPage(doc, pageIndex, (page, form) => {
+      if (!form) return false;
+      const annot = this.p.FPDFPage_GetAnnot(page, annotIndex);
+      if (!annot) return false;
+      try {
+        if (FPDF_FORMFIELD_KIND[this.p.FPDFAnnot_GetFormFieldType(form, annot)] !== 'text') return false;
+        if (this.p.FPDFAnnot_GetFormFieldFlags(form, annot) & FPDF_FORMFLAG_READONLY) return false;
+        const wptr = this.mem.wide(value);
+        const ok = this.p.EPDFAnnot_SetFormFieldValue(form, annot, wptr);
+        this.mem.free(wptr);
+        if (!ok) return false;
+        // Regenera la apariencia del widget: sin esto, otros visores (y el
+        // propio render de esta app) seguirían mostrando el valor anterior.
+        this.p.EPDFAnnot_GenerateFormFieldAP(annot);
+        return true;
+      } finally {
+        this.p.FPDFPage_CloseAnnot(annot);
+      }
+    });
+  }
+
+  setFormChecked(doc: DocHandle, pageIndex: number, annotIndex: number, checked: boolean): boolean {
+    return this.withFormPage(doc, pageIndex, (page, form) => {
+      if (!form) return false;
+      const annot = this.p.FPDFPage_GetAnnot(page, annotIndex);
+      if (!annot) return false;
+      try {
+        if (FPDF_FORMFIELD_KIND[this.p.FPDFAnnot_GetFormFieldType(form, annot)] !== 'checkbox') return false;
+        if (this.p.FPDFAnnot_GetFormFieldFlags(form, annot) & FPDF_FORMFLAG_READONLY) return false;
+        // El valor "marcado" es el nombre de exportación del propio widget
+        // (su sub-diccionario /AP /N distinto de "Off"), no siempre "Yes".
+        const onValue = leerCadenaPdfium(
+          this.mem,
+          (buf, len) => this.p.FPDFAnnot_GetFormFieldExportValue(form, annot, buf, len),
+          (ptr) => this.mem.readU16(ptr)
+        );
+        const target = checked ? (onValue || 'Yes') : 'Off';
+        const wptr = this.mem.wide(target);
+        const ok = this.p.EPDFAnnot_SetFormFieldValue(form, annot, wptr);
+        this.mem.free(wptr);
+        if (!ok) return false;
+        this.p.EPDFAnnot_GenerateFormFieldAP(annot);
+        return true;
+      } finally {
+        this.p.FPDFPage_CloseAnnot(annot);
+      }
+    });
+  }
+
   fillRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean {
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
@@ -536,6 +679,14 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   close(doc: DocHandle): void {
+    const env = this.formEnv.get(doc);
+    if (env) {
+      // Orden inverso al de open(): salir del entorno antes de cerrar el
+      // documento que lo respalda, y liberar el struct FORMFILLINFO al final.
+      if (env.form) this.p.PDFiumExt_ExitFormFillEnvironment(env.form);
+      if (env.info) this.p.PDFiumExt_CloseFormFillInfo(env.info);
+      this.formEnv.delete(doc);
+    }
     this.p.FPDF_CloseDocument(doc);
     const ptr = this.srcPtr.get(doc);
     if (ptr !== undefined) { this.mem.free(ptr); this.srcPtr.delete(doc); }
