@@ -36,3 +36,20 @@ test('addNote crea una nota Text que persiste tras guardar y reabrir; removeNote
   eng.close(doc);
   eng.close(doc2);
 });
+
+test('getNotes no trunca notas largas (más de 2000 caracteres, buffer fijo antiguo)', async () => {
+  const d = await PDFDocument.create();
+  d.addPage([300, 200]);
+  const eng = await PdfiumEngine.create();
+  const doc = await eng.open(await d.save());
+
+  const largo = 'x'.repeat(5000);
+  eng.addNote(doc, 0, { xPt: 50, yPt: 150, text: largo });
+
+  const notas = eng.getNotes(doc, 0);
+  expect(notas).toHaveLength(1);
+  expect(notas[0]!.text.length).toBe(5000);
+  expect(notas[0]!.text).toBe(largo);
+
+  eng.close(doc);
+});

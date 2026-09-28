@@ -164,13 +164,16 @@ export class Viewer {
       const marker = document.createElement('div');
       marker.className = 'note-marker';
       marker.title = note.text;
-      marker.textContent = '📝';
+      marker.setAttribute('aria-label', note.text);
+      // El motor ya pinta el icono de la nota al renderizar la página (el bitmap
+      // incluye las anotaciones): este marcador queda transparente y solo sirve
+      // de zona accesible/hover sobre ese icono, para no dibujar uno encima del otro.
+      marker.textContent = '';
       Object.assign(marker.style, {
         position: 'absolute', left: `${c.left}px`, top: `${c.top}px`,
         width: `${c.width}px`, height: `${c.height}px`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: `${Math.max(10, Math.round(Math.min(c.width, c.height)))}px`,
-        lineHeight: '1'
+        background: 'transparent',
+        pointerEvents: 'auto', cursor: 'help'
       });
       layer.appendChild(marker);
     }

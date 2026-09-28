@@ -445,11 +445,17 @@ export class PdfiumEngine implements PdfEngine {
           const bottom = this.mem.getValue(rectPtr + 12, 'float');
           this.mem.free(rectPtr);
 
-          const bufLen = 4096;
-          const buf = this.mem.malloc(bufLen);
-          this.p.FPDFAnnot_GetStringValue(annot, 'Contents', buf, bufLen);
-          const text = this.mem.readU16(buf);
-          this.mem.free(buf);
+          // Patrón de dos llamadas: (buffer=0, buflen=0) devuelve el tamaño exacto
+          // en bytes (incluido el nulo); un buffer fijo no solo trunca, PDFium ni
+          // siquiera lo rellena si es insuficiente y queda memoria sin inicializar.
+          const needed = this.p.FPDFAnnot_GetStringValue(annot, 'Contents', 0, 0);
+          let text = '';
+          if (needed > 0) {
+            const buf = this.mem.malloc(needed);
+            this.p.FPDFAnnot_GetStringValue(annot, 'Contents', buf, needed);
+            text = this.mem.readU16(buf);
+            this.mem.free(buf);
+          }
 
           notes.push({ index: i, text, rectPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom } });
         } finally {

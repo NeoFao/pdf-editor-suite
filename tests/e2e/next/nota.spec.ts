@@ -35,3 +35,26 @@ test('nota: se coloca con un clic, se ve su marcador y persiste al guardar; desh
   await page.locator('#btn-undo').click();
   await expect(page.locator('.note-marker')).toHaveCount(0);
 });
+
+test('nota: el marcador es alcanzable con el ratón (title/aria-label no quedan tapados por pointer-events:none)', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(FIXTURE);
+  await expect(page.locator('.run').first()).toBeVisible();
+
+  page.once('dialog', (d) => d.accept('Nota alcanzable'));
+  await page.locator('#btn-note').click();
+  await page.locator('.page').first().click({ position: { x: 160, y: 175 } });
+  const marker = page.locator('.note-marker');
+  await expect(marker).toHaveCount(1);
+  await expect(marker).toHaveAttribute('aria-label', 'Nota alcanzable');
+
+  await marker.hover();
+  const box = (await marker.boundingBox())!;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  const esElMarcador = await page.evaluate(
+    ([x, y]: [number, number]) => document.elementFromPoint(x, y)?.classList.contains('note-marker') ?? false,
+    [cx, cy] as [number, number]
+  );
+  expect(esElMarcador).toBe(true);
+});
