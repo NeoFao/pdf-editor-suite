@@ -1,5 +1,5 @@
 import { loadEngine, type Pdfium } from './loadEngine';
-import { makeMem, type Mem } from './mem';
+import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
@@ -219,17 +219,22 @@ export class PdfiumEngine implements PdfEngine {
   /** Lee las propiedades de un objeto de texto (obj) usando la text page para el string. */
   private readTextRun(obj: number, textPage: number, runId: number): TextRun {
     const m = this.mem;
-    // Texto (UTF-16)
-    const tbuf = m.malloc(1024);
-    this.p.FPDFTextObj_GetText(obj, textPage, tbuf, 1024);
-    const text = m.readU16(tbuf); m.free(tbuf);
+    // Texto (UTF-16). Patrón de dos llamadas: ver leerCadenaPdfium (E-028).
+    const text = leerCadenaPdfium(
+      m,
+      (buf, len) => this.p.FPDFTextObj_GetText(obj, textPage, buf, len),
+      (ptr) => m.readU16(ptr)
+    );
     // Tamaño de fuente (out float)
     const fs = m.malloc(4); this.p.FPDFTextObj_GetFontSize(obj, fs);
     const sizePt = m.getValue(fs, 'float'); m.free(fs);
-    // Nombre de fuente
+    // Nombre de fuente (bytes UTF-8/Latin-1, no UTF-16).
     const font = this.p.FPDFTextObj_GetFont(obj);
-    const nbuf = m.malloc(256); this.p.FPDFFont_GetBaseFontName(font, nbuf, 256);
-    const fontName = m.UTF8ToString(nbuf); m.free(nbuf);
+    const fontName = leerCadenaPdfium(
+      m,
+      (buf, len) => this.p.FPDFFont_GetBaseFontName(font, buf, len),
+      (ptr) => m.UTF8ToString(ptr)
+    );
     // Color de relleno (RGBA, out uints)
     const r = m.malloc(4), g = m.malloc(4), b = m.malloc(4), a = m.malloc(4);
     this.p.FPDFPageObj_GetFillColor(obj, r, g, b, a);
@@ -445,17 +450,12 @@ export class PdfiumEngine implements PdfEngine {
           const bottom = this.mem.getValue(rectPtr + 12, 'float');
           this.mem.free(rectPtr);
 
-          // Patrón de dos llamadas: (buffer=0, buflen=0) devuelve el tamaño exacto
-          // en bytes (incluido el nulo); un buffer fijo no solo trunca, PDFium ni
-          // siquiera lo rellena si es insuficiente y queda memoria sin inicializar.
-          const needed = this.p.FPDFAnnot_GetStringValue(annot, 'Contents', 0, 0);
-          let text = '';
-          if (needed > 0) {
-            const buf = this.mem.malloc(needed);
-            this.p.FPDFAnnot_GetStringValue(annot, 'Contents', buf, needed);
-            text = this.mem.readU16(buf);
-            this.mem.free(buf);
-          }
+          // Patrón de dos llamadas: ver leerCadenaPdfium (E-028).
+          const text = leerCadenaPdfium(
+            this.mem,
+            (buf, len) => this.p.FPDFAnnot_GetStringValue(annot, 'Contents', buf, len),
+            (ptr) => this.mem.readU16(ptr)
+          );
 
           notes.push({ index: i, text, rectPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom } });
         } finally {

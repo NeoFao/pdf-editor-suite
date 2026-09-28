@@ -435,6 +435,50 @@ export const conMotorEncapsulado = {
   }
 };
 
+/* ── E-028 · getters de cadena de PDFium con buffer de tamaño fijo ─────── */
+export const conPdfiumBufferFijo = {
+  id: 'pdfium-buffer-fijo',
+  titulo: 'los getters de cadena de PDFium usan el patrón de dos llamadas',
+  comoArreglar:
+    'Llama primero con (buffer=0, buflen=0) para saber el tamaño exacto, reserva ' +
+    'justo eso y vuelve a llamar. PDFium no trunca un buffer insuficiente: lo deja ' +
+    'sin rellenar, así que un tamaño fijo devuelve memoria sin inicializar, no un ' +
+    'texto cortado (E-028). Usa leerCadenaPdfium() de src/engine/pdfium/mem.ts.',
+  ejecutar() {
+    const raizSrc = path.join(RAIZ, 'src');
+    if (!fs.existsSync(raizSrc)) return [];
+    const hallazgos = [];
+    // Getters de cadena de PDFium: su último argumento es el tamaño del buffer.
+    const patron = /FPDF\w*_Get\w*(?:Text|Name|StringValue|MetaText|Label)\w*\(([^)]*)\)/g;
+    const recorrer = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { recorrer(full); continue; }
+        if (!e.name.endsWith('.ts')) continue;
+        const rel = path.relative(RAIZ, full).replace(/\\/g, '/');
+        const contenido = leer(rel);
+        if (tieneDeuda(rel, this.id)) continue;
+        const exentas = lineasExentas(contenido, this.id);
+        contenido.split('\n').forEach((linea, i) => {
+          const n = i + 1;
+          if (exentas.has(n)) return;
+          for (const m of linea.matchAll(patron)) {
+            const args = m[1].split(',').map((a) => a.trim());
+            const ultimo = args[args.length - 1];
+            // Un literal numérico distinto de 0 es un tamaño de buffer fijo.
+            // "0" (llamada de sondeo) o un identificador (p. ej. "needed") no lo son.
+            if (/^\d+$/.test(ultimo) && Number(ultimo) !== 0) {
+              hallazgos.push(hallazgo(rel, n, `buffer de tamaño fijo (${ultimo}) en "${m[0]}"`));
+            }
+          }
+        });
+      }
+    };
+    recorrer(raizSrc);
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -449,5 +493,6 @@ export const TODAS = [
   conSuiteViva,
   conDeudaAcotada,
   conPdfJsSinEval,
-  conMotorEncapsulado
+  conMotorEncapsulado,
+  conPdfiumBufferFijo
 ];
