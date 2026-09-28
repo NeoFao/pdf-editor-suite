@@ -1,6 +1,8 @@
 import { test, expect } from '@playwright/test';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(AQUI, '../../fixtures/generados/fuentes.pdf');
@@ -44,10 +46,21 @@ test('fidelidad-reposo: color transparente y tirador oculto en reposo', async ({
 });
 
 test('fidelidad-reposo: al editar aparece la tipografía real de la línea; Escape vuelve a transparente', async ({ page }) => {
+  // Tamaño de página en pt, leído del propio PDF (no asumido): con el ajuste
+  // al ancho al abrir (#8) la escala inicial ya no es fija en 1, así que el
+  // tamaño de fuente esperado en px depende de la escala REAL aplicada.
+  const eng = await PdfiumEngine.create();
+  const doc = await eng.open(new Uint8Array(fs.readFileSync(FIXTURE)));
+  const pageSize = eng.pageSize(doc, 0);
+  eng.close(doc);
+
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(FIXTURE);
   const run = page.locator('.run', { hasText: 'ORIGINAL-TIMES' });
   await expect(run).toBeVisible();
+
+  const cajaPagina = (await page.locator('.page').first().boundingBox())!;
+  const escala = cajaPagina.width / pageSize.widthPt;
 
   await run.click();
 
@@ -61,8 +74,8 @@ test('fidelidad-reposo: al editar aparece la tipografía real de la línea; Esca
   expect(estiloEdicion.fontFamily).toContain('serif');
   expect(estiloEdicion.fontFamily).not.toContain('sans-serif');
   const size = parseFloat(estiloEdicion.fontSize);
-  expect(size).toBeGreaterThan(17); // 18pt × escala 1, tolerancia ±1px
-  expect(size).toBeLessThan(19);
+  const esperado = 18 * escala; // 18pt × escala real
+  expect(Math.abs(size - esperado)).toBeLessThanOrEqual(Math.max(1, esperado * 0.05));
 
   await page.keyboard.press('Escape');
   const colorTrasEscape = await run.evaluate((el) => getComputedStyle(el).color);

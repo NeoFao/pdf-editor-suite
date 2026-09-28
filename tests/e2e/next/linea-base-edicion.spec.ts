@@ -16,8 +16,7 @@ const FIXTURE = path.resolve(AQUI, '../../fixtures/generados/fuentes.pdf');
 // texto original (`run.originPt`), como en Acrobat.
 test('linea-base-edicion: al editar, la línea base y el x de inicio coinciden con el original', async ({ page }) => {
   // Geometría esperada, leída del propio PDF con el motor (Node), no
-  // re-derivada del DOM: la app usa escala 1 sin rotación para este fixture
-  // (mismo supuesto que fidelidad-reposo.spec.ts).
+  // re-derivada del DOM.
   const eng = await PdfiumEngine.create();
   const doc = await eng.open(new Uint8Array(fs.readFileSync(FIXTURE)));
   const original = eng.getPageText(doc, 0).find((r) => r.text.includes('ORIGINAL-TIMES'))!;
@@ -25,15 +24,23 @@ test('linea-base-edicion: al editar, la línea base y el x de inicio coinciden c
   eng.close(doc);
   expect(original).toBeDefined();
 
-  // ptToCss con escala 1 y rotación 0 (ver PageGeometry.ptToCss, caso `0`):
-  // x_css = xPt, y_css = alturaPágina - yPt.
-  const esperadoBaselineCss = pageSize.heightPt - original.originPt.yPt;
-  const esperadoXCss = original.originPt.xPt;
-
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(FIXTURE);
   const run = page.locator('.run', { hasText: 'ORIGINAL-TIMES' });
   await expect(run).toBeVisible();
+
+  // Escala REAL aplicada por la app, no asumida: desde #8 (ajuste al ancho al
+  // abrir), la escala inicial ya no es 1 — se deriva del ancho útil del
+  // visor. Se mide del propio DOM (ancho de `.page` ÷ anchura real de la
+  // página en pt) en vez de repetir el cálculo de `App.fitWidth`, para que
+  // este test siga siendo válido si ese cálculo cambia.
+  const cajaPagina = (await page.locator('.page').first().boundingBox())!;
+  const escala = cajaPagina.width / pageSize.widthPt;
+
+  // ptToCss con rotación 0 (ver PageGeometry.ptToCss, caso `0`), a la escala real:
+  // x_css = xPt × escala, y_css = (alturaPágina − yPt) × escala.
+  const esperadoBaselineCss = (pageSize.heightPt - original.originPt.yPt) * escala;
+  const esperadoXCss = original.originPt.xPt * escala;
 
   await run.click();
   await expect(run).toHaveClass(/editing/);

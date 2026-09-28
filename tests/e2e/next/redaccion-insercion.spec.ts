@@ -37,7 +37,14 @@ test('insertar: añadir texto nuevo llega al PDF descargado y es extraíble', as
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
   await page.locator('#btn-insert').click();                 // activa modo insertar
-  await page.locator('.page').first().click({ position: { x: 160, y: 175 } }); // fondo
+  // Punto del fondo SIN texto encima: ambas líneas de `fuentes.pdf` quedan en
+  // la mitad superior de la página (ver generar-fixtures.mjs), así que la
+  // zona inferior está libre a cualquier escala — a diferencia de un píxel
+  // fijo (p. ej. 160,175), que con el ajuste al ancho al abrir (#8) puede caer
+  // sobre una línea según el tamaño real del visor.
+  const pagina = page.locator('.page').first();
+  const cajaPagina = (await pagina.boundingBox())!;
+  await pagina.click({ position: { x: cajaPagina.width * 0.5, y: cajaPagina.height * 0.92 } });
   await expect(page.locator('#status')).toContainText('insertado');
 
   const textos = await textosDelDescargado(page, () => page.locator('#btn-save').click());
