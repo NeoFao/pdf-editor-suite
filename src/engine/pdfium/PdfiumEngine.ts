@@ -155,6 +155,23 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
+  /**
+   * PDF de una página en blanco, tamaño `widthPt`×`heightPt` en puntos PDF.
+   * Mismo patrón que `imageToPdf`: documento efímero, una página, guardar y
+   * cerrar en el propio método — aquí sin insertar ningún objeto, así que la
+   * página queda vacía de verdad (sin contenido, sin recursos).
+   */
+  createBlank(widthPt: number, heightPt: number): Uint8Array<ArrayBuffer> {
+    const doc = this.p.FPDF_CreateNewDocument();
+    try {
+      const page = this.p.FPDFPage_New(doc, 0, widthPt, heightPt);
+      this.p.FPDF_ClosePage(page);
+      return this.save(doc);
+    } finally {
+      this.p.FPDF_CloseDocument(doc);
+    }
+  }
+
   extractPages(doc: DocHandle, pageIndices: number[]): Uint8Array<ArrayBuffer> {
     const dest = this.p.FPDF_CreateNewDocument();
     try {
