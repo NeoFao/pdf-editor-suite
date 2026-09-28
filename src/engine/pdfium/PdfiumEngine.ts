@@ -1,8 +1,11 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, type Mem } from './mem';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
+const FPDF_ANNOT_TEXT = 1;    // FPDF_ANNOTATION_SUBTYPE: nota adhesiva ("sticky note")
+const FPDF_ANNOT_FLAG = 0x01; // flag de FPDF_RenderPageBitmap: pinta también las anotaciones
+const FPDFANNOT_COLORTYPE_Color = 0;
 
 /**
  * Implementación de PdfEngine sobre @embedpdf/pdfium (WASM).
@@ -137,7 +140,8 @@ export class PdfiumEngine implements PdfEngine {
     const bmp = this.p.FPDFBitmap_Create(width, height, 0);
     try {
       this.p.FPDFBitmap_FillRect(bmp, 0, 0, width, height, 0xffffffff);
-      this.p.FPDF_RenderPageBitmap(bmp, page, 0, 0, width, height, 0, 0);
+      // Flag FPDF_ANNOT: pinta también las anotaciones (p. ej. el icono de las notas).
+      this.p.FPDF_RenderPageBitmap(bmp, page, 0, 0, width, height, 0, FPDF_ANNOT_FLAG);
       const stride = this.p.FPDFBitmap_GetStride(bmp);
       const buf = this.p.FPDFBitmap_GetBuffer(bmp);
       const rgba = new Uint8ClampedArray(width * height * 4);
@@ -385,6 +389,84 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDFPage_InsertObject(page, obj);
       this.p.FPDFPage_GenerateContent(page);
       return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  addNote(doc: DocHandle, pageIndex: number, spec: { xPt: number; yPt: number; text: string }): number {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const annot = this.p.FPDFPage_CreateAnnot(page, FPDF_ANNOT_TEXT);
+      if (!annot) throw new Error('No se pudo crear la anotación de nota');
+      try {
+        // FS_RECTF = {left, top, right, bottom} en puntos PDF (floats, 16 bytes).
+        // El clic marca la esquina superior-izquierda del icono; icono de 20×20 pt.
+        const rectPtr = this.mem.malloc(16);
+        this.mem.setValue(rectPtr, spec.xPt, 'float');
+        this.mem.setValue(rectPtr + 4, spec.yPt, 'float');
+        this.mem.setValue(rectPtr + 8, spec.xPt + 20, 'float');
+        this.mem.setValue(rectPtr + 12, spec.yPt - 20, 'float');
+        this.p.FPDFAnnot_SetRect(annot, rectPtr);
+        this.mem.free(rectPtr);
+
+        const wptr = this.mem.wide(spec.text);
+        this.p.FPDFAnnot_SetStringValue(annot, 'Contents', wptr);
+        this.mem.free(wptr);
+
+        // Amarillo, como el icono de nota de Acrobat.
+        this.p.FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_Color, 255, 220, 0, 255);
+      } finally {
+        this.p.FPDFPage_CloseAnnot(annot);
+      }
+      return this.p.FPDFPage_GetAnnotCount(page) - 1; // la anotación creada es la última
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  getNotes(doc: DocHandle, pageIndex: number): NoteInfo[] {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const notes: NoteInfo[] = [];
+    try {
+      const n = this.p.FPDFPage_GetAnnotCount(page);
+      for (let i = 0; i < n; i++) {
+        const annot = this.p.FPDFPage_GetAnnot(page, i);
+        if (!annot) continue;
+        try {
+          if (this.p.FPDFAnnot_GetSubtype(annot) !== FPDF_ANNOT_TEXT) continue;
+          const rectPtr = this.mem.malloc(16);
+          this.p.FPDFAnnot_GetRect(annot, rectPtr);
+          const left = this.mem.getValue(rectPtr, 'float');
+          const top = this.mem.getValue(rectPtr + 4, 'float');
+          const right = this.mem.getValue(rectPtr + 8, 'float');
+          const bottom = this.mem.getValue(rectPtr + 12, 'float');
+          this.mem.free(rectPtr);
+
+          const bufLen = 4096;
+          const buf = this.mem.malloc(bufLen);
+          this.p.FPDFAnnot_GetStringValue(annot, 'Contents', buf, bufLen);
+          const text = this.mem.readU16(buf);
+          this.mem.free(buf);
+
+          notes.push({ index: i, text, rectPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom } });
+        } finally {
+          this.p.FPDFPage_CloseAnnot(annot);
+        }
+      }
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+    return notes;
+  }
+
+  removeNote(doc: DocHandle, pageIndex: number, index: number): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      return this.p.FPDFPage_RemoveAnnot(page, index);
     } finally {
       this.p.FPDF_ClosePage(page);
     }

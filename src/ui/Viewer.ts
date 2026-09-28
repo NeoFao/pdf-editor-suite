@@ -148,6 +148,35 @@ export class Viewer {
     wrapper.appendChild(layer);
   }
 
+  /** Marcadores de notas adhesivas (anotaciones reales); se leen del motor, no del modelo. */
+  private drawNotes(i: number): void {
+    const wrapper = this.wrappers[i];
+    if (!wrapper) return;
+    wrapper.querySelector('.note-layer')?.remove();
+    const notes = this.session.engine.getNotes(this.session.doc, i);
+    if (notes.length === 0) return;
+    const geom = this.geoms[i]!;
+    const layer = document.createElement('div');
+    layer.className = 'note-layer';
+    Object.assign(layer.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
+    for (const note of notes) {
+      const c = geom.rectPtToCss(note.rectPt);
+      const marker = document.createElement('div');
+      marker.className = 'note-marker';
+      marker.title = note.text;
+      marker.textContent = '📝';
+      Object.assign(marker.style, {
+        position: 'absolute', left: `${c.left}px`, top: `${c.top}px`,
+        width: `${c.width}px`, height: `${c.height}px`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: `${Math.max(10, Math.round(Math.min(c.width, c.height)))}px`,
+        lineHeight: '1'
+      });
+      layer.appendChild(marker);
+    }
+    wrapper.appendChild(layer);
+  }
+
   private rebuild(): void {
     this.root.textContent = '';
     this.wrappers = [];
@@ -226,6 +255,7 @@ export class Viewer {
       }
     });
     this.drawHighlights(i); // conserva los resaltados tras un re-render
+    this.drawNotes(i);
 
     // Capa de captura de pluma (encima de todo; solo activa en modo pluma).
     const pen = document.createElement('div');
