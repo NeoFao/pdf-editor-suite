@@ -156,6 +156,12 @@ export class App {
 
     this.viewerEl = document.createElement('div');
     this.viewerEl.id = 'viewer';
+    // Focuseable por script (sin entrar en el orden de tabulación) para que,
+    // tras hacer clic sobre él o sobre una página, PageUp/PageDown/flechas/
+    // Home/End/espacio puedan desplazarlo: el navegador solo aplica el
+    // scroll por teclado a un contenedor desplazable con foco (E-032, ver
+    // Viewer.programmaticScroll).
+    this.viewerEl.tabIndex = -1;
     Object.assign(this.viewerEl.style, { flex: '1', overflow: 'auto', background: '#525659', padding: '16px' });
 
     area.append(sidebar, this.viewerEl);

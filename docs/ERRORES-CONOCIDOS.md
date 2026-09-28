@@ -772,19 +772,39 @@ de tocar el scroll — la selección explícita del usuario manda,
 independientemente de si el scroll se mueve o no. `Viewer.scrollToPage`
 fija además un "pin" (`pinnedPage`): mientras esté activo, el
 `IntersectionObserver` no puede reafirmar una página distinta, ni siquiera
-si calcula que "la más visible" es otra. Solo un gesto de scroll real del
-usuario (`wheel` o `touchmove` sobre el visor) libera el pin y devuelve el
-control al observer — así el scroll manual (rueda, gesto táctil) sigue
-actualizando el indicador con normalidad. El pin también se limpia en
-`Viewer.rebuild()`: una operación de página puede renumerar los índices, así
-que un pin apuntando al número antiguo ya no significa nada; `App.onReload`
-recalcula `currentPage` por su cuenta en ese caso.
+si calcula que "la más visible" es otra. Solo un scroll real del usuario
+libera el pin y devuelve el control al observer; el pin también se limpia en
+`Viewer.rebuild()`, porque una operación de página puede renumerar los
+índices y `App.onReload` recalcula `currentPage` por su cuenta en ese caso.
 
-*Limitación conocida:* arrastrar la barra de scroll con el ratón no dispara
-`wheel` ni `touchmove`, así que no libera el pin por sí solo. No es una
-regresión (antes de este arreglo no existía ningún mecanismo de pin), y el
-caso de uso real —clic en miniatura/marcador/prev/next seguido de scroll con
-rueda o gesto táctil— queda cubierto.
+**Corrección de revisión (mismo defecto, otro disparador).** La primera
+versión de este arreglo solo liberaba el pin con los eventos `wheel` y
+`touchmove`. Eso dejaba fuera CUALQUIER otra forma de desplazar el visor:
+teclado (PageDown/flechas/Home/End/espacio con el visor enfocado) o arrastrar
+la barra de scroll con el ratón. Tras una navegación explícita, si el
+usuario seguía con el teclado o la barra en vez de la rueda, el indicador
+volvía a quedarse congelado y "Eliminar página" podía volver a actuar sobre
+la página equivocada — la revisión de código de este PR lo encontró antes de
+fusionar.
+
+La solución no depende de enumerar gestos de entrada, sino de distinguir
+**scroll programático** de **scroll del usuario** por su origen, no por su
+disparador. `Viewer.scrollToPage()` marca `programmaticScroll = true` justo
+antes de llamar a `scrollIntoView` y arma un temporizador de respaldo de
+~150ms (`armScrollEndFallback()`); ese respaldo se reinicia en cada evento
+`scroll` mientras el flag siga activo y se cierra de inmediato con el evento
+nativo `scrollend` en cuanto el navegador lo soporta (Chromium/Firefox). El
+listener de `scroll` del visor consulta ese flag: si sigue `true`, el evento
+es un eco del propio `scrollToPage` y no toca el pin; si ya es `false`, es
+scroll real del usuario —venga de teclado, barra de scroll, o cualquier otra
+vía— y libera el pin. `wheel`/`touchmove` se conservan como liberación
+inmediata aparte, porque son intención del usuario incluso si ocurren
+*durante* un `scrollToPage` todavía en vuelo (p. ej., el usuario mueve la
+rueda mientras el smooth-scroll programático sigue animando). Si
+`scrollIntoView` no dispara ningún `scroll` porque el destino ya era
+visible, el temporizador de respaldo —armado también dentro de
+`scrollToPage`, no solo en el listener de `scroll`— es quien cierra la
+ventana igualmente.
 
 **Cómo se detecta ahora.** `tests/e2e/next/pagina-actual.spec.ts`:
 - El test del defecto destructivo: abre `paginas-pequenas.pdf` (4 páginas de
@@ -800,9 +820,17 @@ rueda o gesto táctil— queda cubierto.
 - Clic en un marcador (`paginas-pequenas-marcadores.pdf`, mismo tamaño de
   página con un outline de un nodo por página) fija el indicador a su
   página.
-- El scroll manual (`page.mouse.wheel`) sobre `nativo.pdf` (páginas A4, que
-  no caben todas) sigue actualizando el indicador con normalidad: el pin no
-  bloquea la navegación real del usuario.
+- El scroll manual con la rueda (`page.mouse.wheel`) sobre `nativo.pdf`
+  (páginas A4, que no caben todas) sigue actualizando el indicador con
+  normalidad.
+- (Corrección de revisión) El teclado (`page.keyboard.press('End')` con el
+  visor enfocado — `#viewer` gana `tabIndex = -1` en `App.ts` para poder
+  recibir foco por script) libera el pin y actualiza el indicador. Antes de
+  esta corrección se quedaba en "1 / 2".
+- (Corrección de revisión) Un scroll inyectado directamente en `scrollTop`
+  sin pasar por `scrollToPage()` ni disparar `wheel`/`touchmove` —lo mismo
+  que hace el navegador al arrastrar el thumb de la barra de scroll— también
+  libera el pin. Antes de esta corrección se quedaba en "1 / 2".
 
 Regla `navegacion-por-gotopage`: `Viewer.scrollToPage()` solo se puede llamar
 desde dentro de `App.goToPage()`. No cubre el invariante completo (el orden

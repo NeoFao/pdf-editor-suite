@@ -36,13 +36,30 @@ export class Viewer {
   /**
    * Página fijada por una navegación EXPLÍCITA (`scrollToPage`, ver E-032).
    * Mientras no sea `null`, el `IntersectionObserver` no puede reafirmar otra
-   * página: solo un gesto de scroll real del usuario (rueda, gesto táctil o
-   * teclado, ver los listeners en el constructor) lo libera. Sin este freno,
+   * página, aunque calcule que "la más visible" es otra. Solo se libera
+   * cuando el USUARIO desplaza el visor de verdad — por cualquier vía:
+   * rueda, gesto táctil, teclado (flechas/PageUp/PageDown/Home/End/espacio
+   * con el visor enfocado) o arrastrando la barra de scroll. Sin este freno,
    * el scroll que `scrollToPage` dispara (o su ausencia, si el destino ya
    * cabía en el viewport) deja que el observer decida por su cuenta cuál es
    * "la más visible" y pise la selección explícita del usuario.
    */
   private pinnedPage: number | null = null;
+  /**
+   * `true` mientras un `scrollToPage()` está "en vuelo": distingue el scroll
+   * que ese propio método dispara (o que no dispara nada, si el destino ya
+   * cabía) de un scroll real del usuario. El listener de `scroll` usa este
+   * flag para decidir si lo que ve es programático (lo ignora) o del usuario
+   * (libera `pinnedPage`) — así el teclado y el arrastre de la barra, que no
+   * emiten `wheel` ni `touchmove`, también liberan el pin (ver corrección
+   * de revisión de E-032: antes solo `wheel`/`touchmove` lo hacían, y
+   * PageDown/flechas/Home/End/arrastrar la barra dejaban el indicador
+   * congelado tras una navegación explícita — la misma familia de defecto
+   * que E-032, con otro disparador).
+   */
+  private programmaticScroll = false;
+  /** Respaldo de `scrollend` (no todos los navegadores lo emiten todavía) y red de seguridad para cuando el scroll programático no mueve nada. */
+  private scrollEndFallback: ReturnType<typeof setTimeout> | null = null;
   private penMode = false;
 
   constructor(
@@ -51,20 +68,47 @@ export class Viewer {
     private readonly cb: ViewerCallbacks
   ) {
     this.layout();
-    this.root.addEventListener('scroll', () => this.renderVisible());
-    // Cualquier gesto de scroll real del usuario libera el pin: a partir de
-    // ahí el observer vuelve a mandar, como antes de E-032. `scrollIntoView`
-    // (programático) no dispara ni `wheel` ni `touchmove` por sí solo.
-    // (El arrastre de la barra de scroll no dispara ninguno de los dos: queda
-    // fuera de esta heurística, igual que antes de E-032 no existía ningún
-    // mecanismo — no es una regresión.)
+    this.root.addEventListener('scroll', () => {
+      this.renderVisible();
+      if (this.programmaticScroll) {
+        // Sigue en vuelo el scroll que disparó `scrollToPage`: reinicia el
+        // respaldo (se resuelve ~150ms después del ÚLTIMO evento de scroll,
+        // no del primero) y no toques el pin todavía.
+        this.armScrollEndFallback();
+        return;
+      }
+      // No hay ningún scroll programático en curso: esto es scroll real del
+      // usuario (teclado, arrastre de la barra de scroll, rueda que
+      // `wheel` ya liberó más abajo, gesto táctil que `touchmove` ya
+      // liberó...). Libera el pin.
+      this.pinnedPage = null;
+    });
+    // `wheel`/`touchmove` liberan el pin de inmediato, incluso si ocurren
+    // DURANTE un scroll programático en curso: también son intención real
+    // del usuario (p. ej. mueve la rueda mientras el smooth-scroll de
+    // `scrollToPage` todavía está animando).
     const liberarPin = (): void => { this.pinnedPage = null; };
     this.root.addEventListener('wheel', liberarPin, { passive: true });
     this.root.addEventListener('touchmove', liberarPin, { passive: true });
+    // Fin real del scroll programático (Chromium/Firefox): cierra la ventana
+    // antes de que expire el respaldo de 150ms.
+    this.root.addEventListener('scrollend', () => this.finishProgrammaticScroll());
     this.renderVisible();
     this.session.model.on('change', (pageIndex) => { this.rendered.delete(pageIndex); this.renderVisible(); });
     // Recarga completa (deshacer de borrar/insertar): reconstruir todo.
     this.session.model.onReload(() => this.rebuild());
+  }
+
+  /** Reinicia el temporizador de respaldo de `scrollend` (~150ms sin nuevos eventos `scroll`). */
+  private armScrollEndFallback(): void {
+    if (this.scrollEndFallback !== null) clearTimeout(this.scrollEndFallback);
+    this.scrollEndFallback = setTimeout(() => this.finishProgrammaticScroll(), 150);
+  }
+
+  /** Cierra la ventana de "scroll programático en curso". Idempotente. */
+  private finishProgrammaticScroll(): void {
+    if (this.scrollEndFallback !== null) { clearTimeout(this.scrollEndFallback); this.scrollEndFallback = null; }
+    this.programmaticScroll = false;
   }
 
   /** Cambia la escala (zoom) y vuelve a maquetar y renderizar. */
@@ -79,10 +123,16 @@ export class Viewer {
    * scroll no se mueve (la página ya era visible, o todo el documento cabe
    * en el viewport) no hay ningún otro mecanismo que vaya a corregir
    * `currentPage`, así que tiene que quedar bien aquí mismo (E-032).
+   *
+   * Marca `programmaticScroll` y arma el respaldo de inmediato (no solo al
+   * primer evento `scroll`): si `scrollIntoView` no dispara ningún `scroll`
+   * porque el destino ya era visible, nada más va a cerrar la ventana.
    */
   scrollToPage(i: number): void {
     this.currentPage = i;
     this.pinnedPage = i;
+    this.programmaticScroll = true;
+    this.armScrollEndFallback();
     this.wrappers[i]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
 
@@ -349,6 +399,7 @@ export class Viewer {
     // las páginas: un pin apuntando al índice antiguo ya no significa nada.
     // `App.onReload` recalcula y vuelve a fijar `currentPage` por su cuenta.
     this.pinnedPage = null;
+    this.finishProgrammaticScroll(); // limpia también el temporizador de respaldo
     this.layout();
     this.renderVisible();
   }
