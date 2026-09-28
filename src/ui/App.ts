@@ -13,6 +13,8 @@ import { InsertPdfCmd } from '../commands/InsertPdf';
 import { DuplicatePageCmd } from '../commands/DuplicatePage';
 import { InsertImageCmd } from '../commands/InsertImage';
 import { HighlightRunCmd } from '../commands/HighlightRun';
+import { UnderlineRunCmd } from '../commands/UnderlineRun';
+import { StrikethroughRunCmd } from '../commands/StrikethroughRun';
 import { DrawStrokeCmd } from '../commands/DrawStroke';
 import { SignaturePad } from './SignaturePad';
 import { parseRange } from './pageRange';
@@ -60,6 +62,8 @@ export class App {
     this.btnInsert = this.button('Insertar texto', 'btn-insert', () => this.toggleInsert());
     const btnDelete = this.button('Borrar', 'btn-delete', () => this.deleteSelected());
     const btnHighlight = this.button('Resaltar', 'btn-highlight', () => this.highlightSelected());
+    const btnUnderline = this.button('Subrayar', 'btn-underline', () => this.underlineSelected());
+    const btnStrike = this.button('Tachar', 'btn-strike', () => this.strikeSelected());
     const btnSign = this.button('Firmar', 'btn-sign', () => this.openSignature());
     this.btnPen = this.button('Pluma', 'btn-pen', () => this.togglePen());
 
@@ -102,7 +106,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, openImg, this.btnInsert, btnDelete, btnHighlight, btnSign, this.btnPen, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, this.rangeInput, btnSplit, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, this.btnPen, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, this.rangeInput, btnSplit, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -288,6 +292,20 @@ export class App {
     if (!run || !this.bus || !this.selection) { this.setStatus('Selecciona una línea para resaltarla.'); return; }
     void this.bus.execute(new HighlightRunCmd(this.selection.pageIndex, run.boxPt));
     this.setStatus('Resaltado.');
+  }
+
+  private underlineSelected(): void {
+    const run = this.selectedRun();
+    if (!run || !this.bus || !this.selection) { this.setStatus('Selecciona una línea para subrayarla.'); return; }
+    void this.bus.execute(new UnderlineRunCmd(this.selection.pageIndex, run.boxPt));
+    this.setStatus('Subrayado.');
+  }
+
+  private strikeSelected(): void {
+    const run = this.selectedRun();
+    if (!run || !this.bus || !this.selection) { this.setStatus('Selecciona una línea para tacharla.'); return; }
+    void this.bus.execute(new StrikethroughRunCmd(this.selection.pageIndex, run.boxPt));
+    this.setStatus('Tachado.');
   }
 
   private async handleInsertImage(file: File): Promise<void> {
