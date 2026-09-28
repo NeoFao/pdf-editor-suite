@@ -36,6 +36,8 @@ export interface InsertTextSpec {
   sizePt: number;
   fontName?: string;          // fuente estándar; por defecto Helvetica
   color?: [number, number, number]; // RGB 0-255; por defecto negro
+  /** Modo de render 3 (invisible): buscable/extraíble pero no se pinta. Para capas de OCR. */
+  invisible?: boolean;
 }
 
 /** Puntero opaco al documento dentro del motor. */
