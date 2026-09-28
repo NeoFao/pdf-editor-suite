@@ -116,32 +116,63 @@ async function pdfFuentes() {
 }
 
 /**
- * PDF con un AcroForm: dos campos de texto ('nombre' vacío, 'ciudad' con valor
- * inicial 'Lima') y una casilla ('acepto') sin marcar, con apariencias
- * generadas — ejercita el relleno de formularios (listFormFields/setFormText/
- * setFormChecked).
+ * PDF con un AcroForm de dos páginas:
+ *
+ * - Página 0 (fase 1, SIN TOCAR: los tests de fase 1 indexan esta página):
+ *   dos campos de texto ('nombre' vacío, 'ciudad' con valor inicial 'Lima') y
+ *   una casilla ('acepto') sin marcar.
+ * - Página 1 (fase 2): un grupo de radio ('color': rojo/verde/azul, sin
+ *   selección inicial), un combo ('pais': Perú/Chile/México, valor inicial
+ *   Chile) y una lista de selección múltiple ('frutas': manzana/pera/uva, sin
+ *   selección inicial) — ejercita listFormFields/setFormChoice/setFormRadio.
+ *
+ * Con apariencias generadas en ambos casos.
  */
 async function pdfFormulario() {
   const doc = await PDFDocument.create();
   const font = await doc.embedFont(StandardFonts.Helvetica);
   const bold = await doc.embedFont(StandardFonts.HelveticaBold);
-  const p = doc.addPage([320, 260]);
-  p.drawText('Formulario de prueba', { x: 20, y: 220, size: 16, font: bold });
-
   const form = doc.getForm();
 
-  p.drawText('Nombre', { x: 20, y: 185, size: 10, font });
-  const nombre = form.createTextField('nombre');
-  nombre.addToPage(p, { x: 20, y: 160, width: 260, height: 20 });
+  const p0 = doc.addPage([320, 260]);
+  p0.drawText('Formulario de prueba', { x: 20, y: 220, size: 16, font: bold });
 
-  p.drawText('Ciudad', { x: 20, y: 135, size: 10, font });
+  p0.drawText('Nombre', { x: 20, y: 185, size: 10, font });
+  const nombre = form.createTextField('nombre');
+  nombre.addToPage(p0, { x: 20, y: 160, width: 260, height: 20 });
+
+  p0.drawText('Ciudad', { x: 20, y: 135, size: 10, font });
   const ciudad = form.createTextField('ciudad');
-  ciudad.addToPage(p, { x: 20, y: 110, width: 260, height: 20 });
+  ciudad.addToPage(p0, { x: 20, y: 110, width: 260, height: 20 });
   ciudad.setText('Lima');
 
   const acepto = form.createCheckBox('acepto');
-  acepto.addToPage(p, { x: 20, y: 70, width: 20, height: 20 });
-  p.drawText('Acepto los terminos', { x: 46, y: 74, size: 10, font });
+  acepto.addToPage(p0, { x: 20, y: 70, width: 20, height: 20 });
+  p0.drawText('Acepto los terminos', { x: 46, y: 74, size: 10, font });
+
+  const p1 = doc.addPage([320, 300]);
+  p1.drawText('Formulario de prueba (2)', { x: 20, y: 270, size: 16, font: bold });
+
+  p1.drawText('Color', { x: 20, y: 245, size: 10, font });
+  const radio = form.createRadioGroup('color');
+  radio.addOptionToPage('rojo', p1, { x: 20, y: 220, width: 15, height: 15 });
+  p1.drawText('Rojo', { x: 42, y: 222, size: 10, font });
+  radio.addOptionToPage('verde', p1, { x: 100, y: 220, width: 15, height: 15 });
+  p1.drawText('Verde', { x: 122, y: 222, size: 10, font });
+  radio.addOptionToPage('azul', p1, { x: 190, y: 220, width: 15, height: 15 });
+  p1.drawText('Azul', { x: 212, y: 222, size: 10, font });
+
+  p1.drawText('Pais', { x: 20, y: 185, size: 10, font });
+  const pais = form.createDropdown('pais');
+  pais.addOptions(['Perú', 'Chile', 'México']);
+  pais.select('Chile');
+  pais.addToPage(p1, { x: 20, y: 160, width: 150, height: 20 });
+
+  p1.drawText('Frutas', { x: 20, y: 135, size: 10, font });
+  const frutas = form.createOptionList('frutas');
+  frutas.addOptions(['manzana', 'pera', 'uva']);
+  frutas.enableMultiselect();
+  frutas.addToPage(p1, { x: 20, y: 55, width: 150, height: 70 });
 
   form.updateFieldAppearances(font);
   return doc.save();

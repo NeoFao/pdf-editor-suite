@@ -39,6 +39,20 @@ export interface NoteInfo { index: number; text: string; rectPt: RectPt }
 export type FormFieldKind = 'text' | 'checkbox' | 'radio' | 'combo' | 'list' | 'button' | 'signature' | 'unknown';
 
 /**
+ * Opción de un campo de elección (combo/lista), con su selección actual.
+ * `value` coincide con `label`: PDFium solo expone el texto visible de cada
+ * opción (`FPDFAnnot_GetOptionLabel`); a diferencia de una casilla o un radio
+ * (`FPDFAnnot_GetFormFieldExportValue`), no hay getter de valor de exportación
+ * distinto por índice de opción. Si el PDF define pares [exportValue, label]
+ * distintos, este motor no los distingue — se usa el label para ambos.
+ */
+export interface FormFieldOption {
+  label: string;
+  value: string;
+  selected: boolean;
+}
+
+/**
  * Campo de un formulario AcroForm. `annotIndex` es su índice entre TODAS las
  * anotaciones de la página (igual convención que `NoteInfo.index`). `value` es
  * el valor de campo (`/V`): para una casilla, su nombre de exportación/estado
@@ -52,6 +66,22 @@ export interface FormField {
   checked: boolean;
   readOnly: boolean;
   rectPt: RectPt;
+  /** Opciones de un combo/lista, con su selección actual. Vacío en el resto de tipos. */
+  options: FormFieldOption[];
+  /**
+   * Solo en lista (`kind === 'list'`): si admite más de una opción marcada a
+   * la vez (`/Ff` bit 22, `0x200000`). Siempre `false` en el resto de tipos —
+   * un combo, por estructura, nunca admite selección múltiple. La UI la usa
+   * para decidir si el `<select>` lleva el atributo `multiple`.
+   */
+  multiSelect: boolean;
+  /**
+   * Solo en radio: el valor de exportación de ESTE widget concreto. Un grupo
+   * de radio son varios widgets (uno por `annotIndex`) que comparten `name`;
+   * `value` es el del CAMPO (compartido por todo el grupo, `/V`), mientras que
+   * `exportValue` distingue a cuál de los widgets corresponde este `annotIndex`.
+   */
+  exportValue?: string;
 }
 
 /** Bitmap RGBA listo para volcar en un canvas. */
@@ -133,12 +163,33 @@ export interface PdfEngine {
   getNotes(doc: DocHandle, pageIndex: number): NoteInfo[];
   /** Elimina la anotación en `index` (entre todas las de la página). */
   removeNote(doc: DocHandle, pageIndex: number, index: number): boolean;
-  /** Campos de formulario AcroForm de la página (fase 1: se listan todos, solo texto/casilla son editables). */
+  /** Campos de formulario AcroForm de la página (todos los tipos son editables desde fase 2, salvo botón/firma). */
   listFormFields(doc: DocHandle, pageIndex: number): FormField[];
   /** Escribe el valor de un campo de texto y regenera su apariencia. Solo actúa sobre `kind === 'text'` no readOnly. */
   setFormText(doc: DocHandle, pageIndex: number, annotIndex: number, value: string): boolean;
   /** Marca/desmarca una casilla y regenera su apariencia. Solo actúa sobre `kind === 'checkbox'` no readOnly. */
   setFormChecked(doc: DocHandle, pageIndex: number, annotIndex: number, checked: boolean): boolean;
+  /**
+   * Fija la selección de un combo o una lista. `values` son las etiquetas
+   * (`FormFieldOption.label`) a seleccionar. Un combo, o una lista sin el bit
+   * MultiSelect (`/Ff` bit 22, `0x200000`), solo admite 0 o 1 valores —con más
+   * de uno devuelve `false` sin modificar nada. Solo actúa sobre `kind ===
+   * 'combo' | 'list'` no readOnly. Regenera la apariencia del widget.
+   */
+  setFormChoice(doc: DocHandle, pageIndex: number, annotIndex: number, values: string[]): boolean;
+  /**
+   * Marca el widget de radio en `annotIndex` y desmarca el resto de widgets de
+   * su mismo grupo (mismo `name`): el valor del campo (`/V`, compartido por
+   * todo el grupo) pasa a ser el `exportValue` de este widget. Solo actúa
+   * sobre `kind === 'radio'` no readOnly. Regenera la apariencia del widget.
+   */
+  setFormRadio(doc: DocHandle, pageIndex: number, annotIndex: number): boolean;
+  /**
+   * Deja el grupo de radio al que pertenece el widget en `annotIndex` sin
+   * ningún widget marcado (`/V` = 'Off'). `annotIndex` puede ser cualquier
+   * widget del grupo, esté o no marcado: el valor es del campo, no del widget.
+   */
+  clearFormRadio(doc: DocHandle, pageIndex: number, annotIndex: number): boolean;
   /** Dibuja un rectángulo relleno opaco (blend normal) sobre la caja dada. Base de subrayado/tachado. */
   fillRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean;
   /** Dibuja un trazo a mano alzada (polilínea) con el color y grosor dados. */

@@ -18,6 +18,10 @@ export interface ViewerCallbacks {
   onFormText?: (pageIndex: number, annotIndex: number, value: string, oldValue: string) => void;
   /** Casilla AcroForm marcada/desmarcada. */
   onFormChecked?: (pageIndex: number, annotIndex: number, checked: boolean) => void;
+  /** Selección de un combo o una lista confirmada (evento 'change'). `values` son las etiquetas elegidas. */
+  onFormChoice?: (pageIndex: number, annotIndex: number, values: string[]) => void;
+  /** Widget de un grupo de radio marcado. */
+  onFormRadio?: (pageIndex: number, annotIndex: number) => void;
 }
 
 /** Renderiza páginas visibles (canvas del motor) con su capa de texto encima. */
@@ -185,18 +189,21 @@ export class Viewer {
   }
 
   /**
-   * Campos AcroForm editables (fase 1: texto y casilla) sobre la página.
-   * Unidades: `field.rectPt` está en puntos PDF (origen abajo-izquierda); se
-   * convierte a px CSS de página con `geom.rectPtToCss`, igual que el resto
-   * de capas (`drawHighlights`, `drawNotes`).
+   * Campos AcroForm editables (texto, casilla, radio, combo y lista) sobre la
+   * página. Unidades: `field.rectPt` está en puntos PDF (origen abajo-
+   * izquierda); se convierte a px CSS de página con `geom.rectPtToCss`, igual
+   * que el resto de capas (`drawHighlights`, `drawNotes`).
    *
    * El motor ya pinta el valor actual del campo al renderizar la página (su
    * apariencia /AP forma parte del bitmap, como el icono de las notas): si
-   * además dibujáramos el `<input>` con fondo transparente se vería el valor
+   * además dibujáramos el control con fondo transparente se vería el valor
    * una vez desde el canvas y otra desde el control. Para evitarlo sin dejar
    * de usar controles nativos de verdad (que reciban teclado/ratón), el
-   * `<input>` lleva un fondo casi opaco que tapa el render del motor debajo;
-   * el control es la única fuente visual de "qué hay escrito ahora".
+   * `<input>`/`<select>` de texto/combo/lista lleva un fondo casi opaco que
+   * tapa el render del motor debajo; el control es la única fuente visual de
+   * "qué hay marcado/escrito ahora". Casilla y radio no lo necesitan: su
+   * control nativo ya es un recuadro/círculo opaco de por sí (igual que en
+   * fase 1 con la casilla).
    */
   private drawFormFields(i: number): void {
     const wrapper = this.wrappers[i];
@@ -209,21 +216,23 @@ export class Viewer {
     layer.className = 'form-layer';
     Object.assign(layer.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
     for (const field of fields) {
-      // Fase 1: solo texto y casilla son editables; el resto de tipos (radio,
-      // combo, lista, botón, firma) se listan en el motor pero no se dibujan.
-      if (field.kind !== 'text' && field.kind !== 'checkbox') continue;
+      // Botón y firma se listan en el motor pero no se dibujan (no editables desde aquí).
+      if (field.kind !== 'text' && field.kind !== 'checkbox' && field.kind !== 'radio'
+        && field.kind !== 'combo' && field.kind !== 'list') continue;
       const c = geom.rectPtToCss(field.rectPt);
-      const input = document.createElement('input');
-      input.className = 'form-field';
-      input.dataset.fieldName = field.name;
-      input.disabled = field.readOnly;
-      Object.assign(input.style, {
+      const posStyle = {
         position: 'absolute', left: `${c.left}px`, top: `${c.top}px`,
         width: `${c.width}px`, height: `${c.height}px`,
         boxSizing: 'border-box',
         pointerEvents: field.readOnly ? 'none' : 'auto'
-      });
+      } as const;
+
       if (field.kind === 'text') {
+        const input = document.createElement('input');
+        input.className = 'form-field';
+        input.dataset.fieldName = field.name;
+        input.disabled = field.readOnly;
+        Object.assign(input.style, posStyle);
         input.type = 'text';
         input.value = field.value;
         Object.assign(input.style, {
@@ -236,15 +245,66 @@ export class Viewer {
         input.addEventListener('change', () => {
           this.cb.onFormText?.(i, field.annotIndex, input.value, oldValue);
         });
-      } else {
+        layer.appendChild(input);
+      } else if (field.kind === 'checkbox') {
+        const input = document.createElement('input');
+        input.className = 'form-field';
+        input.dataset.fieldName = field.name;
+        input.disabled = field.readOnly;
+        Object.assign(input.style, posStyle);
         input.type = 'checkbox';
         input.checked = field.checked;
         input.style.margin = '0';
         input.addEventListener('change', () => {
           this.cb.onFormChecked?.(i, field.annotIndex, input.checked);
         });
+        layer.appendChild(input);
+      } else if (field.kind === 'radio') {
+        const input = document.createElement('input');
+        input.className = 'form-field';
+        input.dataset.fieldName = field.name;
+        input.disabled = field.readOnly;
+        Object.assign(input.style, posStyle);
+        input.type = 'radio';
+        // Prefijo de página: agrupa los widgets del mismo campo entre sí sin
+        // colisionar con un campo del mismo nombre en otra página.
+        input.name = `p${i}-${field.name}`;
+        if (field.exportValue !== undefined) input.value = field.exportValue;
+        input.checked = field.checked;
+        input.style.margin = '0';
+        input.addEventListener('change', () => {
+          this.cb.onFormRadio?.(i, field.annotIndex);
+        });
+        layer.appendChild(input);
+      } else {
+        // combo o list
+        const select = document.createElement('select');
+        select.className = 'form-field';
+        select.dataset.fieldName = field.name;
+        select.disabled = field.readOnly;
+        Object.assign(select.style, posStyle);
+        Object.assign(select.style, {
+          font: `${Math.max(8, Math.min(c.height, 18) * 0.65)}px sans-serif`,
+          border: '1px solid #94a3b8',
+          background: 'rgba(255,255,255,0.95)'
+        });
+        if (field.kind === 'list') {
+          select.multiple = field.multiSelect;
+          select.size = Math.max(1, field.options.length);
+        }
+        for (const opt of field.options) {
+          const optionEl = document.createElement('option');
+          optionEl.textContent = opt.label;
+          optionEl.value = opt.value;
+          optionEl.selected = opt.selected;
+          select.appendChild(optionEl);
+        }
+        select.addEventListener('change', () => {
+          const chosen = Array.from(select.selectedOptions).map((o) => o.value);
+          this.cb.onFormChoice?.(i, field.annotIndex, chosen);
+        });
+        layer.appendChild(select);
       }
-      layer.appendChild(input);
     }
     wrapper.appendChild(layer);
   }

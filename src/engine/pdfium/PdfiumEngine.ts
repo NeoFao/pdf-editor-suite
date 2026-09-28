@@ -1,7 +1,7 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor } from '../standardFontFor';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_ANNOT_TEXT = 1;    // FPDF_ANNOTATION_SUBTYPE: nota adhesiva ("sticky note")
@@ -21,6 +21,7 @@ const FPDF_FORMFIELD_KIND: Record<number, FormFieldKind> = {
   7: 'signature'
 };
 const FPDF_FORMFLAG_READONLY = 0x01; // bit 1 de /Ff (PDF 32000-1, tabla 221).
+const FPDF_FORMFLAG_CHOICE_MULTISELECT = 0x200000; // bit 22 de /Ff (tabla 231, solo campos de elección).
 
 /**
  * Implementación de PdfEngine sobre @embedpdf/pdfium (WASM).
@@ -671,13 +672,46 @@ export class PdfiumEngine implements PdfEngine {
     const flags = this.p.FPDFAnnot_GetFormFieldFlags(form, annot);
     const readOnly = (flags & FPDF_FORMFLAG_READONLY) !== 0;
     const checked = (kind === 'checkbox' || kind === 'radio') ? this.p.FPDFAnnot_IsChecked(form, annot) : false;
+    // Solo radio: el valor de exportación de ESTE widget (distingue qué widget
+    // del grupo es, ya que `value`/`checked` son del campo compartido).
+    const exportValue = kind === 'radio'
+      ? leerCadenaPdfium(
+          m,
+          (buf, len) => this.p.FPDFAnnot_GetFormFieldExportValue(form, annot, buf, len),
+          (ptr) => m.readU16(ptr)
+        )
+      : undefined;
+    const options = this.readFormFieldOptions(form, annot, kind);
+    const multiSelect = kind === 'list' && (flags & FPDF_FORMFLAG_CHOICE_MULTISELECT) !== 0;
     // FS_RECTF = {left, top, right, bottom} en puntos PDF (floats, 16 bytes), como en getNotes().
     const rectPtr = m.malloc(16);
     this.p.FPDFAnnot_GetRect(annot, rectPtr);
     const left = m.getValue(rectPtr, 'float'), top = m.getValue(rectPtr + 4, 'float');
     const right = m.getValue(rectPtr + 8, 'float'), bottom = m.getValue(rectPtr + 12, 'float');
     m.free(rectPtr);
-    return { annotIndex, name, kind, value, checked, readOnly, rectPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom } };
+    return {
+      annotIndex, name, kind, value, checked, readOnly, options, multiSelect,
+      rectPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom },
+      ...(exportValue !== undefined ? { exportValue } : {})
+    };
+  }
+
+  /** Opciones de un combo/lista (vacío para el resto de tipos). Ver `FormFieldOption`. */
+  private readFormFieldOptions(form: number, annot: number, kind: FormFieldKind): FormFieldOption[] {
+    if (kind !== 'combo' && kind !== 'list') return [];
+    const m = this.mem;
+    const n = this.p.FPDFAnnot_GetOptionCount(form, annot);
+    const options: FormFieldOption[] = [];
+    for (let i = 0; i < n; i++) {
+      const label = leerCadenaPdfium(
+        m,
+        (buf, len) => this.p.FPDFAnnot_GetOptionLabel(form, annot, i, buf, len),
+        (ptr) => m.readU16(ptr)
+      );
+      const selected = this.p.FPDFAnnot_IsOptionSelected(form, annot, i);
+      options.push({ label, value: label, selected });
+    }
+    return options;
   }
 
   setFormText(doc: DocHandle, pageIndex: number, annotIndex: number, value: string): boolean {
@@ -719,6 +753,128 @@ export class PdfiumEngine implements PdfEngine {
         );
         const target = checked ? (onValue || 'Yes') : 'Off';
         const wptr = this.mem.wide(target);
+        const ok = this.p.EPDFAnnot_SetFormFieldValue(form, annot, wptr);
+        this.mem.free(wptr);
+        if (!ok) return false;
+        this.p.EPDFAnnot_GenerateFormFieldAP(annot);
+        return true;
+      } finally {
+        this.p.FPDFPage_CloseAnnot(annot);
+      }
+    });
+  }
+
+  /**
+   * Selección de combo/lista. Dos mecanismos distintos según el TIPO de campo
+   * —verificado empíricamente contra el motor real, porque ninguno de los dos
+   * cubre todos los casos por sí solo—: la decisión es por `multiSelect`, NO
+   * por `values.length`, porque el caso "vaciar una lista MultiSelect" (0
+   * valores) solo funciona por la vía de índices (ver abajo).
+   *
+   * - Combo, o lista SIN el bit MultiSelect: `EPDFAnnot_SetFormFieldValue` con
+   *   ese valor (o cadena vacía para "ninguno"; `values` no puede traer más
+   *   de 1 en este caso, se valida antes). Directo y suficiente.
+   * - Lista CON el bit MultiSelect (`/Ff` bit 22, `0x200000`), para 0, 1 o
+   *   varios valores: hace falta `FORM_SetIndexSelected` por índice —
+   *   `EPDFAnnot_SetFormFieldValue` solo admite una cadena, no puede expresar
+   *   varias opciones a la vez, y confirmado que con una cadena vacía TAMPOCO
+   *   sirve para vaciar una lista MultiSelect (a diferencia de un combo, donde
+   *   sí limpia la selección): devuelve `false` y no cambia nada. Por eso se
+   *   usa la vía de índices para los tres casos (0/1/N) en este tipo de
+   *   campo, no solo para N>1. `FORM_SetIndexSelected` exige que el widget
+   *   esté enfocado (`FORM_SetFocusedAnnot`) y el cambio no se aplica al
+   *   campo hasta `FORM_ForceToKillFocus` (semántica de edición interactiva
+   *   de PDFium, no un setter directo).
+   */
+  setFormChoice(doc: DocHandle, pageIndex: number, annotIndex: number, values: string[]): boolean {
+    return this.withFormPage(doc, pageIndex, (page, form) => {
+      if (!form) return false;
+      const annot = this.p.FPDFPage_GetAnnot(page, annotIndex);
+      if (!annot) return false;
+      try {
+        const kind = FPDF_FORMFIELD_KIND[this.p.FPDFAnnot_GetFormFieldType(form, annot)];
+        if (kind !== 'combo' && kind !== 'list') return false;
+        if (this.p.FPDFAnnot_GetFormFieldFlags(form, annot) & FPDF_FORMFLAG_READONLY) return false;
+        const flags = this.p.FPDFAnnot_GetFormFieldFlags(form, annot);
+        const multiSelect = kind === 'list' && (flags & FPDF_FORMFLAG_CHOICE_MULTISELECT) !== 0;
+        if (values.length > 1 && !multiSelect) return false;
+
+        if (multiSelect) {
+          const wanted = new Set(values);
+          const n = this.p.FPDFAnnot_GetOptionCount(form, annot);
+          this.p.FORM_SetFocusedAnnot(form, annot);
+          for (let i = 0; i < n; i++) {
+            const label = leerCadenaPdfium(
+              this.mem,
+              (buf, len) => this.p.FPDFAnnot_GetOptionLabel(form, annot, i, buf, len),
+              (ptr) => this.mem.readU16(ptr)
+            );
+            this.p.FORM_SetIndexSelected(form, page, i, wanted.has(label));
+          }
+          this.p.FORM_ForceToKillFocus(form);
+        } else {
+          const wptr = this.mem.wide(values[0] ?? '');
+          const ok = this.p.EPDFAnnot_SetFormFieldValue(form, annot, wptr);
+          this.mem.free(wptr);
+          if (!ok) return false;
+        }
+        this.p.EPDFAnnot_GenerateFormFieldAP(annot);
+        return true;
+      } finally {
+        this.p.FPDFPage_CloseAnnot(annot);
+      }
+    });
+  }
+
+  /**
+   * Marca este widget de radio dentro de su grupo. `EPDFAnnot_SetFormFieldValue`
+   * con el `exportValue` PROPIO del widget basta: verificado que actualiza el
+   * `/V` del campo (compartido por el grupo) y refleja correctamente el estado
+   * marcado/desmarcado del resto de widgets hermanos sin tocarlos uno a uno
+   * (persiste igual tras guardar y reabrir).
+   */
+  setFormRadio(doc: DocHandle, pageIndex: number, annotIndex: number): boolean {
+    return this.withFormPage(doc, pageIndex, (page, form) => {
+      if (!form) return false;
+      const annot = this.p.FPDFPage_GetAnnot(page, annotIndex);
+      if (!annot) return false;
+      try {
+        if (FPDF_FORMFIELD_KIND[this.p.FPDFAnnot_GetFormFieldType(form, annot)] !== 'radio') return false;
+        if (this.p.FPDFAnnot_GetFormFieldFlags(form, annot) & FPDF_FORMFLAG_READONLY) return false;
+        const exportValue = leerCadenaPdfium(
+          this.mem,
+          (buf, len) => this.p.FPDFAnnot_GetFormFieldExportValue(form, annot, buf, len),
+          (ptr) => this.mem.readU16(ptr)
+        );
+        const wptr = this.mem.wide(exportValue);
+        const ok = this.p.EPDFAnnot_SetFormFieldValue(form, annot, wptr);
+        this.mem.free(wptr);
+        if (!ok) return false;
+        this.p.EPDFAnnot_GenerateFormFieldAP(annot);
+        return true;
+      } finally {
+        this.p.FPDFPage_CloseAnnot(annot);
+      }
+    });
+  }
+
+  /**
+   * Deja el grupo de radio (al que pertenece `annotIndex`, sea cual sea su
+   * estado) sin ningún widget marcado. "Off" es el nombre de estado reservado
+   * por la especificación PDF para "sin marcar" (32000-1 §12.7.4.2.3) y ningún
+   * widget del grupo puede tener ese nombre como su propio valor de
+   * exportación real, así que fijarlo en cualquier widget del grupo limpia el
+   * campo entero (comprobado igual que en `setFormRadio`).
+   */
+  clearFormRadio(doc: DocHandle, pageIndex: number, annotIndex: number): boolean {
+    return this.withFormPage(doc, pageIndex, (page, form) => {
+      if (!form) return false;
+      const annot = this.p.FPDFPage_GetAnnot(page, annotIndex);
+      if (!annot) return false;
+      try {
+        if (FPDF_FORMFIELD_KIND[this.p.FPDFAnnot_GetFormFieldType(form, annot)] !== 'radio') return false;
+        if (this.p.FPDFAnnot_GetFormFieldFlags(form, annot) & FPDF_FORMFLAG_READONLY) return false;
+        const wptr = this.mem.wide('Off');
         const ok = this.p.EPDFAnnot_SetFormFieldValue(form, annot, wptr);
         this.mem.free(wptr);
         if (!ok) return false;
