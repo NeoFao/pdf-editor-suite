@@ -83,6 +83,19 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
+  imageToPdf(rgba: Uint8Array, imgWidth: number, imgHeight: number): Uint8Array<ArrayBuffer> {
+    // Página del tamaño de la imagen (1 px = 1 pt), con la imagen a página completa.
+    const doc = this.p.FPDF_CreateNewDocument();
+    try {
+      const page = this.p.FPDFPage_New(doc, 0, imgWidth, imgHeight);
+      this.p.FPDF_ClosePage(page);
+      this.insertImage(doc, 0, { rgba, imgWidth, imgHeight, xPt: 0, yPt: 0, wPt: imgWidth, hPt: imgHeight });
+      return this.save(doc);
+    } finally {
+      this.p.FPDF_CloseDocument(doc);
+    }
+  }
+
   extractPages(doc: DocHandle, pageIndices: number[]): Uint8Array<ArrayBuffer> {
     const dest = this.p.FPDF_CreateNewDocument();
     try {

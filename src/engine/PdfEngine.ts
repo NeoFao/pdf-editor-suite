@@ -86,6 +86,8 @@ export interface PdfEngine {
   importPages(doc: DocHandle, srcBytes: Uint8Array, atIndex: number): boolean;
   /** Crea un PDF nuevo con las páginas indicadas (por índice) y devuelve sus bytes. */
   extractPages(doc: DocHandle, pageIndices: number[]): Uint8Array<ArrayBuffer>;
+  /** Crea un PDF de una página que contiene la imagen (RGBA) a tamaño completo. */
+  imageToPdf(rgba: Uint8Array, imgWidth: number, imgHeight: number): Uint8Array<ArrayBuffer>;
   /** Duplica una página, insertando la copia justo después. */
   duplicatePage(doc: DocHandle, pageIndex: number): boolean;
   save(doc: DocHandle): Uint8Array<ArrayBuffer>;
