@@ -12,6 +12,7 @@ import { MovePageCmd } from '../commands/MovePage';
 import { InsertPdfCmd } from '../commands/InsertPdf';
 import { DuplicatePageCmd } from '../commands/DuplicatePage';
 import { InsertImageCmd } from '../commands/InsertImage';
+import { AddNoteCmd } from '../commands/AddNote';
 import { HighlightRunCmd } from '../commands/HighlightRun';
 import { UnderlineRunCmd } from '../commands/UnderlineRun';
 import { StrikethroughRunCmd } from '../commands/StrikethroughRun';
@@ -33,6 +34,7 @@ export class App {
   private docName = 'documento.pdf';
   private insertMode = false;
   private penMode = false;
+  private noteMode = false;
   private selection: { pageIndex: number; runId: number } | null = null;
   private viewer: Viewer | null = null;
   private scale = 1;
@@ -42,6 +44,7 @@ export class App {
   private readonly pageIndicator: HTMLElement;
   private readonly btnInsert: HTMLButtonElement;
   private readonly btnPen: HTMLButtonElement;
+  private readonly btnNote: HTMLButtonElement;
   private readonly btnOcr: HTMLButtonElement;
   private readonly colorInput: HTMLInputElement;
   private readonly searchInput: HTMLInputElement;
@@ -69,6 +72,7 @@ export class App {
     const btnStrike = this.button('Tachar', 'btn-strike', () => this.strikeSelected());
     const btnSign = this.button('Firmar', 'btn-sign', () => this.openSignature());
     this.btnPen = this.button('Pluma', 'btn-pen', () => this.togglePen());
+    this.btnNote = this.button('Nota', 'btn-note', () => this.toggleNote());
     this.btnOcr = this.button('OCR', 'btn-ocr', () => void this.runOcr());
 
     this.colorInput = document.createElement('input');
@@ -110,7 +114,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, this.btnPen, this.btnOcr, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, this.rangeInput, btnSplit, btnSave, btnUndo, btnRedo, this.status);
+    bar.append(file, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, this.btnPen, this.btnNote, this.btnOcr, this.colorInput, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnExtract, this.rangeInput, btnSplit, btnSave, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -144,6 +148,7 @@ export class App {
   private toggleInsert(): void {
     this.insertMode = !this.insertMode;
     if (this.insertMode && this.penMode) { this.penMode = false; this.btnPen.style.background = ''; this.viewer?.setPenMode(false); }
+    if (this.insertMode && this.noteMode) { this.noteMode = false; this.btnNote.style.background = ''; }
     this.btnInsert.style.background = this.insertMode ? '#c7d2fe' : '';
     this.setStatus(this.insertMode ? 'Modo insertar: haz clic donde quieras el texto.' : 'Modo insertar desactivado.');
   }
@@ -151,9 +156,18 @@ export class App {
   private togglePen(): void {
     this.penMode = !this.penMode;
     if (this.penMode && this.insertMode) { this.insertMode = false; this.btnInsert.style.background = ''; }
+    if (this.penMode && this.noteMode) { this.noteMode = false; this.btnNote.style.background = ''; }
     this.btnPen.style.background = this.penMode ? '#c7d2fe' : '';
     this.viewer?.setPenMode(this.penMode);
     this.setStatus(this.penMode ? 'Modo pluma: arrastra para dibujar.' : 'Modo pluma desactivado.');
+  }
+
+  private toggleNote(): void {
+    this.noteMode = !this.noteMode;
+    if (this.noteMode && this.insertMode) { this.insertMode = false; this.btnInsert.style.background = ''; }
+    if (this.noteMode && this.penMode) { this.penMode = false; this.btnPen.style.background = ''; this.viewer?.setPenMode(false); }
+    this.btnNote.style.background = this.noteMode ? '#c7d2fe' : '';
+    this.setStatus(this.noteMode ? 'Modo nota: haz clic donde quieras la nota.' : 'Modo nota desactivado.');
   }
 
   private async ensureEngine(): Promise<PdfiumEngine> {
@@ -192,14 +206,14 @@ export class App {
     this.session = await EditSession.open(engine, bytes);
     this.bus = new CommandBus(this.session);
     this.selection = null;
-    this.insertMode = false; this.penMode = false;
-    this.btnInsert.style.background = ''; this.btnPen.style.background = '';
+    this.insertMode = false; this.penMode = false; this.noteMode = false;
+    this.btnInsert.style.background = ''; this.btnPen.style.background = ''; this.btnNote.style.background = '';
     this.viewerEl.textContent = '';
     this.scale = 1;
     this.viewer = new Viewer(this.viewerEl, this.session, {
       onEdit: (req) => this.handleEdit(req),
       onSelect: (pageIndex, runId) => { this.selection = { pageIndex, runId }; this.reflectColor(); },
-      onBackgroundClick: (pageIndex, at) => { void this.handleInsert(pageIndex, at); },
+      onBackgroundClick: (pageIndex, at) => { this.handleBackgroundClick(pageIndex, at); },
       onMove: (pageIndex, runId, dxPt, dyPt) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt)); },
       onPageChange: (i) => { this.currentPage = i; this.updateIndicator(); this.setActiveThumb(i); },
       onStroke: (pageIndex, points) => { void this.bus?.execute(new DrawStrokeCmd(pageIndex, points)); this.setStatus('Trazo dibujado.'); }
@@ -238,6 +252,22 @@ export class App {
     if (!this.insertMode || !this.bus) return;
     await this.bus.execute(new InsertTextCmd(pageIndex, { xPt: at.xPt, yPt: at.yPt, text: 'Texto nuevo', sizePt: 16 }));
     this.setStatus('Texto insertado. Haz clic en él para editarlo.');
+  }
+
+  /** Clic en el fondo de la página: según el modo activo, inserta texto o coloca una nota. */
+  private handleBackgroundClick(pageIndex: number, at: PtPoint): void {
+    if (this.noteMode) { void this.handleNote(pageIndex, at); return; }
+    void this.handleInsert(pageIndex, at);
+  }
+
+  private async handleNote(pageIndex: number, at: PtPoint): Promise<void> {
+    if (!this.noteMode || !this.bus) return;
+    this.noteMode = false;
+    this.btnNote.style.background = '';
+    const text = window.prompt('Texto de la nota:');
+    if (!text || !text.trim()) { this.setStatus('Modo nota desactivado.'); return; }
+    await this.bus.execute(new AddNoteCmd(pageIndex, at.xPt, at.yPt, text.trim()));
+    this.setStatus('Nota añadida.');
   }
 
   private async deleteSelected(): Promise<void> {

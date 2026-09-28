@@ -14,6 +14,9 @@ export interface TextRun {
 
 export type EditResult = { ok: true } | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' };
 
+/** Nota adhesiva (anotación PDF real de subtipo Text). `index` es su índice entre TODAS las anotaciones de la página. */
+export interface NoteInfo { index: number; text: string; rectPt: RectPt }
+
 /** Bitmap RGBA listo para volcar en un canvas. */
 export interface RenderResult { width: number; height: number; data: Uint8ClampedArray }
 
@@ -72,6 +75,16 @@ export interface PdfEngine {
   insertImage(doc: DocHandle, pageIndex: number, spec: InsertImageSpec): boolean;
   /** Añade un resaltado (rectángulo de color, blend Multiply) sobre la caja dada. */
   highlightRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean;
+  /**
+   * Crea una nota adhesiva (anotación real /Subtype /Text) de 20×20 pt cuya esquina
+   * superior-izquierda es (xPt, yPt) — el punto del clic — y `Contents` = text.
+   * Devuelve el índice de la anotación entre todas las de la página.
+   */
+  addNote(doc: DocHandle, pageIndex: number, spec: { xPt: number; yPt: number; text: string }): number;
+  /** Anotaciones de subtipo Text de la página. */
+  getNotes(doc: DocHandle, pageIndex: number): NoteInfo[];
+  /** Elimina la anotación en `index` (entre todas las de la página). */
+  removeNote(doc: DocHandle, pageIndex: number, index: number): boolean;
   /** Dibuja un rectángulo relleno opaco (blend normal) sobre la caja dada. Base de subrayado/tachado. */
   fillRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean;
   /** Dibuja un trazo a mano alzada (polilínea) con el color y grosor dados. */
