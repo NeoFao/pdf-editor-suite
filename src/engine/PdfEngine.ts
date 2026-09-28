@@ -17,6 +17,25 @@ export type EditResult = { ok: true } | { ok: false; reason: 'glyph-missing' | '
 /** Nota adhesiva (anotación PDF real de subtipo Text). `index` es su índice entre TODAS las anotaciones de la página. */
 export interface NoteInfo { index: number; text: string; rectPt: RectPt }
 
+/** Tipo de campo AcroForm (FPDF_FORMFIELD_*). Fase 1 solo edita 'text' y 'checkbox'. */
+export type FormFieldKind = 'text' | 'checkbox' | 'radio' | 'combo' | 'list' | 'button' | 'signature' | 'unknown';
+
+/**
+ * Campo de un formulario AcroForm. `annotIndex` es su índice entre TODAS las
+ * anotaciones de la página (igual convención que `NoteInfo.index`). `value` es
+ * el valor de campo (`/V`): para una casilla, su nombre de exportación/estado
+ * ('Off' cuando no está marcada); `checked` es la verdad de negocio derivada.
+ */
+export interface FormField {
+  annotIndex: number;
+  name: string;
+  kind: FormFieldKind;
+  value: string;
+  checked: boolean;
+  readOnly: boolean;
+  rectPt: RectPt;
+}
+
 /** Bitmap RGBA listo para volcar en un canvas. */
 export interface RenderResult { width: number; height: number; data: Uint8ClampedArray }
 
@@ -85,6 +104,12 @@ export interface PdfEngine {
   getNotes(doc: DocHandle, pageIndex: number): NoteInfo[];
   /** Elimina la anotación en `index` (entre todas las de la página). */
   removeNote(doc: DocHandle, pageIndex: number, index: number): boolean;
+  /** Campos de formulario AcroForm de la página (fase 1: se listan todos, solo texto/casilla son editables). */
+  listFormFields(doc: DocHandle, pageIndex: number): FormField[];
+  /** Escribe el valor de un campo de texto y regenera su apariencia. Solo actúa sobre `kind === 'text'` no readOnly. */
+  setFormText(doc: DocHandle, pageIndex: number, annotIndex: number, value: string): boolean;
+  /** Marca/desmarca una casilla y regenera su apariencia. Solo actúa sobre `kind === 'checkbox'` no readOnly. */
+  setFormChecked(doc: DocHandle, pageIndex: number, annotIndex: number, checked: boolean): boolean;
   /** Dibuja un rectángulo relleno opaco (blend normal) sobre la caja dada. Base de subrayado/tachado. */
   fillRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean;
   /** Dibuja un trazo a mano alzada (polilínea) con el color y grosor dados. */

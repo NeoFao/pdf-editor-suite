@@ -14,6 +14,10 @@ export interface ViewerCallbacks {
   onMove: (pageIndex: number, runId: number, dxPt: number, dyPt: number) => void;
   onPageChange?: (pageIndex: number) => void;
   onStroke?: (pageIndex: number, points: PtPoint[]) => void;
+  /** Campo de texto AcroForm confirmado (evento 'change', no tecla a tecla). */
+  onFormText?: (pageIndex: number, annotIndex: number, value: string, oldValue: string) => void;
+  /** Casilla AcroForm marcada/desmarcada. */
+  onFormChecked?: (pageIndex: number, annotIndex: number, checked: boolean) => void;
 }
 
 /** Renderiza páginas visibles (canvas del motor) con su capa de texto encima. */
@@ -180,6 +184,71 @@ export class Viewer {
     wrapper.appendChild(layer);
   }
 
+  /**
+   * Campos AcroForm editables (fase 1: texto y casilla) sobre la página.
+   * Unidades: `field.rectPt` está en puntos PDF (origen abajo-izquierda); se
+   * convierte a px CSS de página con `geom.rectPtToCss`, igual que el resto
+   * de capas (`drawHighlights`, `drawNotes`).
+   *
+   * El motor ya pinta el valor actual del campo al renderizar la página (su
+   * apariencia /AP forma parte del bitmap, como el icono de las notas): si
+   * además dibujáramos el `<input>` con fondo transparente se vería el valor
+   * una vez desde el canvas y otra desde el control. Para evitarlo sin dejar
+   * de usar controles nativos de verdad (que reciban teclado/ratón), el
+   * `<input>` lleva un fondo casi opaco que tapa el render del motor debajo;
+   * el control es la única fuente visual de "qué hay escrito ahora".
+   */
+  private drawFormFields(i: number): void {
+    const wrapper = this.wrappers[i];
+    if (!wrapper) return;
+    wrapper.querySelector('.form-layer')?.remove();
+    const fields = this.session.engine.listFormFields(this.session.doc, i);
+    if (fields.length === 0) return;
+    const geom = this.geoms[i]!;
+    const layer = document.createElement('div');
+    layer.className = 'form-layer';
+    Object.assign(layer.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
+    for (const field of fields) {
+      // Fase 1: solo texto y casilla son editables; el resto de tipos (radio,
+      // combo, lista, botón, firma) se listan en el motor pero no se dibujan.
+      if (field.kind !== 'text' && field.kind !== 'checkbox') continue;
+      const c = geom.rectPtToCss(field.rectPt);
+      const input = document.createElement('input');
+      input.className = 'form-field';
+      input.dataset.fieldName = field.name;
+      input.disabled = field.readOnly;
+      Object.assign(input.style, {
+        position: 'absolute', left: `${c.left}px`, top: `${c.top}px`,
+        width: `${c.width}px`, height: `${c.height}px`,
+        boxSizing: 'border-box',
+        pointerEvents: field.readOnly ? 'none' : 'auto'
+      });
+      if (field.kind === 'text') {
+        input.type = 'text';
+        input.value = field.value;
+        Object.assign(input.style, {
+          font: `${Math.max(8, c.height * 0.7)}px sans-serif`,
+          border: '1px solid #94a3b8',
+          // Casi opaco: tapa el valor que el motor ya rasterizó debajo (ver comentario de la clase).
+          background: 'rgba(255,255,255,0.95)'
+        });
+        const oldValue = field.value;
+        input.addEventListener('change', () => {
+          this.cb.onFormText?.(i, field.annotIndex, input.value, oldValue);
+        });
+      } else {
+        input.type = 'checkbox';
+        input.checked = field.checked;
+        input.style.margin = '0';
+        input.addEventListener('change', () => {
+          this.cb.onFormChecked?.(i, field.annotIndex, input.checked);
+        });
+      }
+      layer.appendChild(input);
+    }
+    wrapper.appendChild(layer);
+  }
+
   private rebuild(): void {
     this.root.textContent = '';
     this.wrappers = [];
@@ -259,6 +328,7 @@ export class Viewer {
     });
     this.drawHighlights(i); // conserva los resaltados tras un re-render
     this.drawNotes(i);
+    this.drawFormFields(i);
 
     // Capa de captura de pluma (encima de todo; solo activa en modo pluma).
     const pen = document.createElement('div');
