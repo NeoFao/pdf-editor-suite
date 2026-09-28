@@ -7,6 +7,8 @@
     <style>
       html, body { height: 100%; margin: 0; }
       #app { height: 100%; display: flex; flex-direction: column; }
+      /* Arrastrar y soltar un fichero (#1): indicación visual discreta mientras se arrastra sobre la ventana. */
+      #app.drop-activo { outline: 3px dashed #6366f1; outline-offset: -3px; }
 
       /*
        * Capa de texto vivo (E-029): estados por CSS, no por JS inline.

@@ -178,45 +178,59 @@ Reconstrucción **completa sin perder funcionalidad**: la app nueva crece en `sr
 
 Estado: **Conservada** (misma función, nueva base) · **Mejorada** (además corrige un defecto o límite actual).
 
-| # | Función actual | Estado | Respaldo en el motor/arquitectura | Test de paridad |
-|---|---|---|---|---|
-| 1 | Abrir PDF (input + drag&drop) | Conservada | `engine.open` | abre y renderiza |
-| 2 | Crear PDF en blanco | Conservada | `FPDF_CreateNewDocument` + `FPDFPage_New` | crea 1 página |
-| 3 | Insertar/fusionar otro PDF | Mejorada | `FPDF_ImportPages` | inserta N páginas en posición |
-| 4 | Importar Word .docx → PDF | Conservada | docx-preview + importador | abre sin pérdida |
-| 5 | Importar imagen → PDF | Conservada | importador + `FPDFPageObj` imagen | imagen incrustada |
-| 6 | Visor continuo | Mejorada | render por página visible | páginas visibles pintan |
-| 7 | Zoom (in/out, %) | Conservada | `PageGeometry` + render por escala | zoom cambia tamaño |
-| 8 | Ajuste al ancho | Mejorada | `PageGeometry` | ajusta al abrir (móvil incl.) |
-| 9 | Navegación por página | Conservada | modelo + observer | salta a página |
-| 10 | Miniaturas laterales | Conservada | render a escala baja | miniatura por página |
-| 11 | Reordenar por drag&drop | Conservada | comando `ReorderPages` | orden persiste al guardar |
-| 12 | Editar texto in-place | **Mejorada** (vectorial, fiel) | `EditTextRun` + PDFium (edición en sitio) | editado extraíble; original eliminado; **fuente/tamaño/color/posición idénticos** (§4.1) |
-| 13 | Cuadros de texto nuevos | Mejorada | `AddTextObject` | texto nuevo extraíble |
-| 14 | Mover/eliminar bloque de texto | Mejorada | `MoveObject`/`DeleteObject` | posición/ausencia en el PDF |
-| 15 | Panel de propiedades (fuente/tamaño/color) | Conservada | comando sobre objeto seleccionado | cambia el objeto en edición |
-| 16 | Lápiz / resaltador / rectángulo | Conservada | anotaciones o trazos de página | trazo llega al PDF |
-| 17 | Borrador | Conservada | `DeleteObject` | quita el trazo |
-| 18 | Selector de color (muestras + custom) | Conservada | estado de herramienta | color aplicado |
-| 19 | Firma: pad de dibujo | Conservada | imagen → objeto de página | sello incrustado |
-| 20 | Firma: subir imagen (quita fondo) | Conservada | transcode + objeto imagen | fondo transparente |
-| 21 | Sello interactivo (mover/redimensionar/borrar) | Conservada | objeto + comandos | geometría final correcta |
-| 22 | Rotar página (horaria/antihoraria) | **Mejorada** (arregla #7) | rotación en `PageGeometry` + `FPDFPage_SetRotation` | E-012 + anotación bien ubicada tras rotar |
-| 23 | Duplicar página | Conservada | `FPDF_ImportPages` | E-007 verde |
-| 24 | Eliminar página | Conservada | `FPDFPage_Delete` | página fuera |
-| 25 | Filtros (Magic Color / B&N / grises) | Conservada | render + objeto imagen | filtro en el PDF (E-008) |
-| 26 | OCR escaneado → texto vivo | Conservada | Tesseract + `EditTextRun` | líneas OCR editables |
-| 27 | OCR modal: copiar / .txt | Conservada | extracción | copia y descarga |
-| 28 | Exportar/descargar PDF | **Mejorada** (vectorial) | `engine.save` | exportar dos veces = igual (E-005) |
-| 29 | Comprimir | Conservada | re-guardado / recompresión | reduce peso sin romper |
-| 30 | Dividir por rango | Conservada | `FPDF_ImportPages` a doc nuevo | extrae páginas pedidas |
-| 31 | PDF → Markdown | Conservada | extracción con posiciones | md coherente |
-| 32 | Markdown → PDF | Conservada | KaTeX/marked + importador | compila y abre |
-| 33 | Deshacer/rehacer global | **Mejorada** | CommandBus | E-011 verde + agrupación |
-| 34 | Atajos de teclado | Conservada | herramientas | E-017 verde |
-| 35 | Cajones móviles / responsive | Conservada | UI | E-015/E-016/E-025/E-026 verdes |
-| 36 | Impresión | Conservada | `window.print` | diálogo abre |
-| 37 | **Redactar (censura real)** | **Nueva/Mejorada** | `ApplyRedaction` (elimina objetos) | texto bajo la marca no se extrae (cierra E-024) |
+**App nueva** (columna añadida tras el lote A "visor y documento"; verificada contra `src/` y `tests/e2e/next/`, no copiada del punto de partida sin comprobar): ✅ hecha · 🟡 parcial (qué falta) · ⬜ falta.
+
+| # | Función actual | Estado | Respaldo en el motor/arquitectura | Test de paridad | App nueva |
+|---|---|---|---|---|---|
+| 1 | Abrir PDF (input + drag&drop) | Conservada | `engine.open` | abre y renderiza | ✅ hecha — input (`#file-input`) ya existía; drag&drop de PDF/imagen sobre `#app` añadido en el lote A (`tests/e2e/next/soltar-fichero.spec.ts`) |
+| 2 | Crear PDF en blanco | Conservada | `FPDF_CreateNewDocument` + `FPDFPage_New` | crea 1 página | ✅ hecha — `PdfiumEngine.createBlank` + `#btn-new` (lote A; `tests/e2e/next/nuevo.spec.ts`, `tests/unit/PdfiumEngine.createblank.test.ts`) |
+| 3 | Insertar/fusionar otro PDF | Mejorada | `FPDF_ImportPages` | inserta N páginas en posición | ✅ hecha — `InsertPdfCmd` + `#btn-insert-pdf` (`tests/e2e/next/combinar.spec.ts`) |
+| 4 | Importar Word .docx → PDF | Conservada | docx-preview + importador | abre sin pérdida | ⬜ falta — sin importador docx en `src/` |
+| 5 | Importar imagen → PDF | Conservada | importador + `FPDFPageObj` imagen | imagen incrustada | ✅ hecha — `engine.imageToPdf` + `#btn-open-image` (`tests/e2e/next/imagen-a-pdf.spec.ts`) |
+| 6 | Visor continuo | Mejorada | render por página visible | páginas visibles pintan | ✅ hecha — `Viewer` + `visiblePageIndices` (IntersectionObserver + overscan) |
+| 7 | Zoom (in/out, %) | Conservada | `PageGeometry` + render por escala | zoom cambia tamaño | ✅ hecha — `#btn-zoom-in`/`#btn-zoom-out` (`tests/e2e/next/color-zoom.spec.ts`) |
+| 8 | Ajuste al ancho | Mejorada | `PageGeometry` | ajusta al abrir (móvil incl.) | ✅ hecha — `App.fitWidth` + `#btn-fit-width`, también al abrir un documento en cualquier tamaño de ventana, no solo móvil (lote A; `tests/e2e/next/ajuste-ancho.spec.ts`) |
+| 9 | Navegación por página | Conservada | modelo + observer | salta a página | ✅ hecha — `App.goToPage` + `#btn-prev`/`#btn-next`/miniatura/marcador (`tests/e2e/next/navegacion.spec.ts`, `pagina-actual.spec.ts`) |
+| 10 | Miniaturas laterales | Conservada | render a escala baja | miniatura por página | ✅ hecha — `App.buildThumbnails` (`tests/e2e/next/navegacion.spec.ts`) |
+| 11 | Reordenar por drag&drop | Conservada | comando `ReorderPages` | orden persiste al guardar | 🟡 parcial: reordenar con `#btn-page-up`/`#btn-page-down` (`MovePageCmd`) funciona y persiste (`tests/e2e/next/reordenar.spec.ts`); no hay arrastrar miniaturas |
+| 12 | Editar texto in-place | **Mejorada** (vectorial, fiel) | `EditTextRun` + PDFium (edición en sitio) | editado extraíble; original eliminado; **fuente/tamaño/color/posición idénticos** (§4.1) | ✅ hecha — `EditTextRunCmd` (`tests/e2e/next/edicion-fiel.spec.ts`, `linea-base-edicion.spec.ts`, `fidelidad-reposo.spec.ts`) |
+| 13 | Cuadros de texto nuevos | Mejorada | `AddTextObject` | texto nuevo extraíble | ✅ hecha — `InsertTextCmd` + modo insertar (`#btn-insert`) (`tests/e2e/next/redaccion-insercion.spec.ts`) |
+| 14 | Mover/eliminar bloque de texto | Mejorada | `MoveObject`/`DeleteObject` | posición/ausencia en el PDF | ✅ hecha — `MoveRunCmd` (tirador) + `DeleteRunCmd` (`#btn-delete`) (`tests/e2e/next/mover.spec.ts`, `redaccion-insercion.spec.ts`) |
+| 15 | Panel de propiedades (fuente/tamaño/color) | Conservada | comando sobre objeto seleccionado | cambia el objeto en edición | ✅ hecha — `#props-panel` (`SetRunFontCmd`/`SetRunFontSizeCmd`/`SetColorCmd`) (`tests/e2e/next/propiedades.spec.ts`) |
+| 16 | Lápiz / resaltador / rectángulo | Conservada | anotaciones o trazos de página | trazo llega al PDF | 🟡 parcial: lápiz (`#btn-pen` → `DrawStrokeCmd`) y resaltador (`#btn-highlight` → `HighlightRunCmd`) hechos (`tests/e2e/next/pluma.spec.ts`, `resaltar.spec.ts`); sin herramienta de rectángulo |
+| 17 | Borrador | Conservada | `DeleteObject` | quita el trazo | 🟡 parcial: un trazo recién dibujado se quita con Deshacer (`#btn-undo`, `CommandBus`); no hay herramienta de borrador dedicada para seleccionar y quitar un trazo antiguo |
+| 18 | Selector de color (muestras + custom) | Conservada | estado de herramienta | color aplicado | 🟡 parcial: `#btn-color` (`<input type="color">`) aplica cualquier color a la línea seleccionada (`tests/e2e/next/color-zoom.spec.ts`); sin muestras predefinidas |
+| 19 | Firma: pad de dibujo | Conservada | imagen → objeto de página | sello incrustado | ✅ hecha — `SignaturePad` + `#btn-sign` → `InsertImageCmd` (`tests/e2e/next/firma.spec.ts`) |
+| 20 | Firma: subir imagen (quita fondo) | Conservada | transcode + objeto imagen | fondo transparente | 🟡 parcial: subir imagen funciona (`#btn-insert-image` → `InsertImageCmd`, `tests/e2e/next/imagen.spec.ts`); sin quitar el fondo |
+| 21 | Sello interactivo (mover/redimensionar/borrar) | Conservada | objeto + comandos | geometría final correcta | 🟡 parcial: se inserta y se puede borrar con `#btn-delete` sobre la selección; una imagen insertada no es movible/redimensionable interactivamente (solo las líneas de texto tienen tirador, ver `TextLayer`) |
+| 22 | Rotar página (horaria/antihoraria) | **Mejorada** (arregla #7) | rotación en `PageGeometry` + `FPDFPage_SetRotation` | E-012 + anotación bien ubicada tras rotar | ✅ hecha — `RotatePageCmd` + `#btn-rotate` (`tests/e2e/next/paginas.spec.ts`) |
+| 23 | Duplicar página | Conservada | `FPDF_ImportPages` | E-007 verde | ✅ hecha — `DuplicatePageCmd` + `#btn-duplicate` (`tests/e2e/next/duplicar.spec.ts`) |
+| 24 | Eliminar página | Conservada | `FPDFPage_Delete` | página fuera | ✅ hecha — `DeletePageCmd` + `#btn-delete-page` (`tests/e2e/next/paginas.spec.ts`) |
+| 25 | Filtros (Magic Color / B&N / grises) | Conservada | render + objeto imagen | filtro en el PDF (E-008) | ⬜ falta — sin filtros de imagen en `src/` |
+| 26 | OCR escaneado → texto vivo | Conservada | Tesseract + `EditTextRun` | líneas OCR editables | ✅ hecha — `OcrPageCmd` + `TesseractOcr` + `#btn-ocr`, inserta texto invisible buscable/editable (`tests/e2e/next/ocr.spec.ts`) |
+| 27 | OCR modal: copiar / .txt | Conservada | extracción | copia y descarga | 🟡 parcial: el texto reconocido queda en el PDF (extraíble con `getPageText`, buscable con `#btn-search`); no hay modal de resultado con botón de copiar ni descarga `.txt` |
+| 28 | Exportar/descargar PDF | **Mejorada** (vectorial) | `engine.save` | exportar dos veces = igual (E-005) | ✅ hecha — `#btn-save` (`tests/unit/save.idempotente.test.ts`) |
+| 29 | Comprimir | Conservada | re-guardado / recompresión | reduce peso sin romper | ⬜ falta — sin comando de compresión en `src/` |
+| 30 | Dividir por rango | Conservada | `FPDF_ImportPages` a doc nuevo | extrae páginas pedidas | ✅ hecha — `engine.extractPages` + `#btn-split`/`#btn-range` (`tests/e2e/next/dividir.spec.ts`, `extraer.spec.ts`) |
+| 31 | PDF → Markdown | Conservada | extracción con posiciones | md coherente | ⬜ falta — sin exportador Markdown en `src/` |
+| 32 | Markdown → PDF | Conservada | KaTeX/marked + importador | compila y abre | ⬜ falta — sin importador Markdown en `src/` |
+| 33 | Deshacer/rehacer global | **Mejorada** | CommandBus | E-011 verde + agrupación | ✅ hecha — `CommandBus` + `#btn-undo`/`#btn-redo`/Ctrl+Z/Ctrl+Y (numerosos tests, p. ej. `propiedades.spec.ts`) |
+| 34 | Atajos de teclado | Conservada | herramientas | E-017 verde | 🟡 parcial: solo Ctrl+Z/Ctrl+Y globales (`App` constructor) + Enter/Escape dentro de una línea en edición (`TextLayer`); la app vieja cubre bastantes más atajos (E-017) |
+| 35 | Cajones móviles / responsive | Conservada | UI | E-015/E-016/E-025/E-026 verdes | 🟡 parcial: el visor se ajusta al ancho también en móvil (fila 8), pero la barra lateral (miniaturas/marcadores) es un panel fijo de 150px, no un cajón deslizante que se pueda ocultar en pantallas estrechas |
+| 36 | Impresión | Conservada | `window.print` | diálogo abre | ✅ hecha — `#btn-print`: genera el PDF vectorial actual y lo imprime vía un `<iframe>` oculto con blob: (no `window.print()` a secas, que solo pintaría el DOM) (lote A; `tests/e2e/next/imprimir.spec.ts`) |
+| 37 | **Redactar (censura real)** | **Nueva/Mejorada** | `ApplyRedaction` (elimina objetos) | texto bajo la marca no se extrae (cierra E-024) | ✅ hecha — `DeleteRunCmd` elimina el objeto de texto (no lo tapa) (`tests/e2e/next/redaccion-insercion.spec.ts`) |
+
+**Conteo:** 22 hechas (1, 2, 3, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 19, 22, 23, 24, 26, 28, 30, 33, 36, 37) · 10 parciales (11, 16, 17, 18, 20, 21, 27, 34, 35) · 5 faltan (4, 25, 29, 31, 32).
+
+### Añadidas en la app nueva (no estaban en la vieja)
+
+- Notas adhesivas (`AddNoteCmd`, `#btn-note`).
+- Formularios AcroForm completos: texto, casilla, radio, combo y lista, con apariencia regenerada (`SetFormText/Checked/Choice/RadioCmd`, `tests/e2e/next/formulario.spec.ts`, `formulario-fase2.spec.ts`).
+- Marcadores (outline): árbol de lectura y navegación (`getOutline`, `tests/e2e/next/marcadores.spec.ts`).
+- Subrayar y tachar como anotaciones reales, además de resaltar (`UnderlineRunCmd`, `StrikethroughRunCmd`, `tests/e2e/next/subrayar-tachar.spec.ts`).
+- Búsqueda de texto en el documento, con resaltado de coincidencias (`engine.findText`, `#btn-search`, `tests/e2e/next/busqueda.spec.ts`).
+- Sustitución de fuente cuando faltan glifos (`ReplaceRunFontCmd`) y cambio de fuente/tamaño elegido por el usuario desde el panel de propiedades (`SetRunFontCmd`/`SetRunFontSizeCmd`).
+- Capa de OCR invisible y buscable: el texto reconocido se inserta como texto PDF real en modo de render invisible (`insertText({ invisible: true })`), no como una capa aparte — queda seleccionable/buscable sin alterar el aspecto de la página escaneada.
 
 ---
 

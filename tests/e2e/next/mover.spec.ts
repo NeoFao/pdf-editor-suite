@@ -8,17 +8,29 @@ const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(AQUI, '../../fixtures/generados/fuentes.pdf');
 
 test('mover: arrastrar una línea cambia su posición en el PDF descargado', async ({ page }) => {
+  // Tamaño de página en pt, leído del propio PDF: con el ajuste al ancho al
+  // abrir (#8) la escala inicial ya no es fija en 1, así que el desplazamiento
+  // en px CSS que equivale a +40pt en X depende de la escala REAL aplicada.
+  const engMedida = await PdfiumEngine.create();
+  const docMedida = await engMedida.open(new Uint8Array(fs.readFileSync(FIXTURE)));
+  const pageSize = engMedida.pageSize(docMedida, 0);
+  engMedida.close(docMedida);
+
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(FIXTURE);
   const run = page.locator('.run', { hasText: 'ORIGINAL-TIMES' });
   await expect(run).toBeVisible();
 
-  // Arrastrar por el tirador +40px a la derecha (escala 1 → +40pt en X).
+  const cajaPagina = (await page.locator('.page').first().boundingBox())!;
+  const escala = cajaPagina.width / pageSize.widthPt;
+  const deltaCss = 40 * escala; // +40pt en X, en px CSS a la escala real
+
+  // Arrastrar por el tirador +40pt (en px CSS reales) a la derecha.
   const handle = run.locator('.run-drag');
   const b = (await handle.boundingBox())!;
   await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
   await page.mouse.down();
-  await page.mouse.move(b.x + b.width / 2 + 40, b.y + b.height / 2, { steps: 6 });
+  await page.mouse.move(b.x + b.width / 2 + deltaCss, b.y + b.height / 2, { steps: 6 });
   await page.mouse.up();
 
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#btn-save').click()]);
