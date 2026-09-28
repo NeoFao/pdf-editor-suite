@@ -10,6 +10,15 @@ export interface TextRun {
   fontName: string;
   sizePt: number;
   color: [number, number, number, number]; // RGBA 0-255
+  /**
+   * Origen de la línea base del objeto de texto, en puntos PDF (origen
+   * abajo-izquierda), es decir (e, f) de su matriz de texto. A diferencia de
+   * `boxPt` (la caja ajustada a los glifos, de `FPDFPageObj_GetBounds`), este
+   * es el punto exacto donde el motor apoya la línea base al pintar — lo que
+   * hay que reproducir al editar para que el texto no se desplace verticalmente
+   * (E-030). Asume texto horizontal sin rotación/sesgo (b≈0, c≈0 en la matriz).
+   */
+  originPt: { xPt: number; yPt: number };
 }
 
 export type EditResult = { ok: true } | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' };
