@@ -33,6 +33,16 @@ export class Viewer {
   private highlights = new Map<number, RectPt[]>();
   private observer: IntersectionObserver | null = null;
   private currentPage = 0;
+  /**
+   * Página fijada por una navegación EXPLÍCITA (`scrollToPage`, ver E-032).
+   * Mientras no sea `null`, el `IntersectionObserver` no puede reafirmar otra
+   * página: solo un gesto de scroll real del usuario (rueda, gesto táctil o
+   * teclado, ver los listeners en el constructor) lo libera. Sin este freno,
+   * el scroll que `scrollToPage` dispara (o su ausencia, si el destino ya
+   * cabía en el viewport) deja que el observer decida por su cuenta cuál es
+   * "la más visible" y pise la selección explícita del usuario.
+   */
+  private pinnedPage: number | null = null;
   private penMode = false;
 
   constructor(
@@ -42,6 +52,15 @@ export class Viewer {
   ) {
     this.layout();
     this.root.addEventListener('scroll', () => this.renderVisible());
+    // Cualquier gesto de scroll real del usuario libera el pin: a partir de
+    // ahí el observer vuelve a mandar, como antes de E-032. `scrollIntoView`
+    // (programático) no dispara ni `wheel` ni `touchmove` por sí solo.
+    // (El arrastre de la barra de scroll no dispara ninguno de los dos: queda
+    // fuera de esta heurística, igual que antes de E-032 no existía ningún
+    // mecanismo — no es una regresión.)
+    const liberarPin = (): void => { this.pinnedPage = null; };
+    this.root.addEventListener('wheel', liberarPin, { passive: true });
+    this.root.addEventListener('touchmove', liberarPin, { passive: true });
     this.renderVisible();
     this.session.model.on('change', (pageIndex) => { this.rendered.delete(pageIndex); this.renderVisible(); });
     // Recarga completa (deshacer de borrar/insertar): reconstruir todo.
@@ -54,8 +73,16 @@ export class Viewer {
     this.rebuild();
   }
 
-  /** Desplaza el visor hasta la página indicada. */
+  /**
+   * Desplaza el visor hasta la página indicada tras una navegación explícita
+   * (App.goToPage). Fija `currentPage` y `pinnedPage` de inmediato: si el
+   * scroll no se mueve (la página ya era visible, o todo el documento cabe
+   * en el viewport) no hay ningún otro mecanismo que vaya a corregir
+   * `currentPage`, así que tiene que quedar bien aquí mismo (E-032).
+   */
   scrollToPage(i: number): void {
+    this.currentPage = i;
+    this.pinnedPage = i;
     this.wrappers[i]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
 
@@ -118,10 +145,14 @@ export class Viewer {
       }
       if (!best) return;
       const i = Number((best.target as HTMLElement).dataset.page);
-      if (Number.isFinite(i) && i !== this.currentPage) {
-        this.currentPage = i;
-        this.cb.onPageChange?.(i);
-      }
+      if (!Number.isFinite(i)) return;
+      // Hay una navegación explícita pendiente (goToPage → scrollToPage) que
+      // el usuario no ha contradicho con scroll real: el observer no la
+      // puede pisar aunque calcule que "la más visible" es otra (E-032).
+      if (this.pinnedPage !== null && i !== this.pinnedPage) return;
+      if (i === this.currentPage) return;
+      this.currentPage = i;
+      this.cb.onPageChange?.(i);
     }, { root: this.root, threshold: [0.2, 0.6] });
     for (const w of this.wrappers) this.observer.observe(w);
   }
@@ -314,6 +345,10 @@ export class Viewer {
     this.wrappers = [];
     this.geoms = [];
     this.rendered = new Set();
+    // Una operación de página (eliminar/insertar/deshacer) puede renumerar
+    // las páginas: un pin apuntando al índice antiguo ya no significa nada.
+    // `App.onReload` recalcula y vuelve a fijar `currentPage` por su cuenta.
+    this.pinnedPage = null;
     this.layout();
     this.renderVisible();
   }

@@ -455,9 +455,33 @@ export class App {
     this.setStatus('Página reordenada.');
   }
 
+  /**
+   * Único punto de entrada para cambiar de "página actual": prev/next, clic
+   * en miniatura y clic en marcador pasan todos por aquí (E-032).
+   *
+   * La selección explícita del usuario manda: `currentPage` se fija AQUÍ,
+   * antes de tocar el scroll, no se espera a que el `IntersectionObserver`
+   * del Viewer lo confirme. Antes del arreglo, `goToPage` solo llamaba a
+   * `scrollToPage` y confiaba en que el observer actualizara `currentPage` al
+   * detectar la página "más visible" — pero si el scroll no se movía (todo
+   * cabía en el viewport, el destino ya era visible, o ya estaba al final) el
+   * observer nunca disparaba y `currentPage` se quedaba con el valor
+   * anterior. Todas las operaciones "de la página actual" (eliminar, rotar,
+   * duplicar, subir/bajar, extraer, OCR, insertar imagen…) actúan sobre
+   * `currentPage`, así que el usuario podía hacer clic en la miniatura 3,
+   * pulsar "Eliminar página" y borrar la 1.
+   *
+   * `Viewer.scrollToPage` fija además un "pin" (`pinnedPage`) para que su
+   * propio IntersectionObserver no reafirme otra página mientras el usuario
+   * no haga scroll de verdad (rueda, gesto táctil, teclado) — ver el
+   * comentario de `Viewer.observeVisible`.
+   */
   private goToPage(i: number): void {
     const total = this.session?.model.pages.length ?? 0;
     if (i < 0 || i >= total) return;
+    this.currentPage = i;
+    this.updateIndicator();
+    this.setActiveThumb(i);
     this.viewer?.scrollToPage(i);
   }
 
@@ -466,9 +490,15 @@ export class App {
     this.pageIndicator.textContent = total ? `${this.currentPage + 1} / ${total}` : '– / –';
   }
 
+  /** Resalta la miniatura de `currentPage`: la única fuente visual de "cuál es la página actual" en el panel de páginas (E-032). */
   private setActiveThumb(i: number): void {
     for (const el of Array.from(this.thumbsEl.children)) {
-      (el as HTMLElement).style.outline = Number((el as HTMLElement).dataset.page) === i ? '2px solid #6366f1' : 'none';
+      const t = el as HTMLElement;
+      const activa = Number(t.dataset.page) === i;
+      t.classList.toggle('active', activa);
+      if (activa) t.setAttribute('aria-current', 'page');
+      else t.removeAttribute('aria-current');
+      t.style.outline = activa ? '2px solid #6366f1' : 'none';
     }
   }
 

@@ -745,6 +745,76 @@ de reposo (`left/top/height/lineHeight` de `boxPt`), igual con Escape.
 
 ---
 
+### E-032 · Clic en una miniatura y "Eliminar página" borraba otra página distinta
+
+**Síntoma.** El usuario hacía clic en la miniatura 3, el indicador seguía
+mostrando la página que ya estaba abierta, pulsaba "Eliminar página" y se
+borraba la página 1 (o cualquier otra, la que estuviera activa antes del
+clic) en vez de la 3. Lo mismo con prev/next y con los marcadores: el PR #49
+tuvo que usar páginas A4 grandes en su fixture (`marcadores.pdf`) para que su
+propio test E2E no fuera flaky por este defecto.
+
+**Causa raíz.** `App.goToPage(i)` (`src/ui/App.ts`) solo llamaba a
+`viewer.scrollToPage(i)` y confiaba en que el `IntersectionObserver` del
+`Viewer` (`src/ui/Viewer.ts`) actualizara `currentPage` al detectar la
+página "más visible" tras el scroll. Pero si el scroll no se movía —porque
+el destino ya estaba visible, porque todas las páginas cabían a la vez en el
+viewport, o porque el scroll ya estaba al final— el observer nunca disparaba
+y `currentPage` se quedaba con el valor anterior. Todas las operaciones "de
+la página actual" (eliminar, rotar, duplicar, subir/bajar, extraer, OCR,
+insertar imagen…) actúan sobre `currentPage`, así que la UI mostraba una
+selección que no era la que de verdad iban a afectar los botones.
+
+**Arreglo.** `goToPage` pasa a ser el único punto de entrada para cambiar de
+página (prev/next, clic en miniatura, clic en marcador ya pasaban todos por
+ahí) y ahora fija `currentPage`, el indicador y la miniatura activa **antes**
+de tocar el scroll — la selección explícita del usuario manda,
+independientemente de si el scroll se mueve o no. `Viewer.scrollToPage`
+fija además un "pin" (`pinnedPage`): mientras esté activo, el
+`IntersectionObserver` no puede reafirmar una página distinta, ni siquiera
+si calcula que "la más visible" es otra. Solo un gesto de scroll real del
+usuario (`wheel` o `touchmove` sobre el visor) libera el pin y devuelve el
+control al observer — así el scroll manual (rueda, gesto táctil) sigue
+actualizando el indicador con normalidad. El pin también se limpia en
+`Viewer.rebuild()`: una operación de página puede renumerar los índices, así
+que un pin apuntando al número antiguo ya no significa nada; `App.onReload`
+recalcula `currentPage` por su cuenta en ese caso.
+
+*Limitación conocida:* arrastrar la barra de scroll con el ratón no dispara
+`wheel` ni `touchmove`, así que no libera el pin por sí solo. No es una
+regresión (antes de este arreglo no existía ningún mecanismo de pin), y el
+caso de uso real —clic en miniatura/marcador/prev/next seguido de scroll con
+rueda o gesto táctil— queda cubierto.
+
+**Cómo se detecta ahora.** `tests/e2e/next/pagina-actual.spec.ts`:
+- El test del defecto destructivo: abre `paginas-pequenas.pdf` (4 páginas de
+  200×120 pt que caben todas a la vez en el viewport de 1440×900, fixture
+  nuevo en `tests/fixtures/generar-fixtures.mjs`, cada página con un texto
+  único "PAGINA-1".."PAGINA-4"), clic en la miniatura 3, `#page-indicator`
+  debe decir "3 / 4"; pulsa "Eliminar página" y comprueba que "PAGINA-3" ya
+  no existe en la capa de texto mientras las otras tres siguen ahí. Antes del
+  arreglo fallaba con el indicador en "1 / 4" (nunca cambiaba) y, si se
+  seguía el flujo hasta el final, se borraba la página equivocada.
+- `#btn-next`/`#btn-prev` avanzan `currentPage` aunque las 4 páginas quepan
+  en pantalla.
+- Clic en un marcador (`paginas-pequenas-marcadores.pdf`, mismo tamaño de
+  página con un outline de un nodo por página) fija el indicador a su
+  página.
+- El scroll manual (`page.mouse.wheel`) sobre `nativo.pdf` (páginas A4, que
+  no caben todas) sigue actualizando el indicador con normalidad: el pin no
+  bloquea la navegación real del usuario.
+
+Regla `navegacion-por-gotopage`: `Viewer.scrollToPage()` solo se puede llamar
+desde dentro de `App.goToPage()`. No cubre el invariante completo (el orden
+"fijar `currentPage` antes de desplazar" no es una firma sintáctica que un
+grep pueda verificar sin falsos positivos — de eso responde el test E2E de
+arriba), pero sí cierra la vía más probable de que vuelva a romperse: que un
+botón o un manejador nuevo llame a `viewer.scrollToPage(i)` directamente en
+vez de pasar por `goToPage(i)`, saltándose por completo la fijación de
+`currentPage`.
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que
