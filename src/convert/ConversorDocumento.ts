@@ -15,11 +15,33 @@
  * `registrarConversor()` en el arranque de la app de escritorio — `App.ts`
  * no cambia una línea: sigue preguntando a `conversorPara(extension)`.
  */
+/**
+ * Resultado de `convertir()`. `advertencias` amplía el puerto (§9 fila #4,
+ * conversor DOCX -> PDF): cadenas en español, listas para mostrar TAL CUAL
+ * en la UI, de contenido del original que esta fase no soporta y por tanto
+ * no aparece en el PDF (imágenes, encabezados/pies, notas, campos...) — la
+ * honestidad de "no se pierde en silencio" (AGENTS.md, spec del lote) exige
+ * que el conversor las DEVUELVA, no que las registre en consola. Se eligió
+ * ampliar el tipo de retorno (en vez de un método opcional aparte,
+ * `advertencias?()`) porque así el llamador (`App.ts`) no puede olvidarse de
+ * mirarlas: vienen en el mismo resultado que el PDF, no en una llamada
+ * adicional fácil de omitir. `ConversorMarkdownNavegador` devuelve siempre
+ * `advertencias: []` (fase 1 de Markdown -> PDF ya avisaba de sus
+ * limitaciones por comentario, no por UI; no hace falta que empiece a
+ * generar advertencias ahora).
+ */
+export interface ResultadoConversion {
+  pdf: Uint8Array<ArrayBuffer>;
+  advertencias: string[];
+}
+
 export interface ConversorDocumento {
   /** Extensiones que sabe convertir, sin punto y en minúsculas (p. ej. `['md', 'markdown']`). */
   readonly acepta: readonly string[];
+  /** Nombre del formato de origen, para mensajes de la UI (p. ej. "Markdown", "Word"). */
+  readonly nombreFuente: string;
   /** Convierte `bytes` (el fichero tal cual, con nombre `nombre` solo a efectos de mensajes/errores) a un PDF nuevo. */
-  convertir(nombre: string, bytes: Uint8Array): Promise<Uint8Array<ArrayBuffer>>;
+  convertir(nombre: string, bytes: Uint8Array): Promise<ResultadoConversion>;
 }
 
 const registro: ConversorDocumento[] = [];

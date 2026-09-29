@@ -343,6 +343,22 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   padding: var(--ed-sp-4);
 }
 
+/* ── Aviso de advertencias de conversión (§9 fila #4) ───────────────────── */
+.conversion-warnings {
+  flex: 0 0 auto;
+  background: var(--ed-warning-bg, #fff7e6);
+  border-bottom: 1px solid var(--ed-warning-border, #e8b93f);
+  color: var(--ed-warning-text, #6b4c00);
+  font-size: var(--ed-font-sm);
+  padding: var(--ed-sp-2) var(--ed-sp-3);
+}
+.conversion-warnings-header { display: flex; align-items: center; justify-content: space-between; gap: var(--ed-sp-2); }
+.conversion-warnings-close {
+  background: transparent; border: none; cursor: pointer;
+  font-size: 1.1em; line-height: 1; color: inherit; padding: 2px 6px;
+}
+.conversion-warnings-list { margin: var(--ed-sp-1) 0 0; padding-left: 1.25em; }
+
 /* ── Barra de estado ──────────────────────────────────────────────────── */
 .statusbar {
   display: flex;

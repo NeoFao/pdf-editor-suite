@@ -28,7 +28,8 @@ function markdownDePrueba(): string {
 test('convertir produce un PDF de al menos 2 páginas con texto vectorial (sin imágenes)', async () => {
   const engine = await PdfiumEngine.create();
   const conversor = new ConversorMarkdownNavegador(engine);
-  const bytes = await conversor.convertir('ejemplo.md', new TextEncoder().encode(markdownDePrueba()));
+  const { pdf: bytes, advertencias } = await conversor.convertir('ejemplo.md', new TextEncoder().encode(markdownDePrueba()));
+  expect(advertencias).toEqual([]);
 
   const doc = await engine.open(bytes);
   const n = engine.pageCount(doc);
@@ -50,7 +51,7 @@ test('convertir produce un PDF de al menos 2 páginas con texto vectorial (sin i
 test('convertir con Markdown vacío produce un PDF de 1 página sin texto', async () => {
   const engine = await PdfiumEngine.create();
   const conversor = new ConversorMarkdownNavegador(engine);
-  const bytes = await conversor.convertir('vacio.md', new TextEncoder().encode(''));
+  const { pdf: bytes } = await conversor.convertir('vacio.md', new TextEncoder().encode(''));
   const doc = await engine.open(bytes);
   expect(engine.pageCount(doc)).toBe(1);
   expect(engine.getPageText(doc, 0)).toEqual([]);

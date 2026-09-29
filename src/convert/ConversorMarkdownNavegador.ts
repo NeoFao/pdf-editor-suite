@@ -1,4 +1,4 @@
-import type { ConversorDocumento } from './ConversorDocumento';
+import type { ConversorDocumento, ResultadoConversion } from './ConversorDocumento';
 import { parseMarkdown } from './markdown/parse';
 import { layoutMarkdown, PAGE_WIDTH_PT, PAGE_HEIGHT_PT } from './markdown/layout';
 import type { PdfEngine, DocHandle, PageOp } from '../engine/PdfEngine';
@@ -20,10 +20,11 @@ import type { PdfEngine, DocHandle, PageOp } from '../engine/PdfEngine';
  */
 export class ConversorMarkdownNavegador implements ConversorDocumento {
   readonly acepta = ['md', 'markdown'] as const;
+  readonly nombreFuente = 'Markdown';
 
   constructor(private readonly engine: PdfEngine) {}
 
-  async convertir(_nombre: string, bytes: Uint8Array): Promise<Uint8Array<ArrayBuffer>> {
+  async convertir(_nombre: string, bytes: Uint8Array): Promise<ResultadoConversion> {
     const texto = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
     const ast = parseMarkdown(texto);
     // El maquetador mide CADA palabra (y el espacio tras ella) para el
@@ -74,6 +75,6 @@ export class ConversorMarkdownNavegador implements ConversorDocumento {
 
     const out = this.engine.save(doc);
     this.engine.close(doc);
-    return out;
+    return { pdf: out, advertencias: [] };
   }
 }

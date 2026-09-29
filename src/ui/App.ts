@@ -37,6 +37,8 @@ import { TextPanel } from './TextPanel';
 import { agruparLineas, aTextoPlano, aMarkdown, type Linea } from '../texto/estructura';
 import { conversorPara, registrarConversor } from '../convert/ConversorDocumento';
 import { ConversorMarkdownNavegador } from '../convert/ConversorMarkdownNavegador';
+import { ConversorDocxNavegador } from '../convert/ConversorDocxNavegador';
+import { DocxError } from '../convert/docx/DocxError';
 import { descargarArchivo } from './descargarArchivo';
 import { quitarFondo } from './quitarFondo';
 import { formatoBytes } from './formatoBytes';
@@ -160,6 +162,9 @@ export class App {
   private readonly tabPages: HTMLButtonElement;
   private readonly tabOutline: HTMLButtonElement;
   private readonly status: HTMLElement;
+  /** Aviso visible (no solo `#status`/consola) con las advertencias de una conversión Word/Markdown -> PDF (§9 fila #4: "no se pierde en silencio"). Oculto (`hidden`) cuando no hay advertencias pendientes. */
+  private readonly avisoConversionEl: HTMLElement;
+  private readonly avisoConversionLista: HTMLElement;
   private readonly pageIndicator: HTMLElement;
   private readonly btnInsert: HTMLButtonElement;
   private readonly btnPen: HTMLButtonElement;
@@ -216,7 +221,9 @@ export class App {
     rootEl.textContent = '';
 
     const file = document.createElement('input');
-    file.type = 'file'; file.accept = 'application/pdf,.md,.markdown,text/markdown'; file.id = 'file-input';
+    file.type = 'file';
+    file.accept = 'application/pdf,.md,.markdown,text/markdown,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword';
+    file.id = 'file-input';
     file.addEventListener('change', () => { const f = file.files?.[0]; if (f) void this.openFile(f); });
     file.style.display = 'none';
     this.fileInput = file;
@@ -541,6 +548,34 @@ export class App {
     toolbarWrap.append(topbar, this.toolbarMoreEl);
     rootEl.appendChild(toolbarWrap);
 
+    // Aviso de advertencias de conversión (§9 fila #4: "NO se pierde en
+    // silencio"): una franja visible bajo la barra de herramientas, oculta
+    // hasta que `mostrarAvisoConversion()` la rellena. `textContent` en cada
+    // advertencia (nunca `innerHTML`: son cadenas propias, pero el patrón se
+    // mantiene uniforme en todo el archivo — AGENTS.md §2.2).
+    this.avisoConversionEl = document.createElement('div');
+    this.avisoConversionEl.id = 'conversion-warnings';
+    this.avisoConversionEl.className = 'conversion-warnings';
+    this.avisoConversionEl.hidden = true;
+    this.avisoConversionEl.setAttribute('role', 'status');
+    const avisoCabecera = document.createElement('div');
+    avisoCabecera.className = 'conversion-warnings-header';
+    const avisoTitulo = document.createElement('strong');
+    avisoTitulo.textContent = 'La conversión omitió algo del documento original:';
+    const avisoCerrar = document.createElement('button');
+    avisoCerrar.type = 'button';
+    avisoCerrar.id = 'conversion-warnings-close';
+    avisoCerrar.className = 'conversion-warnings-close';
+    avisoCerrar.textContent = '×';
+    avisoCerrar.title = 'Cerrar aviso';
+    avisoCerrar.setAttribute('aria-label', 'Cerrar aviso de advertencias de conversión');
+    avisoCerrar.addEventListener('click', () => { this.avisoConversionEl.hidden = true; });
+    avisoCabecera.append(avisoTitulo, avisoCerrar);
+    this.avisoConversionLista = document.createElement('ul');
+    this.avisoConversionLista.className = 'conversion-warnings-list';
+    this.avisoConversionEl.append(avisoCabecera, this.avisoConversionLista);
+    rootEl.appendChild(this.avisoConversionEl);
+
     this.activarPestana(leerPestanaGuardada() ?? 'editar');
 
     // Telón de fondo del cajón móvil (§9 #35): clic cierra el cajón.
@@ -668,12 +703,12 @@ export class App {
     });
   }
 
-  /** Un PDF abre normal; un Markdown se convierte a PDF (vía `openFile`); una imagen se convierte a PDF de una página (mismo flujo que `#btn-open-image`). Otro tipo: aviso en `#status`, sin romper nada. */
+  /** Un PDF abre normal; un Markdown o un .docx se convierten a PDF (vía `openFile`); una imagen se convierte a PDF de una página (mismo flujo que `#btn-open-image`). Un `.doc` antiguo o cualquier otro tipo: aviso en `#status`, sin romper nada. */
   private async handleDroppedFile(file: File): Promise<void> {
     const esPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
     if (esPdf) { await this.openFile(file); return; }
     const ext = (file.name.split('.').pop() ?? '').toLowerCase();
-    if (conversorPara(ext)) { await this.openFile(file); return; }
+    if (ext === 'doc' || conversorPara(ext)) { await this.openFile(file); return; }
     const esImagen = file.type.startsWith('image/') || /\.(png|jpe?g|jpeg|gif|webp)$/i.test(file.name);
     if (esImagen) { await this.openImage(file); return; }
     this.setStatus('Tipo de archivo no admitido para soltar aquí (usa un PDF o una imagen).');
@@ -829,6 +864,10 @@ export class App {
       // una futura implementación de escritorio (LibreOffice/Word para
       // .docx) se registraría igual, sin que este método cambie de forma.
       registrarConversor(new ConversorMarkdownNavegador(this.engine));
+      // Conversor .docx (§9 fila #4, fase 1): mismo puerto, mismo motor —
+      // una futura app de escritorio podrá registrar aquí OTRA
+      // implementación (LibreOffice/Word instalados) sin tocar `App.ts`.
+      registrarConversor(new ConversorDocxNavegador(this.engine));
     }
     return this.engine;
   }
@@ -836,26 +875,51 @@ export class App {
   /**
    * Punto de entrada único para abrir un fichero desde `#file-input` o
    * soltarlo en la ventana (`handleDroppedFile`). Un PDF se abre tal cual;
-   * si la extensión la acepta algún conversor registrado (hoy, `.md`/
-   * `.markdown`), se convierte primero y se abre el PDF resultante como
-   * documento normal — el nombre sugerido para guardar pasa a ser
-   * `<nombre>.pdf`.
+   * si la extensión la acepta algún conversor registrado (`.md`/
+   * `.markdown`/`.docx`), se convierte primero y se abre el PDF resultante
+   * como documento normal — el nombre sugerido para guardar pasa a ser
+   * `<nombre>.pdf`. `.doc` (Word 97 binario, no es un ZIP): mensaje claro en
+   * vez de intentar convertirlo. Si la conversión falla (`.docx` corrupto u
+   * hostil, ver `DocxError`), el aviso se muestra en `#status` y el
+   * documento actual no se toca.
    */
   async openFile(file: File): Promise<void> {
     const engine = await this.ensureEngine();
     const ext = (file.name.split('.').pop() ?? '').toLowerCase();
+    if (ext === 'doc') {
+      this.setStatus('Formato .doc antiguo no soportado; guárdalo como .docx.');
+      return;
+    }
     const conversor = conversorPara(ext);
     if (conversor) {
       this.setStatus('Convirtiendo…');
       const bytes = new Uint8Array(await file.arrayBuffer());
-      const pdfBytes = await conversor.convertir(file.name, bytes);
+      let resultado;
+      try {
+        resultado = await conversor.convertir(file.name, bytes);
+      } catch (err) {
+        if (err instanceof DocxError) { this.setStatus(err.message); return; }
+        throw err;
+      }
       const pdfName = file.name.replace(/\.[^./\\]+$/, '') + '.pdf';
-      await this.openBytes(pdfBytes, pdfName);
+      await this.openBytes(resultado.pdf, pdfName);
       const n = this.session ? engine.pageCount(this.session.doc) : 0;
-      this.setStatus(`Convertido desde Markdown (${n} páginas).`);
+      this.setStatus(`Convertido desde ${conversor.nombreFuente} (${n} páginas).`);
+      if (resultado.advertencias.length > 0) this.mostrarAvisoConversion(resultado.advertencias);
       return;
     }
     await this.openBytes(new Uint8Array(await file.arrayBuffer()), file.name || 'documento.pdf');
+  }
+
+  /** Rellena y muestra el aviso visible de advertencias de conversión (ver el campo `avisoConversionEl`). */
+  private mostrarAvisoConversion(advertencias: string[]): void {
+    this.avisoConversionLista.textContent = '';
+    for (const texto of advertencias) {
+      const li = document.createElement('li');
+      li.textContent = texto;
+      this.avisoConversionLista.appendChild(li);
+    }
+    this.avisoConversionEl.hidden = false;
   }
 
   /** Decodifica una imagen a RGBA usando el canvas del navegador. */
@@ -879,6 +943,11 @@ export class App {
 
   private async openBytes(bytes: Uint8Array, name: string): Promise<void> {
     this.setStatus('Cargando…');
+    // Cualquier carga de documento nueva empieza sin el aviso de la
+    // conversión anterior visible; `openFile` lo vuelve a mostrar justo
+    // después de esta llamada si la conversión que acaba de terminar trae
+    // advertencias.
+    this.avisoConversionEl.hidden = true;
     const engine = await this.ensureEngine();
     if (this.session) engine.close(this.session.doc);
     this.docName = name;

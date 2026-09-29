@@ -569,6 +569,46 @@ describe('sin-cronometraje-en-unit', () => {
   });
 });
 
+describe('docx-descomprimir-acotado', () => {
+  const regla = detectarEn('docx-descomprimir-acotado');
+  const patronDecompression = /\bnew\s+DecompressionStream\(/;
+  const patronMaterializar = /new\s+Response\([^)]*\)\s*\.\s*(arrayBuffer|blob|text)\s*\(/;
+
+  test('detecta el patrón exacto de E-042: DecompressionStream leída entera con Response(...).arrayBuffer()', () => {
+    const cuerpo = [
+      "const flujo = new Blob([ab]).stream().pipeThrough(new DecompressionStream('deflate-raw'));",
+      'const buf = await new Response(flujo).arrayBuffer();'
+    ].join('\n');
+    assert.match(cuerpo, patronDecompression);
+    assert.match(cuerpo.split('\n')[1], patronMaterializar);
+    assert.ok(regla.comoArreglar.includes('reader.read()'));
+  });
+
+  test('también detecta .blob() y .text() sobre Response, no solo .arrayBuffer()', () => {
+    assert.match('await new Response(flujo).blob();', patronMaterializar);
+    assert.match('await new Response(flujo).text();', patronMaterializar);
+  });
+
+  test('acepta la lectura en streaming (arreglo de E-042): reader.read() con límite, sin Response(...).arrayBuffer()', () => {
+    const cuerpo = [
+      "const flujo = new Blob([ab]).stream().pipeThrough(new DecompressionStream('deflate-raw'));",
+      'const reader = flujo.getReader();',
+      'for (;;) { const { value, done } = await reader.read(); if (done) break; total += value.length; if (total > limite) { await reader.cancel(); throw new DocxError("x"); } }'
+    ].join('\n');
+    assert.match(cuerpo, patronDecompression);
+    assert.doesNotMatch(cuerpo, patronMaterializar);
+  });
+
+  test('un fichero sin ninguna DecompressionStream no se analiza (no hay nada que acotar)', () => {
+    const cuerpo = 'const buf = await new Response(flujo).arrayBuffer();';
+    assert.doesNotMatch(cuerpo, patronDecompression);
+  });
+
+  test('sobre el repo real no encuentra nada: src/convert/docx/zip.ts ya lee en streaming acotado', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega

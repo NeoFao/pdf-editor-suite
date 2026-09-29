@@ -866,6 +866,49 @@ export const sinCronometrajeEnUnit = {
   }
 };
 
+/* ── E-042 · una DecompressionStream nunca se materializa entera de golpe ── */
+export const conDescompresionAcotada = {
+  id: 'docx-descomprimir-acotado',
+  titulo: 'ninguna DecompressionStream de src/convert se lee con new Response(...).arrayBuffer()',
+  comoArreglar:
+    'Lee el ReadableStream de salida con un bucle `reader.read()` que cuente los bytes ' +
+    'entregados y cancele el stream (`await reader.cancel()`) en cuanto el total supere ' +
+    'el límite declarado/presupuesto restante — nunca `new Response(flujo).arrayBuffer()` ' +
+    'ni `await new Response(flujo).blob()`, que descomprimen TODO de golpe antes de poder ' +
+    'comprobar nada. Una entrada cuya cabecera mienta un tamaño descomprimido pequeño, ' +
+    'pero cuyo deflate real produzca algo enorme, agotaba la memoria de la pestaña ' +
+    'DURANTE la descompresión, antes de que la comprobación de tamaño posterior pudiera ' +
+    'rechazarla (E-042). Ver `inflateAcotado` en src/convert/docx/zip.ts.',
+  ejecutar() {
+    const raizConvert = path.join(RAIZ, 'src/convert');
+    if (!fs.existsSync(raizConvert)) return [];
+    const hallazgos = [];
+    const patronDecompression = /\bnew\s+DecompressionStream\(/;
+    const patronMaterializar = /new\s+Response\([^)]*\)\s*\.\s*(arrayBuffer|blob|text)\s*\(/;
+    const recorrer = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { recorrer(full); continue; }
+        if (!e.name.endsWith('.ts')) continue;
+        const rel = path.relative(RAIZ, full).replace(/\\/g, '/');
+        if (tieneDeuda(rel, this.id)) continue;
+        const contenido = leer(rel);
+        if (!patronDecompression.test(contenido)) continue;
+        const exentas = lineasExentas(contenido, this.id);
+        contenido.split('\n').forEach((linea, i) => {
+          const n = i + 1;
+          if (exentas.has(n)) return;
+          if (patronMaterializar.test(linea)) {
+            hallazgos.push(hallazgo(rel, n, 'materializa la salida de un DecompressionStream entera con Response(...).arrayBuffer()/.blob()/.text() en vez de leerla en streaming con un límite'));
+          }
+        });
+      }
+    };
+    recorrer(raizConvert);
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -889,5 +932,6 @@ export const TODAS = [
   conAddFunctionConRemoveFunction,
   conMotorLoteEnBucle,
   conCapturasSinTransicionesEnCurso,
-  sinCronometrajeEnUnit
+  sinCronometrajeEnUnit,
+  conDescompresionAcotada
 ];
