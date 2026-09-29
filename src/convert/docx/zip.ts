@@ -34,12 +34,8 @@
  *   nombre/método: los datos comprimidos empiezan justo después.
  */
 
-export class DocxError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'DocxError';
-  }
-}
+export { DocxError } from './DocxError';
+import { DocxError } from './DocxError';
 
 const FIRMA_EOCD = 0x06054b50;
 const FIRMA_CD = 0x02014b50;
