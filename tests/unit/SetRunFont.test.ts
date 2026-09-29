@@ -12,7 +12,7 @@ async function sesion(): Promise<{ session: EditSession; runId: number }> {
   p.drawText('Texto de prueba', { x: 72, y: 120, size: 14, font: times, color: rgb(0.2, 0.4, 0.6) });
   const engine = await PdfiumEngine.create();
   const session = await EditSession.open(engine, await d.save());
-  const r = session.model.pages[0]!.runs[0]!;
+  const r = session.ensureText(0)[0]!;
   return { session, runId: r.runId };
 }
 
@@ -24,7 +24,7 @@ test('execute cambia la fuente y conserva el texto; el comando expone ok, fontNa
 
   expect(cmd.ok).toBe(true);
   expect(cmd.fontName).toBe('Courier-Bold');
-  const run = session.model.pages[0]!.runs.find((r) => r.runId === cmd.runId)!;
+  const run = session.ensureText(0).find((r) => r.runId === cmd.runId)!;
   expect(run.fontName).toContain('Courier');
   expect(run.text).toBe('Texto de prueba');
 });
@@ -38,7 +38,7 @@ test('undo (snapshot) restaura la fuente original', async () => {
 
   await bus.undo();
 
-  const runs = session.model.pages[0]!.runs;
+  const runs = session.ensureText(0);
   expect(runs).toHaveLength(1);
   expect(runs[0]!.fontName).not.toContain('Courier');
   expect(runs[0]!.text).toBe('Texto de prueba');
@@ -51,6 +51,6 @@ test('nombre fuera de la lista estándar: execute deja ok=false y no modifica el
 
   expect(cmd.ok).toBe(false);
   expect(cmd.fontName).toBeNull();
-  const runs = session.model.pages[0]!.runs;
+  const runs = session.ensureText(0);
   expect(runs[0]!.text).toBe('Texto de prueba');
 });

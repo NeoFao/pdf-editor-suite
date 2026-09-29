@@ -30,7 +30,7 @@ export class SetRunFontSizeCmd implements Command {
     this.ok = res.ok;
     if (res.ok) {
       this.runId = res.runId;
-      c.refresh();
+      c.refreshPage(this.pageIndex);
     }
   }
 

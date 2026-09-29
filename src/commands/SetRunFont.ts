@@ -31,7 +31,7 @@ export class SetRunFontCmd implements Command {
     if (res.ok) {
       this.fontName = res.fontName;
       this.runId = res.runId;
-      c.refresh();
+      c.refreshPage(this.pageIndex);
     }
   }
 

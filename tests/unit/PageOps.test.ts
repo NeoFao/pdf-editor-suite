@@ -29,8 +29,8 @@ test('eliminar página reduce el conteo; deshacer la restaura (snapshot)', async
   const bus = new CommandBus(s);
   await bus.execute(new DeletePageCmd(0));
   expect(s.model.pages.length).toBe(1);
-  expect(s.model.pages[0]!.runs.map((r) => r.text).join(' ')).toContain('DOS');
+  expect(s.ensureText(0).map((r) => r.text).join(' ')).toContain('DOS');
   await bus.undo();
   expect(s.model.pages.length).toBe(2);
-  expect(s.model.pages[0]!.runs.map((r) => r.text).join(' ')).toContain('UNO');
+  expect(s.ensureText(0).map((r) => r.text).join(' ')).toContain('UNO');
 });

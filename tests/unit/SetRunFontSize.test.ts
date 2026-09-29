@@ -12,7 +12,7 @@ async function sesion(): Promise<{ session: EditSession; runId: number }> {
   p.drawText('Texto de prueba', { x: 72, y: 120, size: 14, font: times, color: rgb(0.2, 0.4, 0.6) });
   const engine = await PdfiumEngine.create();
   const session = await EditSession.open(engine, await d.save());
-  const r = session.model.pages[0]!.runs[0]!;
+  const r = session.ensureText(0)[0]!;
   return { session, runId: r.runId };
 }
 
@@ -23,7 +23,7 @@ test('execute cambia el tamaño; el comando expone ok y el runId nuevo', async (
   await bus.execute(cmd);
 
   expect(cmd.ok).toBe(true);
-  const run = session.model.pages[0]!.runs.find((r) => r.runId === cmd.runId)!;
+  const run = session.ensureText(0).find((r) => r.runId === cmd.runId)!;
   expect(Math.round(run.sizePt)).toBe(24);
   expect(run.text).toBe('Texto de prueba');
 });
@@ -37,7 +37,7 @@ test('undo (snapshot) restaura el tamaño original', async () => {
 
   await bus.undo();
 
-  const runs = session.model.pages[0]!.runs;
+  const runs = session.ensureText(0);
   expect(runs).toHaveLength(1);
   expect(Math.round(runs[0]!.sizePt)).toBe(14);
   // También en el motor, no solo en la proyección del modelo.
@@ -51,6 +51,6 @@ test('invalid-size: execute deja ok=false y no modifica el documento', async () 
   cmd.execute(session);
 
   expect(cmd.ok).toBe(false);
-  const runs = session.model.pages[0]!.runs;
+  const runs = session.ensureText(0);
   expect(Math.round(runs[0]!.sizePt)).toBe(14);
 });

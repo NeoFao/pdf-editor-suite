@@ -6,6 +6,7 @@ import { ImageLayer } from './ImageLayer';
 import type { PtPoint } from '../coords/PageGeometry';
 import type { RectPt } from '../engine/PdfEngine';
 import { pathMasCercano, normalizeRect, type PathCandidate } from './toolGeometry';
+import { contarRenderPage } from '../diagnostico';
 
 const GAP = 16;
 
@@ -642,8 +643,16 @@ export class Viewer {
 
   private renderPage(i: number): void {
     const page = this.session.model.pages[i]!;
+    // Texto perezoso (E-043, docs/ERRORES-CONOCIDOS.md): esta es la primera
+    // vez que la página se pinta, así que es también el momento de cargar su
+    // texto (si no lo estaba ya) — `ensureText` cachea, así que una página
+    // que ya se vio no vuelve a pedirlo al motor. `page.runs` se muta EN
+    // SITIO (mismo objeto que `this.session.model.pages[i]`), así que
+    // `page` sigue viendo los runs recién cargados más abajo.
+    this.session.ensureText(i);
     const wrapper = this.wrappers[i]!;
     wrapper.textContent = '';
+    contarRenderPage();
     const { width, height, data } = this.session.engine.renderPage(this.session.doc, i, this.scale);
     const canvas = document.createElement('canvas');
     canvas.width = width; canvas.height = height;

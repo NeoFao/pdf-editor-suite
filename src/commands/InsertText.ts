@@ -12,7 +12,7 @@ export class InsertTextCmd implements Command {
   execute(c: Ctx): void {
     this.before = c.engine.save(c.doc);
     c.engine.insertText(c.doc, this.pageIndex, this.spec);
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
 
   async undo(c: Ctx): Promise<void> {

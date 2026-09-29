@@ -53,7 +53,7 @@ export class FiltrarPaginaCmd implements Command {
       // bytes lo descarta.
       await c.reload(c.engine.save(c.doc));
     } else {
-      c.refresh();
+      c.refreshPage(this.pageIndex);
     }
   }
 

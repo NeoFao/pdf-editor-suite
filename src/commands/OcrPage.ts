@@ -33,7 +33,7 @@ export class OcrPageCmd implements Command {
     // carga la página una vez y regenera el contenido una sola vez al final.
     c.engine.applyPageOps(c.doc, this.pageIndex, specs.map((spec) => ({ type: 'insertText' as const, spec })));
     this.recognized = specs.length;
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
 
   async undo(c: Ctx): Promise<void> {

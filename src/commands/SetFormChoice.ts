@@ -22,7 +22,7 @@ export class SetFormChoiceCmd implements Command {
 
   private aplicar(c: Ctx, values: string[]): void {
     c.engine.setFormChoice(c.doc, this.pageIndex, this.annotIndex, values);
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
 
   execute(c: Ctx): void { this.aplicar(c, this.newValues); }

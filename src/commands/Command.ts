@@ -11,7 +11,10 @@ export interface Ctx {
   readonly doc: DocHandle;
   readonly model: DocumentModel;
   reload(bytes: Uint8Array): Promise<void>;
+  /** Reconstruye TODAS las páginas del modelo (perezoso en texto) — solo para comandos que cambian el CONJUNTO de páginas (borrar/mover/duplicar/insertar). */
   refresh(): void;
+  /** Reconstruye SOLO `pageIndex` (tamaño, rotación, texto) — para comandos que tocan una única página existente (E-043/E-044, docs/ERRORES-CONOCIDOS.md). */
+  refreshPage(pageIndex: number): void;
 }
 
 export interface Command {

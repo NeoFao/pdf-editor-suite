@@ -1552,6 +1552,204 @@ no solo al declarar.
 
 ---
 
+### E-043 · Abrir un documento grande leía el texto y pintaba las miniaturas de las 500 páginas de golpe
+
+**Síntoma.** Todas las fixtures de la app nueva tenían 1-4 páginas — muy por
+debajo de un contrato o manual real (300-1000 páginas), que Acrobat abre al
+instante. Con un documento de 500 páginas (`grande.pdf`, fixture nueva): la
+interfaz tardaba más de un segundo en volverse usable, "Guardar" quedaba
+disponible pero el panel de miniaturas se construía entero antes de que el
+usuario pudiera hacer nada, y la memoria del proceso era casi el doble de lo
+necesario para lo que de verdad estaba en pantalla.
+
+**Causa raíz (dos mecanismos independientes, medidos por separado).**
+
+1. `EditSession.buildPages()` (`src/model/EditSession.ts`) llamaba a
+   `engine.getPageText(doc, i)` — la operación más cara por página del motor
+   (recorre cada objeto de texto de la página y lee varias cadenas de
+   PDFium por cada uno, E-028) — para **todas** las páginas, tanto al abrir
+   el documento como en cada `refresh()`. El usuario solo puede editar o
+   buscar en las páginas que ha visto: pedir el texto de las 500 al simple
+   abrir es trabajo que casi nunca hace falta.
+2. `App.buildThumbnails()` (`src/ui/App.ts`) llamaba a `engine.renderPage()`
+   — la otra operación cara del motor — para **todas** las páginas al
+   construir el panel de miniaturas, de forma síncrona, antes de que el
+   panel pudiera ni pintarse. El visor principal (`Viewer.renderVisible()`)
+   ya era perezoso desde antes (solo pinta las páginas visibles, gracias al
+   `IntersectionObserver` de E-032) — el defecto estaba solo en las
+   miniaturas y en el texto.
+
+**Medido antes del arreglo** (motor real y Chromium real, `grande.pdf`, 500
+páginas A4 con texto único por página):
+
+| Medida | Antes |
+|---|---|
+| `EditSession.buildPages()` en Node (motor real) | 500 `getPageText`, 500 `pageSize`, 500 `pageRotation`, ~124-158 ms |
+| Tiempo hasta que `.run` es visible (navegador) | ~1432 ms |
+| Tiempo hasta que las 500 miniaturas terminan de pintarse | ~1461 ms (prácticamente junto con lo anterior: bloquea la apertura) |
+| `<canvas>` de miniatura con bitmap pintado al abrir | 500 |
+| `<canvas>` de página pintados en el visor principal | 2 (ya era perezoso) |
+| Memoria aproximada (`performance.memory`) | ~98 MB |
+
+**Arreglo.**
+
+- **Texto perezoso.** `EditSession.buildPages()` deja `runs: []` sin cargar;
+  el nuevo `EditSession.ensureText(pageIndex)` lo carga del motor la primera
+  vez que de verdad hace falta y lo cachea en `model.pages[i].runs` — nunca
+  dos veces la misma página sin invalidarla antes. `Viewer.renderPage()`
+  llama a `ensureText()` justo antes de construir la `TextLayer` de esa
+  página (la primera vez que se pinta es también la primera vez que hace
+  falta su texto). Búsqueda y "Texto…"/Exportar Markdown (`App.search()`,
+  `App.allPagesLineas()`) pasan también por `ensureText()`, así que una
+  página ya vista en el visor no se vuelve a leer del motor. Único sitio de
+  `src/` (fuera del propio motor) con permiso para llamar a
+  `engine.getPageText()` — regla `texto-perezoso-via-editsession`, más
+  abajo.
+- **Miniaturas perezosas.** `App.buildThumbnails()` crea un `<canvas>`
+  PLACEHOLDER por página — con `width`/`height` ya fijados a partir de
+  `page.sizePt` (la proporción real de la página, **sin** llamar al motor),
+  así que el panel mide su scroll exacto desde el primer instante, sin
+  saltos — y un `IntersectionObserver` (`observeThumbs`, `rootMargin:
+  '600px 0px'` como margen por delante) pinta el bitmap real
+  (`renderThumb`) la primera vez que la miniatura entra o casi entra en el
+  viewport del panel. `maybeEvictFarThumbs` descarta (vuelve a placeholder)
+  las miniaturas pintadas más antiguas por encima de 120 a la vez —salvo
+  las que sigan cerca de la que se acaba de pintar— para que pasearse por
+  un documento de 500 páginas no acumule 500 bitmaps en memoria; las
+  descartadas se vuelven a observar, así que se repintan solas si el
+  usuario regresa a esa zona.
+- **Operaciones de documento completo ceden el hilo.** Búsqueda
+  (`App.search()`) y "Texto…"/Exportar Markdown (`App.allPagesLineas()`)
+  recorren TODAS las páginas por diseño (no hay forma perezosa de
+  "buscar en una página que no se ha mirado"): en un documento de cientos
+  de páginas, hacerlo de una sentada bloquearía el hilo principal. Ambas
+  ceden el hilo cada `PAGE_YIELD_CHUNK` (20) páginas
+  (`await new Promise(resolve => setTimeout(resolve, 0))`, función
+  `cederHilo()`) e informan el avance en `#status` ("Buscando… 120/500").
+  `search()` además guarda un `searchSeq` creciente: si el usuario teclea
+  de nuevo antes de que termine, la búsqueda vieja se abandona sin pintar
+  sus resultados — la "cancelación" de esta operación (no hay forma de
+  abortar `findText` a media página, pero dejar de continuar el bucle y de
+  aplicar el resultado es equivalente desde fuera). `Comprimir documento`
+  no se tocó en este PR: sigue siendo una operación de documento completo
+  sin ceder el hilo — mejora futura, fuera de alcance porque además de
+  ceder necesitaría revisar su propio coste por imagen (recodificar JPEG),
+  no solo el bucle de páginas.
+
+**Medido después del arreglo** (mismas condiciones):
+
+| Medida | Después |
+|---|---|
+| `EditSession.open()` en Node (motor real) | 0 `getPageText` (500 `pageSize`/`pageRotation`, que son baratos y siguen eager), ~63 ms |
+| Tiempo hasta que `.run` es visible (navegador) | ~417 ms (antes ~1432 ms) |
+| `window.__diagnostico.renderPage` tras abrir (navegador) | 10 |
+| `window.__diagnostico.getPageText` tras abrir (navegador) | 2 |
+| `<canvas class="thumb">` en el DOM (placeholders, tamaño correcto) | 500 (sin cambio: la lista de páginas sigue siendo completa) |
+| Memoria aproximada | ~54 MB (antes ~98 MB) |
+
+**Diagnóstico para comprobarlo en un test.** `window.__diagnostico =
+{ renderPage, getPageText }` (`src/diagnostico.ts`) cuenta las llamadas
+reales a `engine.renderPage()`/`engine.getPageText()`. Apagado por defecto;
+se activa SOLO con `?diagnostico=1` en la URL
+(`activarDiagnosticoSiCorresponde()`, llamada una vez desde `main.ts`), para
+no dejar ningún rastro en producción.
+
+**Cómo se detecta ahora.**
+- `tests/e2e/next/documento-grande.spec.ts`, con la fixture nueva
+  `grande.pdf` (500 páginas, `tests/fixtures/generar-fixtures.mjs`): tras
+  abrir, `window.__diagnostico.renderPage`/`getPageText` están muy por
+  debajo de 500 (nunca 500 ni 1000); el diagnóstico está `undefined` sin
+  `?diagnostico=1`; saltar a la página 400 por miniatura pinta esa página y
+  el indicador dice "400 / 500"; las 500 miniaturas existen como
+  placeholders del tamaño correcto (`toHaveCount(500)`); buscar "Pagina 499"
+  encuentra la coincidencia y un `requestAnimationFrame` programado justo
+  al lanzar la búsqueda se ejecuta ANTES de que la búsqueda termine
+  (aserción estructural — quién gana la carrera entre dos promesas—, nunca
+  un umbral de milisegundos, AGENTS.md/E-040).
+- `tests/unit/EditSession.test.ts`: abrir un documento de N páginas no llama
+  a `getPageText` ni una vez (`vi.spyOn`); `ensureText` cachea (una sola
+  llamada al motor en dos lecturas seguidas de la misma página); `ensureText`
+  de una página no toca las demás; `invalidateText` fuerza una relectura.
+- Regla `texto-perezoso-via-editsession` (`scripts/guards/reglas.mjs`):
+  ningún fichero de `src/ui/**`/`src/commands/**` puede llamar a
+  `engine.getPageText()` directamente — solo `src/model/EditSession.ts`.
+
+---
+
+### E-044 · `refresh()` tras un comando de una sola página rehacía el documento entero
+
+**Síntoma.** Consecuencia directa de E-043, pero con un disparador distinto:
+no solo abrir un documento grande era lento, **cualquier comando** sobre él
+también lo era. Rotar la página 1 de un documento de 500 páginas tardaba
+más de un segundo — el mismo coste que abrir el documento entero otra vez —
+aunque el cambio visible fuera una sola página.
+
+**Causa raíz.** Casi todos los comandos de una sola página (`RotatePageCmd`,
+`InsertTextCmd`, `InsertImageCmd`, `HighlightRunCmd`, `SetRunFontCmd`,
+`SetFormTextCmd`, `MoveRunCmd`... 20 de los 25 comandos de `src/commands/`)
+terminaban su `execute()`/`undo()` con `c.refresh()` — que reconstruye el
+modelo de **todas** las páginas del documento (`EditSession.buildPages()`)
+— para notificar un cambio que en realidad afectaba a **una sola** página.
+Eso disparaba además `model.onReload()`, que en `App.ts` reconstruía las
+miniaturas de las 500 páginas otra vez (ver E-043). Antes del arreglo de
+E-043 esto significaba releer el texto de las 500 páginas Y repintar las
+500 miniaturas por cada rotación/inserción/resaltado — aunque E-043 se
+arregle solo, `refresh()` seguiría reconstruyendo el ARRAY de 500
+`PageModel` (barato, pero no gratis) y notificando `onReload`
+(reconstruir 500 placeholders de miniatura) por cada comando de una sola
+página.
+
+**Medido antes del arreglo** (motor real, Node, `grande.pdf`, "rotar la
+página 1"): la réplica exacta de lo que hacía `refresh()` — releer
+`pageSize`/`pageRotation`/`getPageText` de las 500 páginas — costaba
+~70-100 ms en Node (mucho más en el navegador, con el coste real de pintar
+500 miniaturas encima: ~1309 ms medidos en Chromium real).
+
+**Arreglo.** `Ctx.refreshPage(pageIndex)` (`src/commands/Command.ts`,
+implementado en `EditSession.refreshPage()`) reconstruye **solo** esa
+página (tamaño, rotación y texto — eager, porque es casi siempre la que el
+usuario tiene delante) y notifica el cambio con el alcance de esa única
+página: `DocumentModel.refreshPage()` emite `'change'` (pageIndex) —que
+`Viewer` y `App.refreshThumbnail()` ya sabían escuchar para repintar SOLO
+esa página/miniatura— y una señal nueva, `onPageRebuilt`, distinta de
+`'change'` a propósito: la usa `App.reconcileSelectionAfterReload()` (evita
+dejar la selección apuntando a un run que ya no existe tras rotar/insertar/
+cambiar fuente…, PR #51) sin dispararse también en cada pulsación al editar
+texto (`updateRunText`, que NO reindexa nada y por tanto no necesita
+reconciliar). Los 20 comandos de una sola página (`AddNote`, `DeleteObject`,
+`DeleteRun`, `DrawRect`, `DrawStroke`, `FiltrarPagina`, `HighlightRun`,
+`InsertImage`, `InsertText`, `MoveRun`, `OcrPage`, `ReplaceRunFont`,
+`RotatePage`, `SetColor`, `SetFormChecked/Choice/Radio/Text`,
+`SetObjectRect`, `SetRunFont`, `SetRunFontSize`, `StrikethroughRun`,
+`UnderlineRun`) pasan a `c.refreshPage(this.pageIndex)`. `MoveRunCmd`/
+`SetColorCmd` además dejan de llamar a `engine.getPageText()` por su cuenta
+(saltándose el caché) y pasan por el mismo `refreshPage()`. Los 4 comandos
+que SÍ cambian el CONJUNTO de páginas (`DeletePage`, `MovePage`,
+`DuplicatePage`, `InsertPdf`) conservan `c.refresh()`: sus índices
+posteriores se desplazan de verdad.
+
+**Medido después del arreglo** (motor real, Node, API real de
+`EditSession`): `refreshPage(0)` tras rotar la página 1 de `grande.pdf` —
+1 `getPageText`, 1 `pageSize`, 1 `pageRotation`, ~3 ms (antes: 500/500/500,
+~70-100 ms en Node). En Chromium real, con `?diagnostico=1`: rotar la
+página 1 cuesta 3 `renderPage` y 1 `getPageText` de más (antes: 500/500).
+
+**Cómo se detecta ahora.**
+- `tests/unit/EditSession.test.ts`: `refreshPage(i)` recarga solo la
+  página `i` (una sola llamada a `getPageText`, espiada) y no toca el
+  texto ya cacheado de otras páginas; notifica `'change'` con el
+  `pageIndex` correcto y `onPageRebuilt` (sin tocar las demás páginas).
+- `tests/e2e/next/documento-grande.spec.ts`: rotar la página 1 de
+  `grande.pdf` no aumenta `window.__diagnostico.renderPage`/`getPageText`
+  más que un puñado (nunca 500).
+- Toda la suite `tests/e2e/next/*.spec.ts` existente sigue en verde
+  (miniaturas, marcadores, E-032 de página actual, arrastrar miniaturas,
+  deshacer/rehacer de fuente y tamaño — PR #51/E-043 arriba— formularios,
+  filtros, OCR…): el cambio de `refresh()` a `refreshPage()` no altera
+  ningún comportamiento observable, solo su coste.
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que

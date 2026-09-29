@@ -17,7 +17,7 @@ export class DrawStrokeCmd implements Command {
   execute(c: Ctx): void {
     this.before = c.engine.save(c.doc);
     c.engine.drawStroke(c.doc, this.pageIndex, this.points, this.color, this.widthPt);
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
   async undo(c: Ctx): Promise<void> { if (this.before) await c.reload(this.before); }
 }

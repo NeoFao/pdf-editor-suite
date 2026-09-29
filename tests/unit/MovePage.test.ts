@@ -12,7 +12,7 @@ test('reordenar actualiza el modelo; deshacer revierte', async () => {
   const engine = await PdfiumEngine.create();
   const s = await EditSession.open(engine, await d.save());
   const bus = new CommandBus(s);
-  const t0 = () => s.model.pages[0]!.runs.map((r) => r.text).join(' ');
+  const t0 = () => s.ensureText(0).map((r) => r.text).join(' ');
 
   await bus.execute(new MovePageCmd(0, 1));
   expect(t0()).toContain('DOS');

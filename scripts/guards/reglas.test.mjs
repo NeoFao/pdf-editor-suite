@@ -609,6 +609,26 @@ describe('docx-descomprimir-acotado', () => {
   });
 });
 
+describe('texto-perezoso-via-editsession', () => {
+  const regla = detectarEn('texto-perezoso-via-editsession');
+  const patron = /\.getPageText\(/;
+
+  test('detecta una llamada directa a engine.getPageText() fuera de EditSession', () => {
+    const linea = 'return s.model.pages.map((page) => agruparLineas(s.engine.getPageText(s.doc, page.index)));';
+    assert.match(linea, patron);
+    assert.ok(regla.comoArreglar.includes('ensureText'));
+  });
+
+  test('no señala session.ensureText(pageIndex), el reemplazo correcto', () => {
+    const linea = 'out.push(agruparLineas(s.ensureText(pages[i].index)));';
+    assert.doesNotMatch(linea, patron);
+  });
+
+  test('sobre el repo real no encuentra nada: la UI y los comandos ya pasan por ensureText/refreshPage', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega

@@ -21,7 +21,7 @@ export class SetFormRadioCmd implements Command {
 
   execute(c: Ctx): void {
     c.engine.setFormRadio(c.doc, this.pageIndex, this.annotIndex);
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
 
   undo(c: Ctx): void {
@@ -30,6 +30,6 @@ export class SetFormRadioCmd implements Command {
     } else {
       c.engine.clearFormRadio(c.doc, this.pageIndex, this.annotIndex);
     }
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
 }
