@@ -392,6 +392,62 @@ describe('heapu8-siempre-getter', () => {
   });
 });
 
+describe('addfunction-con-removefunction', () => {
+  const regla = detectarEn('addfunction-con-removefunction');
+  // Reproduce el recuento por fichero de la regla (mismo patrón que ejecutar()).
+  function contarSinLiberar(contenido) {
+    let abre = 0, cierra = 0;
+    for (const linea of contenido.split('\n')) {
+      if (/\.addFunction\(/.test(linea)) abre++;
+      if (/\.removeFunction\(/.test(linea)) cierra++;
+    }
+    return abre - cierra;
+  }
+
+  test('detecta el patrón exacto de E-036: addFunction() sin removeFunction() en el finally', () => {
+    const cuerpo = [
+      '  save(doc) {',
+      '    const cb = this.mem.addFunction((a, b, c) => { chunks.push(c); return 1; }, "iiii");',
+      '    const fw = this.mem.malloc(8);',
+      '    try {',
+      '      this.p.FPDF_SaveAsCopy(doc, fw, 0);',
+      '    } finally {',
+      '      this.mem.free(fw);',
+      '    }',
+      '  }'
+    ].join('\n');
+    assert.equal(contarSinLiberar(cuerpo), 1, 'un addFunction() sin su removeFunction() debe contar como fuga');
+    assert.ok(regla.comoArreglar.includes('removeFunction'));
+  });
+
+  test('acepta addFunction() con su removeFunction() en el finally (arreglo de E-036 y patrón ya usado por replaceImageJpeg)', () => {
+    const cuerpo = [
+      '  save(doc) {',
+      '    const cb = this.mem.addFunction((a, b, c) => { chunks.push(c); return 1; }, "iiii");',
+      '    const fw = this.mem.malloc(8);',
+      '    try {',
+      '      this.p.FPDF_SaveAsCopy(doc, fw, 0);',
+      '    } finally {',
+      '      this.mem.free(fw);',
+      '      this.mem.removeFunction(cb);',
+      '    }',
+      '  }'
+    ].join('\n');
+    assert.equal(contarSinLiberar(cuerpo), 0);
+  });
+
+  test('el wrapper de mem.ts (delega, no reserva slot propio) no cuenta como sitio a vigilar', () => {
+    assert.deepEqual(
+      regla.ejecutar().filter((h) => h.archivo === 'src/engine/pdfium/mem.ts'),
+      []
+    );
+  });
+
+  test('sobre el repo real no encuentra nada: save() y replaceImageJpeg() liberan su addFunction() en el finally', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega

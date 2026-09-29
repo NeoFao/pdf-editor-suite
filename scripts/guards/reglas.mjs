@@ -657,6 +657,74 @@ export const conHeapU8Getter = {
   }
 };
 
+/* ── E-036 · addFunction() de PDFium sin removeFunction() ──────────────── */
+export const conAddFunctionConRemoveFunction = {
+  id: 'addfunction-con-removefunction',
+  titulo: 'todo addFunction() de PDFium en src/engine tiene su removeFunction()',
+  comoArreglar:
+    'Llama a mem.removeFunction(cb) en el finally del método, igual que ya hace ' +
+    'replaceImageJpeg(). Cada addFunction() reserva un slot nuevo de la tabla de ' +
+    'funciones indirectas de WASM; esa tabla no tiene recolector de basura, así que un ' +
+    'slot sin liberar queda ocupado para siempre. save() se llama en cada comando con ' +
+    'deshacer por snapshot, así que una fuga ahí crece sin límite en cualquier sesión de ' +
+    'edición larga y, según cómo esté compilado el módulo, puede acabar lanzando al ' +
+    'agotar la tabla (E-036). Si el callback tiene que vivir más que una llamada (por ' +
+    'ejemplo, cacheado una vez por instancia del motor y reutilizado), documenta en un ' +
+    'comentario junto al addFunction() por qué no hace falta liberarlo ahí y cuándo se ' +
+    'libera de verdad — un guard-disable-next-line normal no vale para eso porque no ' +
+    'deja constancia de CUÁNDO se libera, solo de que no se libera ahí.',
+  ejecutar() {
+    const raizEngine = path.join(RAIZ, 'src/engine');
+    if (!fs.existsSync(raizEngine)) return [];
+    const hallazgos = [];
+    // Heurística por FICHERO, no por método: contar addFunction( y
+    // removeFunction( en todo el fichero. Más simple que trocear el cuerpo de
+    // cada método (el resto del repo no tiene un parser de límites de método
+    // reutilizable) y suficiente para el patrón real de E-036 — hoy solo hay
+    // dos sitios en todo src/ que llaman a addFunction(), ambos en el mismo
+    // fichero (PdfiumEngine.ts) y cada uno con su propio removeFunction() en
+    // su propio finally. Límite conocido: si un fichero tuviera DOS métodos
+    // con addFunction() y solo uno de los dos liberase el suyo dos veces, el
+    // recuento por fichero no lo distinguiría de "los dos están bien". Ese
+    // caso no existe hoy (ver arriba) y, si aparece, la revisión humana del
+    // PR que lo añada es la defensa — igual que el propio gesto-con-
+    // cancelacion depende de revisión humana dentro de gesto.ts.
+    // El propio wrapper de mem.ts (`addFunction: (fn, sig) => m.addFunction(fn, sig)`)
+    // no reserva ningún slot por sí mismo: solo delega la llamada de quien sí
+    // lo hace, así que no cuenta como sitio a vigilar.
+    const permitido = 'src/engine/pdfium/mem.ts';
+    const recorrer = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { recorrer(full); continue; }
+        if (!e.name.endsWith('.ts')) continue;
+        const rel = path.relative(RAIZ, full).replace(/\\/g, '/');
+        if (rel === permitido) continue;
+        if (tieneDeuda(rel, this.id)) continue;
+        const contenido = leer(rel);
+        const exentas = lineasExentas(contenido, this.id);
+        let abre = 0;
+        let cierra = 0;
+        let primeraLineaAddFunction = null;
+        contenido.split('\n').forEach((linea, i) => {
+          const n = i + 1;
+          if (/\.addFunction\(/.test(linea)) {
+            if (exentas.has(n)) return;
+            abre++;
+            if (primeraLineaAddFunction === null) primeraLineaAddFunction = n;
+          }
+          if (/\.removeFunction\(/.test(linea)) cierra++;
+        });
+        if (abre > cierra) {
+          hallazgos.push(hallazgo(rel, primeraLineaAddFunction, `${abre} llamada(s) a addFunction() y solo ${cierra} a removeFunction() en el fichero`));
+        }
+      }
+    };
+    recorrer(raizEngine);
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -676,5 +744,6 @@ export const TODAS = [
   conNavegacionPorGoToPage,
   conWebServerNextSinReusar,
   conGestoConCancelacion,
-  conHeapU8Getter
+  conHeapU8Getter,
+  conAddFunctionConRemoveFunction
 ];

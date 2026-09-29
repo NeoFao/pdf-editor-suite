@@ -1582,6 +1582,12 @@ export class PdfiumEngine implements PdfEngine {
 
   save(doc: DocHandle): Uint8Array<ArrayBuffer> {
     const chunks: Uint8Array[] = [];
+    // Igual que en replaceImageJpeg (§2.6, E-036): cada addFunction() ocupa
+    // un slot nuevo de la tabla de funciones indirectas de WASM hasta que se
+    // libera con removeFunction(). save() se llama muchísimo (cada comando
+    // con deshacer por snapshot, además de exportar), así que sin el
+    // removeFunction en el finally la tabla crece sin límite en cualquier
+    // sesión de edición larga.
     const cb = this.mem.addFunction((_pThis: number, pData: number, size: number): number => {
       chunks.push(Uint8Array.from(this.mem.HEAPU8.subarray(pData, pData + size)));
       return 1;
@@ -1593,6 +1599,7 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDF_SaveAsCopy(doc, fw, 0);
     } finally {
       this.mem.free(fw);
+      this.mem.removeFunction(cb);
     }
     const total = chunks.reduce((s, c) => s + c.length, 0);
     const out = new Uint8Array(total);
