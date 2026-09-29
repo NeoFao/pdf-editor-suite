@@ -202,6 +202,29 @@ export interface PdfEngine {
   insertText(doc: DocHandle, pageIndex: number, spec: InsertTextSpec): number;
   /** Inserta una imagen (RGBA) en la página, colocada en el rectángulo dado. */
   insertImage(doc: DocHandle, pageIndex: number, spec: InsertImageSpec): boolean;
+  /**
+   * Objetos de página de tipo imagen (`FPDF_PAGEOBJ_IMAGE`), con su caja
+   * actual en puntos PDF (`FPDFPageObj_GetBounds`). Base del marco
+   * interactivo del sello/firma insertados (#20/#21 de la tabla de
+   * paridad): seleccionar, mover y redimensionar una imagen ya colocada.
+   */
+  listImageObjects(doc: DocHandle, pageIndex: number): { objIndex: number; rectPt: RectPt }[];
+  /**
+   * Coloca el objeto IMAGEN en `objIndex` exactamente en `rectPt`: fija su
+   * matriz a `[wPt 0 0 hPt xPt yPt]`, que mapea el cuadrado unidad en el que
+   * se define toda imagen (ver `insertImage`) al rectángulo dado. Fase 1:
+   * solo imágenes sin rotación/sesgo — si la matriz actual del objeto tiene
+   * b≠0 o c≠0, no la toca y devuelve `false` (para conservar esa rotación
+   * habría que componerla en la matriz nueva en vez de sustituirla, fuera de
+   * alcance de esta fase). `false` también si `objIndex` no es una imagen.
+   */
+  setObjectRect(doc: DocHandle, pageIndex: number, objIndex: number, rectPt: RectPt): boolean;
+  /**
+   * Elimina el objeto de página en `objIndex` (de cualquier tipo:
+   * `FPDFPage_RemoveObject` + `FPDFPageObj_Destroy`). Reindexa los objetos
+   * posteriores, igual que `deleteRun`. `false` si el índice no existe.
+   */
+  deleteObject(doc: DocHandle, pageIndex: number, objIndex: number): boolean;
   /** Añade un resaltado (rectángulo de color, blend Multiply) sobre la caja dada. */
   highlightRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean;
   /**

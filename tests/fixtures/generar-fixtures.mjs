@@ -45,6 +45,33 @@ function pngSolido(w, h, [r, g, b]) {
   return Buffer.concat([sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', zlib.deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
 }
 
+/**
+ * PNG RGBA de una "firma" sobre fondo blanco opaco: un trazo negro diagonal
+ * (grosor unos pocos píxeles) sobre fondo blanco puro. Para el test E2E de
+ * "firma desde imagen quitando el fondo" (#20 de la tabla de paridad): el
+ * fondo blanco debe desaparecer (quitarFondo) y el trazo negro conservarse.
+ */
+function pngFirma(w, h) {
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 6; // 8 bits, color tipo 6 (RGBA)
+  const raw = Buffer.alloc(h * (1 + w * 4));
+  const grosor = Math.max(2, Math.round(Math.min(w, h) * 0.08));
+  for (let y = 0; y < h; y++) {
+    const off = y * (1 + w * 4); raw[off] = 0; // filtro none
+    for (let x = 0; x < w; x++) {
+      const p = off + 1 + x * 4;
+      // Trazo diagonal: negro cerca de la línea x/w === y/h, blanco el resto.
+      const distancia = Math.abs(x / w - y / h) * Math.min(w, h);
+      const trazo = distancia < grosor;
+      const val = trazo ? 0 : 255;
+      raw[p] = val; raw[p + 1] = val; raw[p + 2] = val; raw[p + 3] = 255;
+    }
+  }
+  return Buffer.concat([sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', zlib.deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
+}
+
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SALIDA = path.join(AQUI, 'generados');
 
@@ -346,7 +373,8 @@ async function main() {
     'outline-ciclo.pdf': await pdfOutlineCiclo(),
     'paginas-pequenas.pdf': await pdfPaginasPequenas(),
     'paginas-pequenas-marcadores.pdf': await pdfPaginasPequenasMarcadores(),
-    'rojo.png': pngSolido(16, 16, [255, 0, 0])
+    'rojo.png': pngSolido(16, 16, [255, 0, 0]),
+    'firma-blanca.png': pngFirma(120, 60)
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {
     fs.writeFileSync(path.join(SALIDA, nombre), bytes);

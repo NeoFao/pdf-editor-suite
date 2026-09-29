@@ -4,6 +4,7 @@ import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
 import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
+const FPDF_PAGEOBJ_IMAGE = 3;
 const FPDF_ANNOT_TEXT = 1;    // FPDF_ANNOTATION_SUBTYPE: nota adhesiva ("sticky note")
 const FPDF_ANNOT_FLAG = 0x01; // flag de FPDF_RenderPageBitmap: pinta también las anotaciones
 const FPDFANNOT_COLORTYPE_Color = 0;
@@ -752,6 +753,79 @@ export class PdfiumEngine implements PdfEngine {
       return true;
     } finally {
       this.p.FPDFBitmap_Destroy(bmp);
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /** Objetos de página de tipo imagen, con su caja actual (puntos PDF, de `FPDFPageObj_GetBounds`). */
+  listImageObjects(doc: DocHandle, pageIndex: number): { objIndex: number; rectPt: RectPt }[] {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const m = this.mem;
+    const out: { objIndex: number; rectPt: RectPt }[] = [];
+    try {
+      const n = this.p.FPDFPage_CountObjects(page);
+      for (let i = 0; i < n; i++) {
+        const obj = this.p.FPDFPage_GetObject(page, i);
+        if (this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_IMAGE) continue;
+        const l = m.malloc(4), bo = m.malloc(4), ri = m.malloc(4), to = m.malloc(4);
+        this.p.FPDFPageObj_GetBounds(obj, l, bo, ri, to);
+        const left = m.getValue(l, 'float'), bottom = m.getValue(bo, 'float');
+        const right = m.getValue(ri, 'float'), top = m.getValue(to, 'float');
+        [l, bo, ri, to].forEach((ptr) => m.free(ptr));
+        out.push({ objIndex: i, rectPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom } });
+      }
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+    return out;
+  }
+
+  /**
+   * Fija la matriz del objeto IMAGEN en `objIndex` a `[wPt 0 0 hPt xPt yPt]`
+   * (mismo mapeo del cuadrado unidad que usa `insertImage`). Fase 1: si la
+   * matriz actual tiene rotación/sesgo (b≠0 o c≠0), no la toca — devuelve
+   * `false` sin modificar nada, documentado en el contrato de `PdfEngine`.
+   */
+  setObjectRect(doc: DocHandle, pageIndex: number, objIndex: number, rectPt: RectPt): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const m = this.mem;
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, objIndex);
+      if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_IMAGE) return false;
+
+      const getBuf = m.malloc(24);
+      this.p.FPDFPageObj_GetMatrix(obj, getBuf);
+      const b = m.getValue(getBuf + 4, 'float');
+      const c = m.getValue(getBuf + 8, 'float');
+      m.free(getBuf);
+      if (Math.abs(b) > 1e-6 || Math.abs(c) > 1e-6) return false; // rotada/sesgada: fuera de alcance de esta fase
+
+      const setBuf = m.malloc(24);
+      const vals = [rectPt.wPt, 0, 0, rectPt.hPt, rectPt.xPt, rectPt.yPt];
+      vals.forEach((v, i) => m.setValue(setBuf + i * 4, v, 'float'));
+      this.p.FPDFPageObj_SetMatrix(obj, setBuf);
+      m.free(setBuf);
+      this.p.FPDFPage_GenerateContent(page);
+      return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /** Elimina el objeto de página en `objIndex` (cualquier tipo). RemoveObject transfiere la propiedad al llamante: hay que destruirlo (igual que deleteRun). */
+  deleteObject(doc: DocHandle, pageIndex: number, objIndex: number): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, objIndex);
+      if (!obj) return false;
+      if (!this.p.FPDFPage_RemoveObject(page, obj)) return false;
+      this.p.FPDFPageObj_Destroy(obj);
+      this.p.FPDFPage_GenerateContent(page);
+      return true;
+    } finally {
       this.p.FPDF_ClosePage(page);
     }
   }
