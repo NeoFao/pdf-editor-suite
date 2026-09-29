@@ -26,18 +26,41 @@ import { HighlightRunCmd } from '../commands/HighlightRun';
 import { UnderlineRunCmd } from '../commands/UnderlineRun';
 import { StrikethroughRunCmd } from '../commands/StrikethroughRun';
 import { DrawStrokeCmd } from '../commands/DrawStroke';
+import { DrawRectCmd } from '../commands/DrawRect';
 import { OcrPageCmd } from '../commands/OcrPage';
 import { TesseractOcr } from '../ocr/TesseractOcr';
 import { SignaturePad } from './SignaturePad';
 import { quitarFondo } from './quitarFondo';
 import { registrarGesto } from './gesto';
 import { parseRange } from './pageRange';
-import { Viewer } from './Viewer';
+import { Viewer, type ToolMode } from './Viewer';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
 import type { RectPt, OutlineItem } from '../engine/PdfEngine';
 import { STANDARD_FONTS } from '../engine/standardFontFor';
 import { stripSubsetPrefix } from '../engine/fontClassify';
+
+/** Paleta de #swatches (#18 de la tabla de paridad): 8 colores fijos + el selector personalizado `#tool-color`. */
+const PALETTE: { color: string; label: string }[] = [
+  { color: '#000000', label: 'Negro' },
+  { color: '#dc1414', label: 'Rojo' },
+  { color: '#2563eb', label: 'Azul' },
+  { color: '#16a34a', label: 'Verde' },
+  { color: '#facc15', label: 'Amarillo' }, // mismo amarillo que ya usa el resaltado de búsqueda (Viewer.drawHighlights)
+  { color: '#f97316', label: 'Naranja' },
+  { color: '#9333ea', label: 'Morado' },
+  { color: '#6b7280', label: 'Gris' }
+];
+
+/** Mensaje de `#status` por herramienta activa (§1: `setTool` es el único punto de entrada). */
+const TOOL_STATUS: Record<ToolMode, string> = {
+  none: '',
+  insert: 'Modo insertar: haz clic donde quieras el texto.',
+  pen: 'Modo pluma: arrastra para dibujar.',
+  note: 'Modo nota: haz clic donde quieras la nota.',
+  rect: 'Modo rectángulo: arrastra para dibujarlo.',
+  eraser: 'Modo borrador: haz clic sobre un trazo o un rectángulo para borrarlo.'
+};
 
 /** Orquesta motor + sesión + comandos + visor. Punto de entrada de la app nueva. */
 export class App {
@@ -45,9 +68,17 @@ export class App {
   private session: EditSession | null = null;
   private bus: CommandBus | null = null;
   private docName = 'documento.pdf';
-  private insertMode = false;
-  private penMode = false;
-  private noteMode = false;
+  /**
+   * Herramienta activa: `'none' | 'insert' | 'pen' | 'note' | 'rect' |
+   * 'eraser'`. Único punto de verdad — `setTool()` es la única función que lo
+   * cambia, así los modos son excluyentes POR CONSTRUCCIÓN (activar uno
+   * desactiva cualquier otro) y no por parejas de banderas a mano como antes
+   * (§1 del lote D de herramientas).
+   */
+  private tool: ToolMode = 'none';
+  /** Color de herramienta (§2, #18): usado por pluma, rectángulo y resaltado. Rojo por defecto (mismo que traía la pluma antes de unificarse). */
+  private toolColor: [number, number, number] = [220, 20, 20];
+  private swatchButtons: HTMLButtonElement[] = [];
   private selection: { pageIndex: number; runId: number } | null = null;
   /** Imagen seleccionada en el marco interactivo (sello/firma, #20/#21), o null. Mutuamente excluyente con `selection`. */
   private selectedImage: { pageIndex: number; objIndex: number } | null = null;
@@ -76,8 +107,11 @@ export class App {
   private readonly btnInsert: HTMLButtonElement;
   private readonly btnPen: HTMLButtonElement;
   private readonly btnNote: HTMLButtonElement;
+  private readonly btnRect: HTMLButtonElement;
+  private readonly btnEraser: HTMLButtonElement;
   private readonly btnOcr: HTMLButtonElement;
   private readonly colorInput: HTMLInputElement;
+  private readonly toolColorInput: HTMLInputElement;
   private readonly propsPanel: HTMLElement;
   private readonly propFont: HTMLSelectElement;
   private readonly propSize: HTMLInputElement;
@@ -101,7 +135,7 @@ export class App {
     openImg.type = 'file'; openImg.accept = 'image/*'; openImg.id = 'btn-open-image'; openImg.title = 'Abrir una imagen como PDF';
     openImg.addEventListener('change', () => { const f = openImg.files?.[0]; if (f) void this.openImage(f).finally(() => { openImg.value = ''; }); });
 
-    this.btnInsert = this.button('Insertar texto', 'btn-insert', () => this.toggleInsert());
+    this.btnInsert = this.button('Insertar texto', 'btn-insert', () => this.setTool(this.tool === 'insert' ? 'none' : 'insert'));
     const btnDelete = this.button('Borrar', 'btn-delete', () => this.deleteSelected());
     const btnHighlight = this.button('Resaltar', 'btn-highlight', () => this.highlightSelected());
     const btnUnderline = this.button('Subrayar', 'btn-underline', () => this.underlineSelected());
@@ -114,13 +148,49 @@ export class App {
       const f = signUpload.files?.[0];
       if (f) void this.handleSignUpload(f).finally(() => { signUpload.value = ''; });
     });
-    this.btnPen = this.button('Pluma', 'btn-pen', () => this.togglePen());
-    this.btnNote = this.button('Nota', 'btn-note', () => this.toggleNote());
+    this.btnPen = this.button('Pluma', 'btn-pen', () => this.setTool(this.tool === 'pen' ? 'none' : 'pen'));
+    this.btnNote = this.button('Nota', 'btn-note', () => this.setTool(this.tool === 'note' ? 'none' : 'note'));
+    this.btnRect = this.button('Rectángulo', 'btn-rect', () => this.setTool(this.tool === 'rect' ? 'none' : 'rect'));
+    this.btnEraser = this.button('Borrador', 'btn-eraser', () => this.setTool(this.tool === 'eraser' ? 'none' : 'eraser'));
     this.btnOcr = this.button('OCR', 'btn-ocr', () => void this.runOcr());
 
     this.colorInput = document.createElement('input');
-    this.colorInput.type = 'color'; this.colorInput.id = 'btn-color'; this.colorInput.title = 'Color de la línea seleccionada';
+    this.colorInput.type = 'color'; this.colorInput.id = 'btn-color'; this.colorInput.title = 'Color del texto (de la línea seleccionada)';
     this.colorInput.addEventListener('input', () => this.applyColor());
+
+    // Paleta de color de herramienta (§2, #18 de la tabla de paridad): pluma,
+    // rectángulo y resaltado la usan (`this.toolColor`). Deliberadamente
+    // distinta de `#btn-color` de arriba (que cambia el color del TEXTO ya
+    // en el documento, seleccionado): título explícito en cada una para que
+    // no se confundan.
+    const swatchesEl = document.createElement('div');
+    swatchesEl.id = 'swatches';
+    swatchesEl.title = 'Color de herramienta (pluma, rectángulo, resaltado)';
+    Object.assign(swatchesEl.style, { display: 'flex', gap: '3px', alignItems: 'center' });
+    const defaultHex = rgbToHex(...this.toolColor);
+    for (const { color, label } of PALETTE) {
+      const swatch = document.createElement('button');
+      swatch.type = 'button';
+      swatch.className = 'swatch';
+      swatch.dataset.color = color;
+      swatch.title = label;
+      swatch.setAttribute('aria-label', label);
+      const activo = color.toLowerCase() === defaultHex.toLowerCase();
+      swatch.setAttribute('aria-pressed', String(activo));
+      Object.assign(swatch.style, {
+        width: '18px', height: '18px', padding: '0', borderRadius: '3px', cursor: 'pointer',
+        background: color, border: activo ? '2px solid #111827' : '2px solid transparent'
+      });
+      swatch.addEventListener('click', () => this.setToolColor(hexToRgb(color), swatch));
+      swatchesEl.appendChild(swatch);
+      this.swatchButtons.push(swatch);
+    }
+    this.toolColorInput = document.createElement('input');
+    this.toolColorInput.type = 'color'; this.toolColorInput.id = 'tool-color';
+    this.toolColorInput.title = 'Color de herramienta (personalizado)';
+    this.toolColorInput.value = defaultHex;
+    this.toolColorInput.addEventListener('input', () => this.setToolColor(hexToRgb(this.toolColorInput.value)));
+    swatchesEl.appendChild(this.toolColorInput);
 
     // Panel de propiedades de la línea seleccionada (fuente, tamaño, color),
     // como en Acrobat. Vive dentro de la propia barra de herramientas —igual
@@ -194,7 +264,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, btnNew, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, signUpload, this.btnPen, this.btnNote, this.btnOcr, this.propsPanel, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnFitWidth, btnExtract, this.rangeInput, btnSplit, btnSave, btnPrint, btnUndo, btnRedo, this.status);
+    bar.append(file, btnNew, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, signUpload, this.btnPen, this.btnRect, this.btnEraser, this.btnNote, this.btnOcr, swatchesEl, this.propsPanel, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnFitWidth, btnExtract, this.rangeInput, btnSplit, btnSave, btnPrint, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -243,6 +313,11 @@ export class App {
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); void this.bus?.undo(); }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); void this.bus?.redo(); }
+      // Escape sale de cualquier herramienta activa (§1). No interfiere con el
+      // Escape que ya maneja TextLayer para cancelar una edición en curso: ese
+      // no pasa por aquí con ninguna herramienta activa (edición y modo
+      // herramienta no coinciden), y si `tool` ya es 'none' esto es un no-op.
+      if (e.key === 'Escape' && this.tool !== 'none') this.setTool('none');
       // Suprimir/Retroceso con una imagen seleccionada (#20/#21): solo si el
       // foco no está en un campo editable (contenteditable de un run, un
       // <input>/<textarea>/<select>) — si no, Backspace tendría que borrar
@@ -296,29 +371,41 @@ export class App {
     return b;
   }
 
-  private toggleInsert(): void {
-    this.insertMode = !this.insertMode;
-    if (this.insertMode && this.penMode) { this.penMode = false; this.btnPen.style.background = ''; this.viewer?.setPenMode(false); }
-    if (this.insertMode && this.noteMode) { this.noteMode = false; this.btnNote.style.background = ''; }
-    this.btnInsert.style.background = this.insertMode ? '#c7d2fe' : '';
-    this.setStatus(this.insertMode ? 'Modo insertar: haz clic donde quieras el texto.' : 'Modo insertar desactivado.');
+  /**
+   * Único punto de entrada para cambiar la herramienta activa (§1 del lote
+   * D): activa las capas del visor y los `aria-pressed`/estilo de los
+   * botones que le corresponden a `tool` y desactiva los de cualquier otra —
+   * los modos son excluyentes POR CONSTRUCCIÓN (un solo campo, un solo sitio
+   * que lo escribe), no por parejas de banderas puestas a mano como antes de
+   * este PR. Todo cambio de herramienta pasa por aquí: los propios botones,
+   * el manejador de Escape y `handleNote` (que se autodesactiva tras colocar
+   * una nota).
+   */
+  private setTool(tool: ToolMode): void {
+    this.tool = tool;
+    for (const [nombre, btn] of Object.entries(this.toolButtons()) as [Exclude<ToolMode, 'none'>, HTMLButtonElement][]) {
+      const activo = tool === nombre;
+      btn.setAttribute('aria-pressed', String(activo));
+      btn.style.background = activo ? '#c7d2fe' : '';
+    }
+    this.viewer?.setTool(tool);
+    this.setStatus(TOOL_STATUS[tool]);
   }
 
-  private togglePen(): void {
-    this.penMode = !this.penMode;
-    if (this.penMode && this.insertMode) { this.insertMode = false; this.btnInsert.style.background = ''; }
-    if (this.penMode && this.noteMode) { this.noteMode = false; this.btnNote.style.background = ''; }
-    this.btnPen.style.background = this.penMode ? '#c7d2fe' : '';
-    this.viewer?.setPenMode(this.penMode);
-    this.setStatus(this.penMode ? 'Modo pluma: arrastra para dibujar.' : 'Modo pluma desactivado.');
+  /** Botones de herramienta, para que `setTool` los recorra sin repetir la lista en cada sitio. */
+  private toolButtons(): Record<Exclude<ToolMode, 'none'>, HTMLButtonElement> {
+    return { insert: this.btnInsert, pen: this.btnPen, note: this.btnNote, rect: this.btnRect, eraser: this.btnEraser };
   }
 
-  private toggleNote(): void {
-    this.noteMode = !this.noteMode;
-    if (this.noteMode && this.insertMode) { this.insertMode = false; this.btnInsert.style.background = ''; }
-    if (this.noteMode && this.penMode) { this.penMode = false; this.btnPen.style.background = ''; this.viewer?.setPenMode(false); }
-    this.btnNote.style.background = this.noteMode ? '#c7d2fe' : '';
-    this.setStatus(this.noteMode ? 'Modo nota: haz clic donde quieras la nota.' : 'Modo nota desactivado.');
+  /** `#swatches`/`#tool-color`: fija el color de herramienta (§2, #18) y refleja la muestra activa. */
+  private setToolColor(rgb: [number, number, number], sourceBtn?: HTMLButtonElement): void {
+    this.toolColor = rgb;
+    for (const b of this.swatchButtons) {
+      const activo = b === sourceBtn;
+      b.setAttribute('aria-pressed', String(activo));
+      b.style.borderColor = activo ? '#111827' : 'transparent';
+    }
+    this.viewer?.setToolColor(rgb);
   }
 
   private async ensureEngine(): Promise<PdfiumEngine> {
@@ -359,8 +446,7 @@ export class App {
     this.selection = null;
     this.selectedImage = null;
     this.reflectPropsPanel();
-    this.insertMode = false; this.penMode = false; this.noteMode = false;
-    this.btnInsert.style.background = ''; this.btnPen.style.background = ''; this.btnNote.style.background = '';
+    this.setTool('none'); // el visor viejo (si lo hay) se descarta a continuación; setTool aquí solo resetea botones/estado
     this.viewerEl.textContent = '';
     this.scale = 1;
     this.viewer = new Viewer(this.viewerEl, this.session, {
@@ -383,7 +469,9 @@ export class App {
       },
       onMove: (pageIndex, runId, dxPt, dyPt) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt)); },
       onPageChange: (i) => { this.currentPage = i; this.updateIndicator(); this.setActiveThumb(i); },
-      onStroke: (pageIndex, points) => { void this.bus?.execute(new DrawStrokeCmd(pageIndex, points)); this.setStatus('Trazo dibujado.'); },
+      onStroke: (pageIndex, points) => { void this.bus?.execute(new DrawStrokeCmd(pageIndex, points, this.toolColor)); this.setStatus('Trazo dibujado.'); },
+      onDrawRect: (pageIndex, rect) => { void this.bus?.execute(new DrawRectCmd(pageIndex, rect, this.toolColor)); this.setStatus('Rectángulo dibujado.'); },
+      onErase: (pageIndex, objIndex) => { void this.bus?.execute(new DeleteObjectCmd(pageIndex, objIndex)); this.setStatus('Trazo borrado.'); },
       onFormText: (pageIndex, annotIndex, value, oldValue) => {
         void this.bus?.execute(new SetFormTextCmd(pageIndex, annotIndex, value, oldValue));
         this.setStatus('Campo de formulario actualizado.');
@@ -500,21 +588,20 @@ export class App {
   }
 
   private async handleInsert(pageIndex: number, at: PtPoint): Promise<void> {
-    if (!this.insertMode || !this.bus) return;
+    if (this.tool !== 'insert' || !this.bus) return;
     await this.bus.execute(new InsertTextCmd(pageIndex, { xPt: at.xPt, yPt: at.yPt, text: 'Texto nuevo', sizePt: 16 }));
     this.setStatus('Texto insertado. Haz clic en él para editarlo.');
   }
 
-  /** Clic en el fondo de la página: según el modo activo, inserta texto o coloca una nota. */
+  /** Clic en el fondo de la página: según la herramienta activa, inserta texto o coloca una nota. */
   private handleBackgroundClick(pageIndex: number, at: PtPoint): void {
-    if (this.noteMode) { void this.handleNote(pageIndex, at); return; }
+    if (this.tool === 'note') { void this.handleNote(pageIndex, at); return; }
     void this.handleInsert(pageIndex, at);
   }
 
   private async handleNote(pageIndex: number, at: PtPoint): Promise<void> {
-    if (!this.noteMode || !this.bus) return;
-    this.noteMode = false;
-    this.btnNote.style.background = '';
+    if (this.tool !== 'note' || !this.bus) return;
+    this.setTool('none'); // nota: un solo uso por activación, como antes de este refactor
     const text = window.prompt('Texto de la nota:');
     if (!text || !text.trim()) { this.setStatus('Modo nota desactivado.'); return; }
     await this.bus.execute(new AddNoteCmd(pageIndex, at.xPt, at.yPt, text.trim()));
@@ -697,7 +784,7 @@ export class App {
   private highlightSelected(): void {
     const run = this.selectedRun();
     if (!run || !this.bus || !this.selection) { this.setStatus('Selecciona una línea para resaltarla.'); return; }
-    void this.bus.execute(new HighlightRunCmd(this.selection.pageIndex, run.boxPt));
+    void this.bus.execute(new HighlightRunCmd(this.selection.pageIndex, run.boxPt, this.toolColor));
     this.setStatus('Resaltado.');
   }
 

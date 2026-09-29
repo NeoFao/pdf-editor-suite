@@ -268,6 +268,37 @@ export interface PdfEngine {
   fillRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean;
   /** Dibuja un trazo a mano alzada (polilínea) con el color y grosor dados. */
   drawStroke(doc: DocHandle, pageIndex: number, points: { xPt: number; yPt: number }[], color: [number, number, number], widthPt: number): boolean;
+  /**
+   * Dibuja un rectángulo (solo borde, sin relleno) con el color y grosor
+   * dados — base de la herramienta rectángulo (#16 de la tabla de paridad).
+   * Un rectángulo menor de 3×3 pt no se crea (fue un clic, no un arrastre
+   * real): devuelve `false` sin modificar nada.
+   */
+  drawRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number], widthPt: number): boolean;
+  /**
+   * Objetos de página de tipo PATH (`FPDF_PAGEOBJ_PATH`), con su caja actual
+   * (puntos PDF, de `FPDFPageObj_GetBounds`). OJO: un trazo de pluma
+   * (`drawStroke`) y un rectángulo (`drawRect`) son PATH, pero un resaltado
+   * (`highlightRect`) y un subrayado/tachado (`fillRect`) TAMBIÉN lo son —
+   * son rectángulos rellenos sin trazo. `hasStroke` (de
+   * `FPDFPath_GetDrawMode`) distingue unos de otros: `true` solo para los
+   * paths con el trazo activo (pluma y rectángulo), `false` para los de solo
+   * relleno (resaltado/subrayado/tachado). Base de la selección del borrador
+   * (#17): ver `deleteObject` y la nota en `getPathSegments`.
+   */
+  listPathObjects(doc: DocHandle, pageIndex: number): { objIndex: number; rectPt: RectPt; hasStroke: boolean }[];
+  /**
+   * Segmentos rectos (aristas) del contorno del path en `objIndex`, en puntos
+   * PDF, con la matriz del objeto ya aplicada (si la tuviera). Cada segmento
+   * une dos vértices consecutivos del contorno; si el contorno está cerrado
+   * (un rectángulo), incluye también la arista de cierre. Los segmentos de
+   * curva (bezier) se aproximan por su punto final — suficiente aquí porque
+   * esta app solo dibuja polilíneas y rectángulos, nunca curvas. Base de la
+   * selección por proximidad REAL del borrador (a la arista, no a la caja
+   * completa: un clic en el hueco interior de un rectángulo grande no debe
+   * encontrar nada).
+   */
+  getPathSegments(doc: DocHandle, pageIndex: number, objIndex: number): { ax: number; ay: number; bx: number; by: number }[];
   /** Desplaza un run por (dxPt, dyPt) en puntos PDF. Reversible con el delta inverso. */
   moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean;
   /** Cambia el color de relleno de un run (RGB 0-255). */

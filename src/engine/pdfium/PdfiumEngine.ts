@@ -4,7 +4,9 @@ import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
 import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
+const FPDF_PAGEOBJ_PATH = 2;
 const FPDF_PAGEOBJ_IMAGE = 3;
+const FPDF_SEGMENT_MOVETO = 2; // FPDF_SEGMENTTYPE: inicia un subtrazo nuevo, sin conectar con el punto anterior.
 const FPDF_ANNOT_TEXT = 1;    // FPDF_ANNOTATION_SUBTYPE: nota adhesiva ("sticky note")
 const FPDF_ANNOT_FLAG = 0x01; // flag de FPDF_RenderPageBitmap: pinta también las anotaciones
 const FPDFANNOT_COLORTYPE_Color = 0;
@@ -1211,6 +1213,107 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDFPage_InsertObject(page, path);
       this.p.FPDFPage_GenerateContent(page);
       return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /** Rectángulo solo borde (sin relleno); ver el contrato en PdfEngine.ts. */
+  drawRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number], widthPt: number): boolean {
+    if (rect.wPt < 3 || rect.hPt < 3) return false; // fue un clic, no un arrastre real
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const obj = this.p.FPDFPageObj_CreateNewRect(rect.xPt, rect.yPt, rect.wPt, rect.hPt);
+      this.p.FPDFPath_SetDrawMode(obj, 0, true); // 0 = sin relleno, con trazo
+      const [r, g, b] = color;
+      this.p.FPDFPageObj_SetStrokeColor(obj, r, g, b, 255);
+      this.p.FPDFPageObj_SetStrokeWidth(obj, widthPt);
+      this.p.FPDFPage_InsertObject(page, obj);
+      this.p.FPDFPage_GenerateContent(page);
+      return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /** Objetos PATH de la página, con su caja y si tienen trazo activo; ver el contrato en PdfEngine.ts. */
+  listPathObjects(doc: DocHandle, pageIndex: number): { objIndex: number; rectPt: RectPt; hasStroke: boolean }[] {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const m = this.mem;
+    const out: { objIndex: number; rectPt: RectPt; hasStroke: boolean }[] = [];
+    try {
+      const n = this.p.FPDFPage_CountObjects(page);
+      for (let i = 0; i < n; i++) {
+        const obj = this.p.FPDFPage_GetObject(page, i);
+        if (this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_PATH) continue;
+        const l = m.malloc(4), bo = m.malloc(4), ri = m.malloc(4), to = m.malloc(4);
+        this.p.FPDFPageObj_GetBounds(obj, l, bo, ri, to);
+        const left = m.getValue(l, 'float'), bottom = m.getValue(bo, 'float');
+        const right = m.getValue(ri, 'float'), top = m.getValue(to, 'float');
+        [l, bo, ri, to].forEach((ptr) => m.free(ptr));
+
+        const fillPtr = m.malloc(4), strokePtr = m.malloc(4);
+        this.p.FPDFPath_GetDrawMode(obj, fillPtr, strokePtr);
+        const hasStroke = m.getValue(strokePtr, 'i32') !== 0;
+        m.free(fillPtr); m.free(strokePtr);
+
+        out.push({ objIndex: i, rectPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom }, hasStroke });
+      }
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+    return out;
+  }
+
+  /** Aristas rectas del contorno del path; ver el contrato en PdfEngine.ts (unidades: puntos PDF, matriz del objeto ya aplicada). */
+  getPathSegments(doc: DocHandle, pageIndex: number, objIndex: number): { ax: number; ay: number; bx: number; by: number }[] {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const m = this.mem;
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, objIndex);
+      if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_PATH) return [];
+
+      // Matriz completa del objeto (a,b,c,d,e,f): los puntos de segmento que
+      // da PDFium están en el espacio LOCAL del path, hay que llevarlos al
+      // espacio de página aplicando esta matriz (igual patrón que
+      // swapTextObject/setObjectRect).
+      const matBuf = m.malloc(24);
+      this.p.FPDFPageObj_GetMatrix(obj, matBuf);
+      const mat = [0, 4, 8, 12, 16, 20].map((off) => m.getValue(matBuf + off, 'float'));
+      m.free(matBuf);
+      const [a, b, c, dd, e, f] = mat as [number, number, number, number, number, number];
+      const aplicar = (x: number, y: number): { x: number; y: number } => ({ x: a * x + c * y + e, y: b * x + dd * y + f });
+
+      const n = this.p.FPDFPath_CountSegments(obj);
+      const xPtr = m.malloc(4), yPtr = m.malloc(4);
+      const puntos: { x: number; y: number }[] = [];
+      const esMoveTo: boolean[] = [];
+      const cierraAqui: boolean[] = [];
+      for (let i = 0; i < n; i++) {
+        const seg = this.p.FPDFPath_GetPathSegment(obj, i);
+        this.p.FPDFPathSegment_GetPoint(seg, xPtr, yPtr);
+        const lx = m.getValue(xPtr, 'float'), ly = m.getValue(yPtr, 'float');
+        puntos.push(aplicar(lx, ly));
+        esMoveTo.push(this.p.FPDFPathSegment_GetType(seg) === FPDF_SEGMENT_MOVETO);
+        cierraAqui.push(this.p.FPDFPathSegment_GetClose(seg));
+      }
+      m.free(xPtr); m.free(yPtr);
+
+      const segmentos: { ax: number; ay: number; bx: number; by: number }[] = [];
+      let inicioSubtrazo = 0;
+      for (let i = 1; i < puntos.length; i++) {
+        if (esMoveTo[i]) { inicioSubtrazo = i; continue; }
+        const p0 = puntos[i - 1]!, p1 = puntos[i]!;
+        segmentos.push({ ax: p0.x, ay: p0.y, bx: p1.x, by: p1.y });
+        if (cierraAqui[i]) {
+          const inicio = puntos[inicioSubtrazo]!;
+          segmentos.push({ ax: p1.x, ay: p1.y, bx: inicio.x, by: inicio.y });
+        }
+      }
+      return segmentos;
     } finally {
       this.p.FPDF_ClosePage(page);
     }

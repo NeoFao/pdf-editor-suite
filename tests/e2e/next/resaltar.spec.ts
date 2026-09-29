@@ -12,6 +12,11 @@ test('resaltar: el marcador amarillo llega al PDF descargado', async ({ page }) 
   await page.locator('#file-input').setInputFiles(FIXTURE);
   const run = page.locator('.run', { hasText: 'ORIGINAL-TIMES' });
   await expect(run).toBeVisible();
+  // Resaltar usa el color de herramienta unificado (§2, #18 del lote D);
+  // rojo por defecto (mismo que la pluma), así que para un marcador amarillo
+  // hay que elegir esa muestra explícitamente — antes de este PR el amarillo
+  // venía fijo dentro de HighlightRunCmd.
+  await page.locator('.swatch[data-color="#facc15"]').click();
   await run.click(); // selecciona
   await page.locator('#btn-highlight').click();
   await expect(page.locator('#status')).toHaveText('Resaltado.');

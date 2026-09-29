@@ -5,8 +5,15 @@ import { TextLayer, type EditRequest } from './TextLayer';
 import { ImageLayer } from './ImageLayer';
 import type { PtPoint } from '../coords/PageGeometry';
 import type { RectPt } from '../engine/PdfEngine';
+import { pathMasCercano, normalizeRect, type PathCandidate } from './toolGeometry';
 
 const GAP = 16;
+
+/** Herramienta activa del visor: excluyentes entre sí (App.setTool es el único punto de entrada). */
+export type ToolMode = 'none' | 'insert' | 'pen' | 'note' | 'rect' | 'eraser';
+
+/** Radio de "casi encima" del borrador, en px CSS (se convierte a pt con la escala real de cada página). */
+const RADIO_BORRADOR_CSS = 6;
 
 export interface ViewerCallbacks {
   onEdit: (req: EditRequest) => void;
@@ -15,6 +22,10 @@ export interface ViewerCallbacks {
   onMove: (pageIndex: number, runId: number, dxPt: number, dyPt: number) => void;
   onPageChange?: (pageIndex: number) => void;
   onStroke?: (pageIndex: number, points: PtPoint[]) => void;
+  /** Fin de un arrastre en modo rectángulo (#16): rect ya normalizado, en puntos PDF. */
+  onDrawRect?: (pageIndex: number, rect: RectPt) => void;
+  /** Clic en modo borrador (#17) que encontró un path (trazo/rectángulo) cerca: su objIndex en el motor. */
+  onErase?: (pageIndex: number, objIndex: number) => void;
   /** Campo de texto AcroForm confirmado (evento 'change', no tecla a tecla). */
   onFormText?: (pageIndex: number, annotIndex: number, value: string, oldValue: string) => void;
   /** Casilla AcroForm marcada/desmarcada. */
@@ -65,7 +76,10 @@ export class Viewer {
   private programmaticScroll = false;
   /** Respaldo de `scrollend` (no todos los navegadores lo emiten todavía) y red de seguridad para cuando el scroll programático no mueve nada. */
   private scrollEndFallback: ReturnType<typeof setTimeout> | null = null;
-  private penMode = false;
+  /** Herramienta activa (§1 del lote D): fijada SIEMPRE por `App.setTool` vía `setTool()`. */
+  private tool: ToolMode = 'none';
+  /** Color de herramienta (§2, #18): usado por la vista previa de la pluma y del rectángulo mientras se arrastra. */
+  private toolColor: [number, number, number] = [220, 20, 20];
   /**
    * Imagen actualmente seleccionada (marco con tiradores, #20/#21), o `null`.
    * Igual que la selección de un run (ver `TextLayer`/`App.selection`), no
@@ -172,53 +186,162 @@ export class Viewer {
     }
   }
 
-  /** Activa/desactiva el modo pluma (la capa de dibujo captura el puntero). */
-  setPenMode(on: boolean): void {
-    this.penMode = on;
-    this.root.querySelectorAll('.pen-layer').forEach((el) => {
-      (el as HTMLElement).style.pointerEvents = on ? 'auto' : 'none';
+  /**
+   * Único punto de entrada para activar/desactivar la herramienta en el
+   * visor (llamado siempre desde `App.setTool`, nunca al revés): pen/rect/
+   * eraser capturan el puntero sobre la capa superior de cada página
+   * (`.tool-layer`); insert/note/none la dejan pasar (pointer-events: none)
+   * para que el clic llegue al fondo de la página (`onBackgroundClick`) o a
+   * una `.run`/`.image-box` normalmente.
+   */
+  setTool(tool: ToolMode): void {
+    this.tool = tool;
+    const activo = tool === 'pen' || tool === 'rect' || tool === 'eraser';
+    const cursor = tool === 'eraser' ? 'cell' : 'crosshair';
+    this.root.querySelectorAll<HTMLElement>('.tool-layer').forEach((el) => {
+      el.style.pointerEvents = activo ? 'auto' : 'none';
+      el.style.cursor = cursor;
     });
   }
 
-  /** Capa transparente por página que dibuja el trazo y emite los puntos en pt. */
-  private attachPenCapture(pen: HTMLElement, pageIndex: number): void {
+  /** Color de herramienta (#18): pluma y rectángulo lo usan para su vista previa mientras se arrastra. */
+  setToolColor(color: [number, number, number]): void {
+    this.toolColor = color;
+  }
+
+  /**
+   * Capa de captura superior de una página, común a pluma (#16), rectángulo
+   * (#16) y borrador (#17) — un único elemento por página, nunca tres
+   * superpuestos, para no repetir la gestión de pointer-events/z-order.
+   * Pluma y rectángulo capturan el puntero con `setPointerCapture` sobre
+   * ESTE elemento (no sobre `window`/`document`): la regla `gesto-con-
+   * cancelacion` lo permite explícitamente, siempre que se trate
+   * `pointercancel` como cancelación — aquí deshace la vista previa y no
+   * dispara ningún comando, igual que exige `src/ui/gesto.ts`. El borrador
+   * no necesita arrastre: actúa en el propio `pointerdown` (un clic).
+   */
+  private attachToolCapture(el: HTMLElement, pageIndex: number): void {
     let pts: Array<[number, number]> = [];
     let drawing = false;
     let preview: HTMLCanvasElement | null = null;
+    let rectPreview: HTMLElement | null = null;
+    let startCss: [number, number] | null = null;
+
     const at = (e: PointerEvent): [number, number] => {
-      const r = pen.getBoundingClientRect();
+      const r = el.getBoundingClientRect();
       return [e.clientX - r.left, e.clientY - r.top];
     };
-    pen.addEventListener('pointerdown', (e) => {
-      drawing = true; pts = [at(e)]; pen.setPointerCapture(e.pointerId);
-      preview = document.createElement('canvas');
-      preview.width = pen.clientWidth; preview.height = pen.clientHeight;
-      Object.assign(preview.style, { position: 'absolute', inset: '0' });
-      pen.appendChild(preview);
+
+    const posicionarPreviewRect = (a: [number, number], b: [number, number]): void => {
+      if (!rectPreview) return;
+      const x = Math.min(a[0], b[0]), y = Math.min(a[1], b[1]);
+      const w = Math.abs(b[0] - a[0]), h = Math.abs(b[1] - a[1]);
+      Object.assign(rectPreview.style, { left: `${x}px`, top: `${y}px`, width: `${w}px`, height: `${h}px` });
+    };
+
+    const limpiarVistaPrevia = (): void => {
+      preview?.remove(); preview = null;
+      rectPreview?.remove(); rectPreview = null;
+      pts = []; startCss = null;
+    };
+
+    el.addEventListener('pointerdown', (e) => {
+      if (this.tool === 'eraser') { this.handleEraseClick(pageIndex, at(e)); return; }
+      if (this.tool !== 'pen' && this.tool !== 'rect') return;
+      drawing = true;
+      el.setPointerCapture(e.pointerId);
+      startCss = at(e);
+      pts = [startCss];
+      if (this.tool === 'pen') {
+        preview = document.createElement('canvas');
+        preview.width = el.clientWidth; preview.height = el.clientHeight;
+        Object.assign(preview.style, { position: 'absolute', inset: '0' });
+        el.appendChild(preview);
+      } else {
+        rectPreview = document.createElement('div');
+        rectPreview.className = 'rect-preview';
+        Object.assign(rectPreview.style, {
+          position: 'absolute', boxSizing: 'border-box',
+          border: `2px dashed rgb(${this.toolColor.join(',')})`,
+          pointerEvents: 'none'
+        });
+        el.appendChild(rectPreview);
+        posicionarPreviewRect(startCss, startCss);
+      }
     });
-    pen.addEventListener('pointermove', (e) => {
-      if (!drawing || !preview) return;
-      pts.push(at(e));
-      const ctx = preview.getContext('2d')!;
-      ctx.clearRect(0, 0, preview.width, preview.height);
-      ctx.strokeStyle = '#dc1414'; ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
-      ctx.beginPath(); ctx.moveTo(pts[0]![0], pts[0]![1]);
-      for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
-      ctx.stroke();
+
+    el.addEventListener('pointermove', (e) => {
+      if (!drawing) return;
+      const p = at(e);
+      if (this.tool === 'pen' && preview) {
+        pts.push(p);
+        const ctx = preview.getContext('2d')!;
+        ctx.clearRect(0, 0, preview.width, preview.height);
+        ctx.strokeStyle = `rgb(${this.toolColor.join(',')})`;
+        ctx.lineWidth = 2; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+        ctx.beginPath(); ctx.moveTo(pts[0]![0], pts[0]![1]);
+        for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
+        ctx.stroke();
+      } else if (this.tool === 'rect' && startCss) {
+        pts[1] = p;
+        posicionarPreviewRect(startCss, p);
+      }
     });
+
     const finish = (): void => {
       if (!drawing) return;
       drawing = false;
-      preview?.remove(); preview = null;
-      if (pts.length >= 2) {
+      if (this.tool === 'pen') {
+        if (pts.length >= 2) {
+          const geom = this.geoms[pageIndex]!;
+          const ptPts = pts.map(([x, y]) => geom.cssToPt(x, y));
+          this.cb.onStroke?.(pageIndex, ptPts);
+        }
+      } else if (this.tool === 'rect' && startCss) {
+        const endCss = pts[1] ?? startCss;
         const geom = this.geoms[pageIndex]!;
-        const ptPts = pts.map(([x, y]) => geom.cssToPt(x, y));
-        this.cb.onStroke?.(pageIndex, ptPts);
+        const a = geom.cssToPt(startCss[0], startCss[1]);
+        const b = geom.cssToPt(endCss[0], endCss[1]);
+        const rect = normalizeRect(a.xPt, a.yPt, b.xPt, b.yPt);
+        // Menor de 3×3 pt: fue un clic, no un arrastre — ni siquiera se
+        // emite el comando (drawRect también lo rechazaría, pero así no
+        // queda un DrawRectCmd sin efecto en la pila de deshacer).
+        if (rect.wPt >= 3 && rect.hPt >= 3) this.cb.onDrawRect?.(pageIndex, rect);
       }
-      pts = [];
+      limpiarVistaPrevia();
     };
-    pen.addEventListener('pointerup', finish);
-    pen.addEventListener('pointercancel', finish);
+    el.addEventListener('pointerup', finish);
+    // pointercancel: SIEMPRE cancelar (nunca aplicar), igual que gesto.ts —
+    // aquí no hace falta reenganchar nada porque la captura está sobre este
+    // propio elemento, no sobre window/document.
+    el.addEventListener('pointercancel', () => { drawing = false; limpiarVistaPrevia(); });
+  }
+
+  /**
+   * Borrador (#17): busca el path (trazo de pluma o rectángulo) cuya arista
+   * más cercana al clic esté a ≤6px CSS (convertidos a pt con la escala real
+   * de ESTA página) y lo borra. Solo entre los paths CON TRAZO
+   * (`hasStroke`): un resaltado o un subrayado/tachado también son objetos de
+   * tipo PATH para el motor (mismo tipo de objeto de rectángulo, solo que
+   * con relleno y sin trazo — ver el contrato de `listPathObjects` en
+   * PdfEngine.ts), y el motor no expone una forma de leer el modo de mezcla
+   * de un objeto de página ya creado (solo de fijarlo), así que no hay forma
+   * fiable de distinguir por lectura un resaltado (relleno en modo Multiply)
+   * de un subrayado (relleno opaco normal) — pero "tiene trazo" sí se lee
+   * con certeza y separa EXACTAMENTE lo que este borrador debe cubrir (pluma
+   * y rectángulo, ninguno de los cuales lleva relleno) de lo que no debe
+   * tocar.
+   */
+  private handleEraseClick(pageIndex: number, [cssX, cssY]: [number, number]): void {
+    const geom = this.geoms[pageIndex]!;
+    const click = geom.cssToPt(cssX, cssY);
+    const maxDistPt = RADIO_BORRADOR_CSS / geom.scale;
+    const candidatos: PathCandidate[] = this.session.engine
+      .listPathObjects(this.session.doc, pageIndex)
+      .filter((p) => p.hasStroke)
+      .map((p) => ({ objIndex: p.objIndex, segments: this.session.engine.getPathSegments(this.session.doc, pageIndex, p.objIndex) }));
+    const objIndex = pathMasCercano(click.xPt, click.yPt, candidatos, maxDistPt);
+    if (objIndex !== null) this.cb.onErase?.(pageIndex, objIndex);
   }
 
   private observeVisible(): void {
@@ -549,11 +672,16 @@ export class Viewer {
     this.drawFormFields(i);
     this.drawImages(i);
 
-    // Capa de captura de pluma (encima de todo; solo activa en modo pluma).
-    const pen = document.createElement('div');
-    pen.className = 'pen-layer';
-    Object.assign(pen.style, { position: 'absolute', inset: '0', pointerEvents: this.penMode ? 'auto' : 'none', cursor: 'crosshair' });
-    this.attachPenCapture(pen, i);
-    wrapper.appendChild(pen);
+    // Capa de captura de herramienta (encima de todo; solo activa en pluma/rectángulo/borrador).
+    const toolLayer = document.createElement('div');
+    toolLayer.className = 'tool-layer';
+    const activo = this.tool === 'pen' || this.tool === 'rect' || this.tool === 'eraser';
+    Object.assign(toolLayer.style, {
+      position: 'absolute', inset: '0',
+      pointerEvents: activo ? 'auto' : 'none',
+      cursor: this.tool === 'eraser' ? 'cell' : 'crosshair'
+    });
+    this.attachToolCapture(toolLayer, i);
+    wrapper.appendChild(toolLayer);
   }
 }
