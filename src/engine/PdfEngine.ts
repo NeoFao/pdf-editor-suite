@@ -137,6 +137,28 @@ export interface OutlineItem {
 /** Puntero opaco al documento dentro del motor. */
 export type DocHandle = number;
 
+/**
+ * Una operación de dibujo/texto sobre una página, para `applyPageOps` (E-037).
+ * Cada variante corresponde 1:1 a los argumentos de su método unitario
+ * homónimo (`insertText`, `fillRect`, `highlightRect`, `drawStroke`,
+ * `drawRect`): `applyPageOps` es la única implementación real de cada una,
+ * y esos métodos delegan en ella con un solo op en el array.
+ */
+export type PageOp =
+  | { type: 'insertText'; spec: InsertTextSpec }
+  | { type: 'fillRect'; rect: RectPt; color: [number, number, number] }
+  | { type: 'highlightRect'; rect: RectPt; color: [number, number, number] }
+  | { type: 'drawStroke'; points: { xPt: number; yPt: number }[]; color: [number, number, number]; widthPt: number }
+  | { type: 'drawRect'; rect: RectPt; color: [number, number, number]; widthPt: number };
+
+/** Resultado de un `PageOp`, en el mismo orden que se pasó a `applyPageOps`. */
+export type PageOpResult =
+  | { type: 'insertText'; runId: number }
+  | { type: 'fillRect'; ok: boolean }
+  | { type: 'highlightRect'; ok: boolean }
+  | { type: 'drawStroke'; ok: boolean }
+  | { type: 'drawRect'; ok: boolean };
+
 export interface PdfEngine {
   open(bytes: Uint8Array): Promise<DocHandle>;
   pageCount(doc: DocHandle): number;
@@ -365,7 +387,40 @@ export interface PdfEngine {
   createBlank(widthPt: number, heightPt: number): Uint8Array<ArrayBuffer>;
   /** Duplica una página, insertando la copia justo después. */
   duplicatePage(doc: DocHandle, pageIndex: number): boolean;
+  /**
+   * Aplica varias `PageOp` sobre la MISMA página con una sola carga
+   * (`FPDF_LoadPage`), un solo `FPDFPage_GenerateContent()` al terminar todas
+   * y un solo `FPDF_ClosePage()` — en vez de ese trío por operación. Cada
+   * `GenerateContent()` reserializa TODO el contenido ya insertado en la
+   * página, así que N llamadas sueltas cuestan O(N²); esta es la ruta que
+   * usan internamente `insertText`/`fillRect`/`highlightRect`/`drawStroke`/
+   * `drawRect` cuando se llaman sueltas (con un solo op), y la que debe usar
+   * cualquier llamador que vaya a insertar/dibujar VARIAS cosas en la misma
+   * página de una vez (E-037: visto con OCR de una página densa y con la
+   * conversión Markdown → PDF). Devuelve un resultado por op, en el mismo
+   * orden.
+   */
+  applyPageOps(doc: DocHandle, pageIndex: number, ops: PageOp[]): PageOpResult[];
   save(doc: DocHandle): Uint8Array<ArrayBuffer>;
+  /**
+   * Igual que `save()`, pero además descarta los streams de contenido de
+   * página HUÉRFANOS que deja cada `FPDFPage_GenerateContent()` sobre el
+   * MISMO objeto de página: cada llamada crea un stream nuevo y actualiza
+   * `/Contents` para apuntar a él, pero el stream anterior sigue vivo en la
+   * tabla de objetos del documento en memoria — `save()` lo sigue
+   * escribiendo aunque ya nada lo referencie (E-038, mismo mecanismo que ya
+   * se documentó para imágenes sustituidas en `ComprimirDocumentoCmd`). NO
+   * muta `doc`: guarda, abre una copia efímera desde esos bytes —al
+   * analizarlos, el motor solo reconstruye los objetos alcanzables desde la
+   * página, así que los huérfanos se quedan fuera— y vuelve a guardar esa
+   * copia. Coste añadido, medido: unas décimas de milisegundo sobre un
+   * documento ya editado. Úsalo en cualquier guardado DE CARA AL USUARIO
+   * (botón Guardar/descargar, imprimir, informe de Comprimir); los
+   * snapshots internos de deshacer siguen usando `save()` a secas —
+   * priorizan velocidad y se descartan enseguida, así que arrastrar
+   * huérfanos ahí no se acumula de por vida como si se guardaran en disco.
+   */
+  saveCompact(doc: DocHandle): Promise<Uint8Array<ArrayBuffer>>;
   close(doc: DocHandle): void;
   /**
    * Ancho en puntos PDF de `text` si se pintara con la fuente estándar

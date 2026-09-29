@@ -22,6 +22,44 @@ function sinPixelesOscuros(data: Uint8ClampedArray): boolean {
   return true;
 }
 
+/** Página densa: una imagen escaneada real fácilmente da 50-100 líneas OCR. */
+class FakeOcrProviderDenso implements OcrProvider {
+  constructor(private readonly n: number) {}
+  async recognize(_img: OcrImage, _lang: string): Promise<OcrLine[]> {
+    return Array.from({ length: this.n }, (_v, i) => ({
+      text: `linea ${i} reconocida por el OCR`,
+      bbox: { x0: 20, y0: 20 + i * 10, x1: 400, y1: 30 + i * 10 }
+    }));
+  }
+}
+
+/**
+ * E-037 (docs/ERRORES-CONOCIDOS.md): `OcrPageCmd` insertaba cada línea
+ * reconocida con un `insertText` suelto — O(N²) por el `GenerateContent` de
+ * cada llamada. Ahora usa `applyPageOps` (una sola carga de página, un solo
+ * `GenerateContent`). 80 líneas es el caso real de una página densa.
+ */
+test('E-037: OcrPageCmd con 80 líneas reconocidas (página densa) termina muy rápido', async () => {
+  const d = await PDFDocument.create();
+  d.addPage([600, 900]);
+  const engine = await PdfiumEngine.create();
+  const s = await EditSession.open(engine, await d.save());
+  const bus = new CommandBus(s);
+  const fake = new FakeOcrProviderDenso(80);
+
+  const t0 = performance.now();
+  const cmd = new OcrPageCmd(0, fake);
+  await bus.execute(cmd);
+  const t1 = performance.now();
+
+  expect(cmd.recognized).toBe(80);
+  expect(s.model.pages[0]!.runs).toHaveLength(80);
+  // Uno a uno (antes del arreglo), 100 insertText sueltos tardaban ~225 ms y
+  // 200 tardaban ~1,3 s (crecimiento claramente superlineal). En lote, 80
+  // líneas terminan en unos pocos ms — umbral con holgura amplia para CI.
+  expect(t1 - t0).toBeLessThan(500);
+});
+
 test('OcrPageCmd inserta texto invisible reconocido y se puede deshacer', async () => {
   const d = await PDFDocument.create();
   d.addPage([300, 200]);

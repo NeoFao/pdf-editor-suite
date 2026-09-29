@@ -1088,6 +1088,191 @@ simple y más consistente con el resto del fichero.
 
 ---
 
+### E-037 · Insertar/dibujar en bucle sobre una página era O(N²)
+
+**Síntoma.** Encontrado al medir el PR #60 (Markdown → PDF): emitir muchos
+`insertText`/`fillRect` seguidos sobre una misma página tardaba varios
+segundos y el tiempo NO crecía en línea recta con el número de operaciones.
+El caso real más expuesto es el OCR de una página densa
+(`OcrPageCmd`, `src/commands/OcrPage.ts`): una imagen escaneada normal da
+50-100 líneas reconocidas, cada una insertada con su propio `insertText`.
+
+**Medido antes del arreglo** (motor real, Node, `insertText` uno a uno sobre
+la misma página):
+
+| N   | tiempo     |
+|-----|-----------|
+| 20  | ~31-43 ms |
+| 50  | ~59-70 ms |
+| 100 | ~225-240 ms |
+| 200 | ~1300-1390 ms |
+
+De 100 a 200 (×2 operaciones) el tiempo se multiplica por ~5,8, no por 2:
+crecimiento claramente superlineal, compatible con O(N²).
+
+**Causa raíz.** Cada método del motor que dibuja o inserta texto
+(`insertText`, `fillRect`, `highlightRect`, `drawStroke`, `drawRect`, y los
+que editan un run existente) hacía `FPDF_LoadPage` → mutar →
+`FPDFPage_GenerateContent` → `FPDF_ClosePage` **por llamada**.
+`FPDFPage_GenerateContent` no añade una operación al content stream: **
+reserializa TODO el contenido ya insertado en la página** cada vez que se
+llama. Insertar N objetos uno a uno con este patrón hace, en total, trabajo
+proporcional a 1+2+...+N ≈ O(N²), no O(N).
+
+**Arreglo.** `PdfEngine.applyPageOps(doc, pageIndex, ops: PageOp[])`
+(`src/engine/PdfEngine.ts`, implementado en
+`src/engine/pdfium/PdfiumEngine.ts`) carga la página **una sola vez**, aplica
+todas las `PageOp` del lote (unión discriminada: `insertText`, `fillRect`,
+`highlightRect`, `drawStroke`, `drawRect`) y llama a `GenerateContent()` **una
+sola vez** al final, antes de un único `ClosePage`. Los cinco métodos
+unitarios (`insertText`, `fillRect`, `highlightRect`, `drawStroke`,
+`drawRect`) pasaron a ser envoltorios de una línea que delegan en
+`applyPageOps` con un array de un solo elemento — `applyPageOps` es ahora la
+ÚNICA implementación real de cada tipo de operación, sin lógica duplicada
+entre la ruta "una op" y la ruta "en lote". Se usa en:
+- `OcrPageCmd.execute()` — todas las líneas reconocidas de una página en una
+  sola llamada.
+- `ConversorMarkdownNavegador.convertir()` — las `barras` (fondos) y
+  `trazos` (texto) se agrupan por página (conservando el orden barras-antes-
+  que-trazos dentro de cada página, para no alterar el z-order) y se aplican
+  con un `applyPageOps` por página en vez de una llamada por barra/trazo.
+  La FUSIÓN de palabras consecutivas del mismo estilo en un solo trazo
+  (`lineToFlowLine`, `src/convert/markdown/layout.ts`, ya existente desde el
+  PR #60) **se conserva**: sigue reduciendo el número de OBJETOS de texto del
+  PDF final (menos operadores de posicionamiento, archivo más pequeño), algo
+  que `applyPageOps` no sustituye — resuelve el coste de LLAMADA al motor,
+  no el número de objetos del documento resultante.
+
+**Medido después del arreglo:** 200 `insertText` en un solo `applyPageOps`:
+~10-11 ms (frente a ~1300-1390 ms uno a uno). Una página OCR densa (80
+líneas) vía `OcrPageCmd`: por debajo de medio segundo con holgura amplia
+(umbral del test, `<500 ms`) frente al crecimiento cuadrático de antes.
+
+**Cómo se detecta ahora.**
+- Test `E-037: 200 insertText por applyPageOps en un solo lote tardan muy
+  por debajo de hacerlos uno a uno` en
+  `tests/unit/PdfiumEngine.applyPageOps.test.ts` (motor real): umbral con
+  holgura >10× sobre lo medido, para no ser frágil en CI más lento.
+- Test `E-037: applyPageOps en lote produce el MISMO contenido que aplicar
+  cada op una a una` en el mismo fichero — compara `getPageText()` entre
+  las dos rutas.
+- Tests de `applyPageOps` mezclando los cinco tipos de op en un mismo lote y
+  comprobando que un op rechazado (rectángulo <3×3, trazo de un punto) no
+  afecta al resto del lote ni cuenta como mutación.
+- Test `E-037: OcrPageCmd con 80 líneas reconocidas (página densa) termina
+  muy rápido` en `tests/unit/OcrPage.test.ts`.
+- Regla `motor-lote-en-bucle` (ver más abajo): un fichero de
+  `src/commands/**` o `src/convert/**` con un bucle Y una llamada de
+  dibujo/texto del motor, sin usar `applyPageOps`, falla el guard.
+
+---
+
+### E-038 · Cada GenerateContent() dejaba un stream de contenido huérfano en el guardado
+
+**Síntoma.** El PDF que se lleva el usuario al pulsar Guardar crecía con
+cada edición sobre la MISMA línea/objeto, aunque el contenido visible final
+fuera idéntico. Ya se había visto una vez, solo para imágenes: el PR #57
+documentó (comentario en `ComprimirDocumentoCmd`) que sustituir el bitmap de
+una imagen de 233 KB por un JPEG de 700 B seguía dejando un documento de
+~234 KB hasta reabrirlo desde sus propios bytes. E-037 generaliza la misma
+causa a CUALQUIER operación que llame a `GenerateContent` más de una vez
+sobre la misma página: texto insertado, runs editados, color de run
+cambiado, trazos, rectángulos...
+
+**Medido antes del arreglo** (motor real, Node; documento base con un solo
+run de texto, `editTextRun` alternando entre dos textos sobre el MISMO run):
+
+| ediciones (N) | `save()` directo | `save(open(save()))` (reabierto) |
+|---|---|---|
+| 0   | 1536 bytes  | 1348 bytes |
+| 10  | 4061 bytes  | 1437 bytes |
+| 50  | 14116 bytes | 1443 bytes |
+| 100 | 26766 bytes | 1443 bytes |
+
+`save()` directo crece de forma prácticamente lineal con N (~250 bytes por
+edición) aunque el texto final es siempre uno de dos strings de 4
+caracteres; reabrir desde los propios bytes y volver a guardar lo deja
+plano en ~1443 bytes pase lo que pase N. Idéntico patrón con `setRunColor`
+en vez de `editTextRun` (mismos números para N=10/50). El coste de hacer ese
+`open()+save()` extra sobre un documento con 100 ediciones: ~0,25-0,30 ms
+por encima de un `save()` normal (~1,6-1,8 ms) — no es un cambio de orden de
+magnitud.
+
+**Hallazgo negativo, también medido:** `extractPages()` (usada por
+"Extraer página" y "Dividir") **ya es inmune** a este defecto sin ningún
+cambio: sobre el mismo documento con 100 ediciones huérfanas, `save()`
+directo pesaba 26766 bytes y `extractPages(doc, [0])` pesaba 1048 bytes.
+
+**Causa raíz.** `FPDFPage_GenerateContent()` no muta el content stream
+existente: crea uno **nuevo** con el contenido serializado actual y
+actualiza `/Contents` de la página para que apunte a él. El stream
+**anterior** no se libera ni se desreferencia de la tabla de objetos del
+documento que el motor mantiene en memoria — sigue ahí, simplemente ya no
+lo apunta nada. `FPDF_SaveAsCopy()` escribe la tabla de objetos tal cual
+está en memoria, huérfanos incluidos: por eso `save()` los arrastra. Al
+volver a **abrir** ese PDF desde sus bytes (`FPDF_LoadDocument`), el motor
+solo reconstruye los objetos alcanzables recorriendo desde la raíz del
+documento — un stream sin ninguna referencia entrante simplemente no se
+carga —, así que un `save()` posterior sobre ese documento reabierto ya no
+lo escribe. `extractPages()` es inmune por el mismo mecanismo: construye un
+documento NUEVO e importa solo las páginas pedidas (`FPDF_ImportPages`), que
+analiza el documento origen igual que un `open()` — trae lo alcanzable, no
+la tabla de objetos entera.
+
+No se investigaron flags de `FPDF_SaveAsCopy` (`FPDF_INCREMENTAL`/
+`FPDF_NO_INCREMENTAL`/`FPDF_REMOVE_SECURITY`) porque ninguno de los tres
+tiene relación con purgar objetos inalcanzables — son sobre guardado
+incremental (que este motor no usa: siempre pasa `0`) y sobre cifrado.
+
+**Arreglo (opción "guardado compacto", (a) de las tres del encargo).**
+`PdfEngine.saveCompact(doc)` (`src/engine/pdfium/PdfiumEngine.ts`) hace
+`save()` → `open(bytes)` sobre un documento efímero → `save()` de ese
+documento efímero → `close()` del efímero, sin tocar `doc`. Coste medido:
+irrelevante (ver arriba). Se descartó (b) "eliminar el stream viejo al
+regenerar": la API pública de PDFium no expone un delete-por-referencia del
+stream de `/Contents` anterior sin arriesgar los propios punteros que usa
+`GenerateContent` internamente; (a) ya resuelve el problema por completo con
+coste despreciable, así que no hacía falta.
+
+**Dónde se aplica.** Guardados DE CARA AL USUARIO:
+`App.save()`/`App.print()` (botón Guardar y vista previa de impresión) y el
+tamaño que informa `ComprimirDocumentoCmd` tras comprimir (para que lo que
+se muestra coincida con lo que se llevará el usuario al pulsar Guardar
+después). **NO** se aplica en:
+- Los snapshots internos de deshacer (`this.before = c.engine.save(c.doc)`
+  en cada comando): priorizan velocidad, se descartan casi siempre sin
+  llegar a disco, y el coste de `saveCompact` en cada uno de ellos (aunque
+  pequeño) no se justifica frente al beneficio nulo. Decisión documentada
+  aquí, no en el código de cada comando.
+- `extractPages` (Extraer página / Dividir): ya es inmune por construcción
+  (ver el hallazgo negativo arriba) — envolverla en `saveCompact` sería
+  trabajo redundante.
+- `ConversorMarkdownNavegador`: con el arreglo de E-037 (un solo
+  `GenerateContent` por página vía `applyPageOps`), el documento que
+  construye desde cero nunca llega a acumular huérfanos en primer lugar —
+  no hay nada que compactar.
+
+**Cómo se detecta ahora.**
+- Test `E-038: saveCompact tras 100 editTextRun pesa ~igual que sin
+  ediciones, con el mismo texto final` en
+  `tests/unit/PdfiumEngine.savecompact.test.ts` (motor real): exige que
+  `saveCompact` quede por debajo de 1,1× el tamaño base y que el `save()`
+  directo (sin compactar) siga por encima de 2× — deja constancia numérica
+  del defecto original en el propio test.
+- Test `E-038: saveCompact NO muta el documento vivo` — invariante
+  equivalente a E-005 (exportar dos veces da el mismo resultado) para la
+  app nueva: llamarlo dos veces da el mismo tamaño y el documento vivo
+  sigue con un único run, no duplicado.
+- Test `E-038: extractPages ya es inmune a los huérfanos por construcción` —
+  fija el hallazgo negativo para que no se pierda si alguien "arregla" algo
+  que ya funcionaba.
+- Test `E-038: el coste extra de saveCompact frente a save() es pequeño`.
+- E-005 (`tests/e2e/exportacion.spec.js`, app vieja) sigue intacto: este
+  arreglo vive enteramente en `src/` (motor PDFium), no toca
+  `buildFlattenedDoc()` ni el resto de la app vieja.
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que

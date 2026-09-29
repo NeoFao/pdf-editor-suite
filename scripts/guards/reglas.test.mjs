@@ -448,6 +448,48 @@ describe('addfunction-con-removefunction', () => {
   });
 });
 
+describe('motor-lote-en-bucle', () => {
+  const regla = detectarEn('motor-lote-en-bucle');
+  const patronBucle = /\bfor\s*\(|\.forEach\(|\bwhile\s*\(/;
+  const patronDibujo = /\.(insertText|fillRect|highlightRect|drawStroke|drawRect)\(/;
+  const patronLote = /\.applyPageOps\(/;
+
+  test('detecta el patrón exacto de E-037: bucle + insertText suelto, sin applyPageOps', () => {
+    const cuerpo = [
+      'for (const spec of specs) {',
+      '  c.engine.insertText(c.doc, this.pageIndex, spec);',
+      '}'
+    ].join('\n');
+    assert.match(cuerpo, patronBucle);
+    assert.match(cuerpo, patronDibujo);
+    assert.doesNotMatch(cuerpo, patronLote);
+    assert.ok(regla.comoArreglar.includes('applyPageOps'));
+  });
+
+  test('acepta bucle + insertText cuando el fichero también usa applyPageOps (arreglo de E-037)', () => {
+    const cuerpo = [
+      'for (const spec of specs) ops.push({ type: "insertText", spec });',
+      'c.engine.applyPageOps(c.doc, this.pageIndex, ops);'
+    ].join('\n');
+    assert.match(cuerpo, patronBucle);
+    assert.match(cuerpo, patronLote);
+  });
+
+  test('no señala un fichero con una única llamada de dibujo suelta, sin ningún bucle', () => {
+    const cuerpo = 'c.engine.drawRect(c.doc, this.pageIndex, this.rect, this.color, this.widthPt);';
+    assert.doesNotMatch(cuerpo, patronBucle);
+  });
+
+  test('no señala un bucle que no dibuja nada del motor', () => {
+    const cuerpo = 'for (const p of pages) { total += p.runs.length; }';
+    assert.doesNotMatch(cuerpo, patronDibujo);
+  });
+
+  test('sobre el repo real no encuentra nada: OcrPage.ts y ConversorMarkdownNavegador.ts ya usan applyPageOps', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega
