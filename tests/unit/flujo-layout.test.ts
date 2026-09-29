@@ -1,0 +1,94 @@
+import { test, expect } from 'vitest';
+import { wrapAtoms, lineToFlowLine, paginar, type Atom, type Medir, type FlowItem, type PageGeometry } from '../../src/convert/flujo/layout';
+
+/** medir falso EXACTO: 6pt por carácter, igual para toda fuente/tamaño — dimensiones predecibles a mano. */
+const medir: Medir = (_font, _sizePt, text) => text.length * 6;
+
+function atomo(text: string): Atom { return { text, font: 'Helvetica', sizePt: 11, color: [0, 0, 0] }; }
+
+test('alineación centrada: la línea se desplaza para quedar centrada en el ancho disponible', () => {
+  const atoms = [atomo('hola')]; // ancho = 4*6 = 24pt
+  const linea = lineToFlowLine(atoms, 0, 100, 'center', true, 14, medir);
+  // Centrado en 100pt: offset = (100-24)/2 = 38.
+  expect(linea.segs[0]!.xPt).toBe(38);
+});
+
+test('alineación derecha: la línea termina pegada al borde derecho del ancho disponible', () => {
+  const atoms = [atomo('hola')]; // 24pt
+  const linea = lineToFlowLine(atoms, 10, 100, 'right', true, 14, medir);
+  // xStart(10) + offset(100-24=76) = 86; fin de línea = 86+24 = 110 = 10+100.
+  expect(linea.segs[0]!.xPt).toBe(86);
+});
+
+test('alineación izquierda: sin desplazamiento, arranca exactamente en xStart', () => {
+  const atoms = [atomo('hola')];
+  const linea = lineToFlowLine(atoms, 25, 200, 'left', true, 14, medir);
+  expect(linea.segs[0]!.xPt).toBe(25);
+});
+
+test('justificado: reparte el espacio sobrante entre las palabras (no es la última línea)', () => {
+  // 3 palabras de 4 letras = 3*24=72pt de palabras; 2 huecos normales de 6pt = 12pt; natural = 84pt.
+  // Ancho disponible 120pt -> sobrante 36pt repartido en 2 huecos = 18pt extra cada uno.
+  const atoms = [atomo('hola'), atomo('todo'), atomo('bien')];
+  const linea = lineToFlowLine(atoms, 0, 120, 'justify', false, 14, medir);
+  expect(linea.segs).toHaveLength(3);
+  expect(linea.segs[0]!.xPt).toBe(0);
+  // segundo empieza tras "hola"(24) + espacio normal(6) + extra(18) = 48
+  expect(linea.segs[1]!.xPt).toBe(48);
+});
+
+test('justificado: la ÚLTIMA línea del párrafo NO se justifica (cae a la izquierda, fusionando palabras del mismo estilo)', () => {
+  const atoms = [atomo('hola'), atomo('mundo')];
+  const linea = lineToFlowLine(atoms, 5, 200, 'justify', true, 14, medir);
+  // Mismo estilo -> left fusiona en un solo trazo "hola mundo", sin espacio extra repartido.
+  expect(linea.segs).toHaveLength(1);
+  expect(linea.segs[0]!.xPt).toBe(5);
+  expect(linea.segs[0]!.text).toBe('hola mundo');
+});
+
+test('justificado con una sola palabra en la línea: no hay huecos que repartir, cae a la izquierda', () => {
+  const atoms = [atomo('sola')];
+  const linea = lineToFlowLine(atoms, 0, 300, 'justify', false, 14, medir);
+  expect(linea.segs).toHaveLength(1);
+  expect(linea.segs[0]!.xPt).toBe(0);
+});
+
+test('wrapAtoms: ajusta igual que antes (ancho fijo por carácter), sin romper el contrato', () => {
+  const atoms = Array.from({ length: 5 }, () => atomo('aaaaa')); // 30pt cada una, espacio 6pt
+  // 100pt de ancho: caben 2 palabras (30+6+30=66), la 3a (66+6+30=102) no cabe.
+  const lineas = wrapAtoms(atoms, 100, medir);
+  expect(lineas.map((l) => l.length)).toEqual([2, 2, 1]);
+});
+
+test('paginar: un salto de página explícito al PRINCIPIO del documento no genera una página en blanco de más', () => {
+  const items: FlowItem[] = [
+    { kind: 'pagebreak' },
+    { kind: 'line', height: 14, segs: [{ xPt: 0, text: 'x', font: 'Helvetica', sizePt: 11, color: [0, 0, 0] }], bars: [] }
+  ];
+  const geo: PageGeometry = { widthPt: 595, heightPt: 842, marginTopPt: 56, marginBottomPt: 56, marginLeftPt: 56, marginRightPt: 56 };
+  const { totalPaginas, trazos } = paginar(items, geo, 0.28);
+  expect(totalPaginas).toBe(1);
+  expect(trazos[0]!.page).toBe(0);
+});
+
+test('paginar: un salto de página explícito DESPUÉS de contenido mueve lo siguiente a la página 2', () => {
+  const items: FlowItem[] = [
+    { kind: 'line', height: 14, segs: [{ xPt: 0, text: 'pagina1', font: 'Helvetica', sizePt: 11, color: [0, 0, 0] }], bars: [] },
+    { kind: 'pagebreak' },
+    { kind: 'line', height: 14, segs: [{ xPt: 0, text: 'pagina2', font: 'Helvetica', sizePt: 11, color: [0, 0, 0] }], bars: [] }
+  ];
+  const geo: PageGeometry = { widthPt: 595, heightPt: 842, marginTopPt: 56, marginBottomPt: 56, marginLeftPt: 56, marginRightPt: 56 };
+  const { totalPaginas, trazos } = paginar(items, geo, 0.28);
+  expect(totalPaginas).toBe(2);
+  expect(trazos.find((t) => t.text === 'pagina1')!.page).toBe(0);
+  expect(trazos.find((t) => t.text === 'pagina2')!.page).toBe(1);
+});
+
+test('paginar respeta márgenes distintos de un documento con geometría propia (no A4)', () => {
+  const items: FlowItem[] = Array.from({ length: 3 }, (_v, i) => ({ kind: 'line' as const, height: 100, segs: [{ xPt: 0, text: `l${i}`, font: 'Helvetica', sizePt: 11, color: [0, 0, 0] as [number, number, number] }], bars: [] }));
+  const geo: PageGeometry = { widthPt: 300, heightPt: 320, marginTopPt: 10, marginBottomPt: 10, marginLeftPt: 10, marginRightPt: 10 };
+  const { totalPaginas, trazos } = paginar(items, geo, 0.28);
+  // Área útil: 300pt de alto. 3 líneas de 100pt = 300pt exactos -> caben todas en 1 página.
+  expect(totalPaginas).toBe(1);
+  for (const t of trazos) { expect(t.yPt).toBeGreaterThanOrEqual(geo.marginBottomPt - 1); expect(t.yPt).toBeLessThanOrEqual(geo.heightPt - geo.marginTopPt); }
+});
