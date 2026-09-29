@@ -1,7 +1,7 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem, ImagePixels } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_PAGEOBJ_PATH = 2;
@@ -728,27 +728,8 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   insertText(doc: DocHandle, pageIndex: number, spec: InsertTextSpec): number {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
-    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
-    try {
-      const obj = this.p.FPDFPageObj_NewTextObj(doc, spec.fontName ?? 'Helvetica', spec.sizePt);
-      const wptr = this.mem.wide(spec.text);
-      this.p.FPDFText_SetText(obj, wptr);
-      this.mem.free(wptr);
-      const [r, g, b] = spec.color ?? [0, 0, 0];
-      this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
-      // Matriz identidad + traslación a (x, y) en puntos PDF.
-      this.p.FPDFPageObj_Transform(obj, 1, 0, 0, 1, spec.xPt, spec.yPt);
-      if (spec.invisible) {
-        // Modo de render 3 = invisible: el texto queda extraíble/buscable pero no se pinta. Para capas de OCR.
-        this.p.FPDFTextObj_SetTextRenderMode(obj, 3);
-      }
-      this.p.FPDFPage_InsertObject(page, obj);
-      this.p.FPDFPage_GenerateContent(page);
-      return this.p.FPDFPage_CountObjects(page) - 1; // el objeto insertado es el último
-    } finally {
-      this.p.FPDF_ClosePage(page);
-    }
+    const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'insertText', spec }]);
+    return (res as Extract<PageOpResult, { type: 'insertText' }>).runId;
   }
 
   insertImage(doc: DocHandle, pageIndex: number, spec: InsertImageSpec): boolean {
@@ -1111,21 +1092,8 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   highlightRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
-    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
-    try {
-      const obj = this.p.FPDFPageObj_CreateNewRect(rect.xPt, rect.yPt, rect.wPt, rect.hPt);
-      this.p.FPDFPath_SetDrawMode(obj, 2, false); // 2 = relleno por winding, sin trazo
-      const [r, g, b] = color;
-      this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
-      // Multiply: amarillo * blanco = amarillo; el texto negro sigue negro (marcador real).
-      this.p.FPDFPageObj_SetBlendMode(obj, 'Multiply');
-      this.p.FPDFPage_InsertObject(page, obj);
-      this.p.FPDFPage_GenerateContent(page);
-      return true;
-    } finally {
-      this.p.FPDF_ClosePage(page);
-    }
+    const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'highlightRect', rect, color }]);
+    return (res as Extract<PageOpResult, { type: 'highlightRect' }>).ok;
   }
 
   addNote(doc: DocHandle, pageIndex: number, spec: { xPt: number; yPt: number; text: string }): number {
@@ -1461,55 +1429,106 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   fillRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
-    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
-    try {
-      const obj = this.p.FPDFPageObj_CreateNewRect(rect.xPt, rect.yPt, rect.wPt, rect.hPt);
-      this.p.FPDFPath_SetDrawMode(obj, 2, false); // 2 = relleno por winding, sin trazo
-      const [r, g, b] = color;
-      this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
-      // Blend normal (sin SetBlendMode): rectángulo opaco, base de subrayado/tachado.
-      this.p.FPDFPage_InsertObject(page, obj);
-      this.p.FPDFPage_GenerateContent(page);
-      return true;
-    } finally {
-      this.p.FPDF_ClosePage(page);
-    }
+    const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'fillRect', rect, color }]);
+    return (res as Extract<PageOpResult, { type: 'fillRect' }>).ok;
   }
 
   drawStroke(doc: DocHandle, pageIndex: number, points: { xPt: number; yPt: number }[], color: [number, number, number], widthPt: number): boolean {
-    if (points.length < 2) return false;
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
-    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
-    try {
-      const path = this.p.FPDFPageObj_CreateNewPath(points[0]!.xPt, points[0]!.yPt);
-      for (let i = 1; i < points.length; i++) this.p.FPDFPath_LineTo(path, points[i]!.xPt, points[i]!.yPt);
-      const [r, g, b] = color;
-      this.p.FPDFPageObj_SetStrokeColor(path, r, g, b, 255);
-      this.p.FPDFPageObj_SetStrokeWidth(path, widthPt);
-      this.p.FPDFPath_SetDrawMode(path, 0, true); // sin relleno, con trazo
-      this.p.FPDFPage_InsertObject(page, path);
-      this.p.FPDFPage_GenerateContent(page);
-      return true;
-    } finally {
-      this.p.FPDF_ClosePage(page);
-    }
+    const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'drawStroke', points, color, widthPt }]);
+    return (res as Extract<PageOpResult, { type: 'drawStroke' }>).ok;
   }
 
   /** Rectángulo solo borde (sin relleno); ver el contrato en PdfEngine.ts. */
   drawRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number], widthPt: number): boolean {
-    if (rect.wPt < 3 || rect.hPt < 3) return false; // fue un clic, no un arrastre real
+    const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'drawRect', rect, color, widthPt }]);
+    return (res as Extract<PageOpResult, { type: 'drawRect' }>).ok;
+  }
+
+  /**
+   * Núcleo compartido de `insertText`, `fillRect`, `highlightRect`,
+   * `drawStroke` y `drawRect` (E-037, docs/ERRORES-CONOCIDOS.md): carga la
+   * página UNA vez, crea el objeto de cada op sin regenerar el contenido
+   * entre medias, y solo al final —si al menos una op mutó de verdad la
+   * página— llama a `FPDFPage_GenerateContent()` una sola vez. Cada método
+   * unitario delega aquí con un array de un solo elemento, así que esta es
+   * la ÚNICA implementación real de cada tipo de op; no hay lógica
+   * duplicada entre la ruta "una op" y la ruta "en lote".
+   */
+  applyPageOps(doc: DocHandle, pageIndex: number, ops: PageOp[]): PageOpResult[] {
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
-      const obj = this.p.FPDFPageObj_CreateNewRect(rect.xPt, rect.yPt, rect.wPt, rect.hPt);
-      this.p.FPDFPath_SetDrawMode(obj, 0, true); // 0 = sin relleno, con trazo
-      const [r, g, b] = color;
-      this.p.FPDFPageObj_SetStrokeColor(obj, r, g, b, 255);
-      this.p.FPDFPageObj_SetStrokeWidth(obj, widthPt);
-      this.p.FPDFPage_InsertObject(page, obj);
-      this.p.FPDFPage_GenerateContent(page);
-      return true;
+      const results: PageOpResult[] = [];
+      let mutado = false;
+      for (const op of ops) {
+        switch (op.type) {
+          case 'insertText': {
+            const spec = op.spec;
+            const obj = this.p.FPDFPageObj_NewTextObj(doc, spec.fontName ?? 'Helvetica', spec.sizePt);
+            const wptr = this.mem.wide(spec.text);
+            this.p.FPDFText_SetText(obj, wptr);
+            this.mem.free(wptr);
+            const [r, g, b] = spec.color ?? [0, 0, 0];
+            this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
+            this.p.FPDFPageObj_Transform(obj, 1, 0, 0, 1, spec.xPt, spec.yPt);
+            if (spec.invisible) this.p.FPDFTextObj_SetTextRenderMode(obj, 3); // 3 = invisible (OCR)
+            this.p.FPDFPage_InsertObject(page, obj);
+            mutado = true;
+            results.push({ type: 'insertText', runId: this.p.FPDFPage_CountObjects(page) - 1 });
+            break;
+          }
+          case 'fillRect': {
+            const obj = this.p.FPDFPageObj_CreateNewRect(op.rect.xPt, op.rect.yPt, op.rect.wPt, op.rect.hPt);
+            this.p.FPDFPath_SetDrawMode(obj, 2, false); // 2 = relleno por winding, sin trazo
+            const [r, g, b] = op.color;
+            this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
+            // Blend normal (sin SetBlendMode): rectángulo opaco, base de subrayado/tachado.
+            this.p.FPDFPage_InsertObject(page, obj);
+            mutado = true;
+            results.push({ type: 'fillRect', ok: true });
+            break;
+          }
+          case 'highlightRect': {
+            const obj = this.p.FPDFPageObj_CreateNewRect(op.rect.xPt, op.rect.yPt, op.rect.wPt, op.rect.hPt);
+            this.p.FPDFPath_SetDrawMode(obj, 2, false);
+            const [r, g, b] = op.color;
+            this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
+            // Multiply: amarillo * blanco = amarillo; el texto negro sigue negro (marcador real).
+            this.p.FPDFPageObj_SetBlendMode(obj, 'Multiply');
+            this.p.FPDFPage_InsertObject(page, obj);
+            mutado = true;
+            results.push({ type: 'highlightRect', ok: true });
+            break;
+          }
+          case 'drawStroke': {
+            if (op.points.length < 2) { results.push({ type: 'drawStroke', ok: false }); break; }
+            const path = this.p.FPDFPageObj_CreateNewPath(op.points[0]!.xPt, op.points[0]!.yPt);
+            for (let i = 1; i < op.points.length; i++) this.p.FPDFPath_LineTo(path, op.points[i]!.xPt, op.points[i]!.yPt);
+            const [r, g, b] = op.color;
+            this.p.FPDFPageObj_SetStrokeColor(path, r, g, b, 255);
+            this.p.FPDFPageObj_SetStrokeWidth(path, op.widthPt);
+            this.p.FPDFPath_SetDrawMode(path, 0, true); // sin relleno, con trazo
+            this.p.FPDFPage_InsertObject(page, path);
+            mutado = true;
+            results.push({ type: 'drawStroke', ok: true });
+            break;
+          }
+          case 'drawRect': {
+            if (op.rect.wPt < 3 || op.rect.hPt < 3) { results.push({ type: 'drawRect', ok: false }); break; } // fue un clic, no un arrastre real
+            const obj = this.p.FPDFPageObj_CreateNewRect(op.rect.xPt, op.rect.yPt, op.rect.wPt, op.rect.hPt);
+            this.p.FPDFPath_SetDrawMode(obj, 0, true); // 0 = sin relleno, con trazo
+            const [r, g, b] = op.color;
+            this.p.FPDFPageObj_SetStrokeColor(obj, r, g, b, 255);
+            this.p.FPDFPageObj_SetStrokeWidth(obj, op.widthPt);
+            this.p.FPDFPage_InsertObject(page, obj);
+            mutado = true;
+            results.push({ type: 'drawRect', ok: true });
+            break;
+          }
+        }
+      }
+      if (mutado) this.p.FPDFPage_GenerateContent(page); // una sola vez, pase lo que pase el número de ops
+      return results;
     } finally {
       this.p.FPDF_ClosePage(page);
     }
@@ -1623,6 +1642,25 @@ export class PdfiumEngine implements PdfEngine {
     let off = 0;
     for (const c of chunks) { out.set(c, off); off += c.length; }
     return out;
+  }
+
+  /**
+   * Guardado compacto (E-038): descarta los streams de contenido HUÉRFANOS
+   * que fue dejando cada `FPDFPage_GenerateContent()` sobre este documento en
+   * memoria. NO muta `doc` — guarda, abre una copia efímera desde esos bytes
+   * (al analizarlos, el motor solo reconstruye lo alcanzable desde cada
+   * página) y guarda esa copia. Mismo mecanismo, generalizado, que ya usaba
+   * `ComprimirDocumentoCmd` con un `reload()` explícito para las imágenes
+   * sustituidas.
+   */
+  async saveCompact(doc: DocHandle): Promise<Uint8Array<ArrayBuffer>> {
+    const bytes = this.save(doc);
+    const tmp = await this.open(bytes);
+    try {
+      return this.save(tmp);
+    } finally {
+      this.close(tmp);
+    }
   }
 
   close(doc: DocHandle): void {

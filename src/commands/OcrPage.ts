@@ -27,9 +27,11 @@ export class OcrPageCmd implements Command {
     const lines = await this.provider.recognize({ rgba: new Uint8Array(data), width, height }, this.lang);
     const heightPt = c.engine.pageSize(c.doc, this.pageIndex).heightPt;
     const specs = mapOcrLines(lines, this.scale, heightPt);
-    for (const spec of specs) {
-      c.engine.insertText(c.doc, this.pageIndex, spec);
-    }
+    // Lote (E-037, docs/ERRORES-CONOCIDOS.md): una página densa puede traer
+    // 50-100 líneas reconocidas; un insertText por línea era O(N²) porque
+    // cada uno regeneraba el contenido entero de la página. applyPageOps
+    // carga la página una vez y regenera el contenido una sola vez al final.
+    c.engine.applyPageOps(c.doc, this.pageIndex, specs.map((spec) => ({ type: 'insertText' as const, spec })));
     this.recognized = specs.length;
     c.refresh();
   }

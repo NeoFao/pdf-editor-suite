@@ -1,7 +1,7 @@
 import type { ConversorDocumento } from './ConversorDocumento';
 import { parseMarkdown } from './markdown/parse';
 import { layoutMarkdown, PAGE_WIDTH_PT, PAGE_HEIGHT_PT } from './markdown/layout';
-import type { PdfEngine, DocHandle } from '../engine/PdfEngine';
+import type { PdfEngine, DocHandle, PageOp } from '../engine/PdfEngine';
 
 /**
  * Conversor Markdown → PDF, 100% en el navegador, con el motor PDFium: el
@@ -51,12 +51,26 @@ export class ConversorMarkdownNavegador implements ConversorDocumento {
     const doc: DocHandle = await this.engine.open(blank);
     for (let i = 1; i < totalPaginas; i++) this.engine.importPages(doc, blank, i);
 
+    // Lote por página (E-037, docs/ERRORES-CONOCIDOS.md): fillRect/insertText
+    // sueltos regeneran el contenido de la página en CADA llamada (coste que
+    // crece con el número de objetos ya insertados) — con cientos de trazos
+    // eso son varios segundos, todos en el hilo principal. Se agrupan las
+    // ops por página (barras antes que trazos DENTRO de cada página, para
+    // conservar el mismo orden de dibujo/z-order que el bucle original) y se
+    // aplican con una sola llamada a applyPageOps por página.
+    const opsPorPagina = new Map<number, PageOp[]>();
+    const agregar = (page: number, op: PageOp): void => {
+      let lista = opsPorPagina.get(page);
+      if (!lista) { lista = []; opsPorPagina.set(page, lista); }
+      lista.push(op);
+    };
     for (const b of barras) {
-      this.engine.fillRect(doc, b.page, { xPt: b.xPt, yPt: b.yPt, wPt: b.wPt, hPt: b.hPt }, b.color);
+      agregar(b.page, { type: 'fillRect', rect: { xPt: b.xPt, yPt: b.yPt, wPt: b.wPt, hPt: b.hPt }, color: b.color });
     }
     for (const t of trazos) {
-      this.engine.insertText(doc, t.page, { xPt: t.xPt, yPt: t.yPt, text: t.text, sizePt: t.sizePt, fontName: t.font, color: t.color });
+      agregar(t.page, { type: 'insertText', spec: { xPt: t.xPt, yPt: t.yPt, text: t.text, sizePt: t.sizePt, fontName: t.font, color: t.color } });
     }
+    for (const [page, ops] of opsPorPagina) this.engine.applyPageOps(doc, page, ops);
 
     const out = this.engine.save(doc);
     this.engine.close(doc);

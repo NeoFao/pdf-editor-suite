@@ -725,6 +725,62 @@ export const conAddFunctionConRemoveFunction = {
   }
 };
 
+/* ── E-037 · dibujo/texto en bucle usa el lote, no llamadas sueltas ────── */
+export const conMotorLoteEnBucle = {
+  id: 'motor-lote-en-bucle',
+  titulo: 'un fichero que dibuja/inserta texto del motor DENTRO de un bucle usa applyPageOps',
+  comoArreglar:
+    'Si el fichero recorre una lista y por cada elemento llama a insertText/fillRect/' +
+    'highlightRect/drawStroke/drawRect del motor, agrupa esas operaciones en un array ' +
+    'de PageOp y pásalas juntas a engine.applyPageOps(doc, pageIndex, ops) — una sola ' +
+    'llamada por página, en vez de una por elemento. Cada uno de esos métodos hace ' +
+    'FPDF_LoadPage → mutar → FPDFPage_GenerateContent → FPDF_ClosePage POR LLAMADA, y ' +
+    'GenerateContent reserializa TODO el contenido ya insertado en la página: N ' +
+    'llamadas sueltas cuestan O(N²) (E-037, visto con OCR de una página densa: 200 ' +
+    'insertText sueltos tardaban ~1,3 s frente a ~10 ms en un solo applyPageOps) y ' +
+    'además cada GenerateContent adicional deja un stream de contenido huérfano que ' +
+    'infla el PDF guardado (E-038).',
+  ejecutar() {
+    const raizSrc = path.join(RAIZ, 'src');
+    if (!fs.existsSync(raizSrc)) return [];
+    const hallazgos = [];
+    const patronBucle = /\bfor\s*\(|\.forEach\(|\bwhile\s*\(/;
+    const patronDibujo = /\.(insertText|fillRect|highlightRect|drawStroke|drawRect)\(/;
+    const patronLote = /\.applyPageOps\(/;
+    // Heurística por FICHERO (mismo estilo que addfunction-con-removefunction,
+    // E-036): comprobar si una llamada de dibujo cae textualmente DENTRO de
+    // un bucle exigiría trocear por límites de bloque, y este repo no tiene
+    // un parser de AST reutilizable para eso. En su lugar: si un fichero de
+    // src/commands/** o src/convert/** contiene AMBAS cosas — un bucle Y una
+    // llamada de dibujo/texto del motor — tiene que llamar también a
+    // applyPageOps en algún punto. Hoy solo dos ficheros del repo real caen
+    // en ese caso (OcrPage.ts, ConversorMarkdownNavegador.ts) y los dos usan
+    // ya applyPageOps; un fichero con un bucle no relacionado y una única
+    // llamada de dibujo SUELTA (fuera del bucle) también pasaría esta regla
+    // sin usar applyPageOps — ese caso no existe hoy en el repo y, si
+    // apareciera, la revisión humana del PR es la defensa, igual que en
+    // gesto-con-cancelacion.
+    const dirs = ['src/commands', 'src/convert'];
+    const recorrer = (dir) => {
+      if (!fs.existsSync(path.join(RAIZ, dir))) return;
+      for (const e of fs.readdirSync(path.join(RAIZ, dir), { withFileTypes: true })) {
+        const rel = `${dir}/${e.name}`;
+        if (e.isDirectory()) { recorrer(rel); continue; }
+        if (!e.name.endsWith('.ts')) continue;
+        if (tieneDeuda(rel, this.id)) continue;
+        const contenido = leer(rel);
+        if (!patronBucle.test(contenido) || !patronDibujo.test(contenido)) continue;
+        if (patronLote.test(contenido)) continue;
+        const primeraLineaDibujo = contenido.split('\n').findIndex((l) => patronDibujo.test(l)) + 1;
+        hallazgos.push(hallazgo(rel, primeraLineaDibujo || null, 'tiene un bucle y llama a un método de dibujo/texto del motor, pero no usa applyPageOps'));
+      }
+    };
+    recorrer(dirs[0]);
+    recorrer(dirs[1]);
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -745,5 +801,6 @@ export const TODAS = [
   conWebServerNextSinReusar,
   conGestoConCancelacion,
   conHeapU8Getter,
-  conAddFunctionConRemoveFunction
+  conAddFunctionConRemoveFunction,
+  conMotorLoteEnBucle
 ];

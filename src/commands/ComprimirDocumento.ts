@@ -99,7 +99,12 @@ export class ComprimirDocumentoCmd implements Command {
       await c.reload(bytesConHuerfanos);
     }
 
-    const after = c.engine.save(c.doc);
+    // saveCompact (E-038, docs/ERRORES-CONOCIDOS.md): el tamaño que se
+    // informa aquí es el que se llevará el usuario al pulsar Guardar (que
+    // también usa saveCompact) — un save() a secas podría seguir arrastrando
+    // huérfanos de ediciones anteriores a la compresión (texto, trazos...)
+    // que no tienen nada que ver con las imágenes que tocó este comando.
+    const after = await c.engine.saveCompact(c.doc);
     this.informe = { antesBytes: before.length, despuesBytes: after.length, imagenes: tocadas };
     if (tocadas === 0) c.refresh(); // si hubo reload, ya refrescó c.reload() por dentro
   }

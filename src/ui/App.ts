@@ -315,8 +315,8 @@ export class App {
     this.rangeInput = document.createElement('input');
     this.rangeInput.type = 'text'; this.rangeInput.id = 'btn-range'; this.rangeInput.placeholder = '1-3,5'; this.rangeInput.size = 6;
     const btnSplit = this.button('Dividir', 'btn-split', () => this.splitByRange());
-    const btnSave = this.button('Guardar', 'btn-save', () => this.save());
-    const btnPrint = this.button('Imprimir', 'btn-print', () => this.print());
+    const btnSave = this.button('Guardar', 'btn-save', () => { void this.save(); });
+    const btnPrint = this.button('Imprimir', 'btn-print', () => { void this.print(); });
     const btnUndo = this.button('Deshacer', 'btn-undo', () => { void this.bus?.undo(); });
     const btnRedo = this.button('Rehacer', 'btn-redo', () => { void this.bus?.redo(); });
 
@@ -1360,14 +1360,17 @@ export class App {
    *   terminar (`limpiarImpresionAnterior`), para no ir acumulando iframes
    *   ocultos ni oyentes globales (E-014/E-020, AGENTS.md §2.6).
    */
-  private print(): void {
+  private async print(): Promise<void> {
     const s = this.session;
     if (!s) { this.setStatus('Abre un documento antes de imprimir.'); return; }
 
     this.limpiarImpresionAnterior?.();
     this.limpiarImpresionAnterior = null;
 
-    const bytes = s.engine.save(s.doc);
+    // saveCompact (E-038, docs/ERRORES-CONOCIDOS.md): guardado de cara al
+    // usuario, no un snapshot interno de deshacer — descarta los streams de
+    // contenido huérfanos que fue dejando cada edición.
+    const bytes = await s.engine.saveCompact(s.doc);
     const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
 
     const iframe = document.createElement('iframe');
@@ -1423,10 +1426,12 @@ export class App {
     this.setStatus('Abriendo el diálogo de impresión…');
   }
 
-  private save(): void {
+  private async save(): Promise<void> {
     const s = this.session;
     if (!s) return;
-    this.download(s.engine.save(s.doc), this.docName.replace(/\.pdf$/i, '') + '_editado.pdf');
+    // saveCompact (E-038): guardado de cara al usuario, descarta huérfanos.
+    const bytes = await s.engine.saveCompact(s.doc);
+    this.download(bytes, this.docName.replace(/\.pdf$/i, '') + '_editado.pdf');
     this.setStatus('Guardado.');
   }
 
@@ -1435,6 +1440,11 @@ export class App {
     if (!s) return;
     const idx = parseRange(this.rangeInput.value, s.model.pages.length);
     if (idx.length === 0) { this.setStatus('Rango no válido (ej.: 1-3,5).'); return; }
+    // extractPages ya construye un documento NUEVO importando solo las
+    // páginas pedidas: al analizarlas solo trae los objetos alcanzables
+    // desde ellas, así que no arrastra los streams huérfanos del documento
+    // origen (E-038) — no hace falta saveCompact aquí (verificado con un
+    // test del motor).
     this.download(s.engine.extractPages(s.doc, idx), `${this.docName.replace(/\.pdf$/i, '')}_seleccion.pdf`);
     this.setStatus(`${idx.length} página(s) extraídas.`);
   }
@@ -1442,6 +1452,7 @@ export class App {
   private extractCurrent(): void {
     const s = this.session;
     if (!s) return;
+    // Igual que splitByRange: extractPages ya es inmune a E-038 por construcción.
     const bytes = s.engine.extractPages(s.doc, [this.currentPage]);
     this.download(bytes, `${this.docName.replace(/\.pdf$/i, '')}_pagina_${this.currentPage + 1}.pdf`);
     this.setStatus(`Página ${this.currentPage + 1} extraída.`);
