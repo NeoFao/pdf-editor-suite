@@ -1,7 +1,8 @@
-import { test, expect } from 'vitest';
+import { test, expect, vi } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
 import { PdfiumEngine } from '../../src/engine/pdfium/PdfiumEngine';
 import type { PageOp } from '../../src/engine/PdfEngine';
+import type { Pdfium } from '../../src/engine/pdfium/loadEngine';
 
 async function nuevoDoc(): Promise<Uint8Array> {
   const d = await PDFDocument.create();
@@ -20,7 +21,14 @@ async function nuevoDoc(): Promise<Uint8Array> {
  * (frente a ~30 ms para 20). `applyPageOps` carga la página una sola vez,
  * aplica N operaciones y regenera el contenido una sola vez al final.
  */
-test('E-037: 200 insertText por applyPageOps en un solo lote tardan muy por debajo de hacerlos uno a uno', async () => {
+/**
+ * La propiedad que protege el defecto no es "tarda poco" (un umbral en
+ * milisegundos es frágil bajo carga y no prueba lo que dice proteger, ver
+ * docs/TESTING.md) sino "UNA sola llamada a FPDFPage_GenerateContent por
+ * invocación de applyPageOps, sin importar cuántas ops traiga el lote". Se
+ * espía el objeto del módulo WASM directamente.
+ */
+test('E-037: 200 insertText por applyPageOps en un solo lote hacen UNA sola llamada a FPDFPage_GenerateContent, no 200', async () => {
   const eng = await PdfiumEngine.create();
   const doc = await eng.open(await nuevoDoc());
   const ops: PageOp[] = Array.from({ length: 200 }, (_v, i) => ({
@@ -28,18 +36,18 @@ test('E-037: 200 insertText por applyPageOps en un solo lote tardan muy por deba
     spec: { xPt: 20, yPt: 20 + (i % 30) * 20, text: `linea ${i} de texto de prueba`, sizePt: 10 }
   }));
 
-  const t0 = performance.now();
+  const p = (eng as unknown as { p: Pdfium }).p;
+  const spyGenerateContent = vi.spyOn(p, 'FPDFPage_GenerateContent');
+
   const results = eng.applyPageOps(doc, 0, ops);
-  const t1 = performance.now();
 
   expect(results).toHaveLength(200);
-  // Medido en máquina de desarrollo: ~11 ms (frente a ~1300 ms uno a uno).
-  // Umbral con holgura >10× para no ser frágil en CI más lento.
-  expect(t1 - t0).toBeLessThan(200);
+  expect(spyGenerateContent).toHaveBeenCalledTimes(1); // no 200 — ese era el O(N²) de E-037
+  spyGenerateContent.mockRestore();
 
   expect(eng.getPageText(doc, 0)).toHaveLength(200);
   eng.close(doc);
-}, 30_000);
+});
 
 test('E-037: applyPageOps en lote produce el MISMO contenido que aplicar cada op una a una', async () => {
   const eng = await PdfiumEngine.create();
