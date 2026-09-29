@@ -97,6 +97,9 @@ export interface FormField {
 /** Bitmap RGBA listo para volcar en un canvas. */
 export interface RenderResult { width: number; height: number; data: Uint8ClampedArray }
 
+/** Píxeles RGBA de un objeto imagen, a su resolución NATIVA (no la de render en pantalla). */
+export interface ImagePixels { rgba: Uint8Array; width: number; height: number }
+
 /** Imagen a insertar: píxeles RGBA ya decodificados + tamaño y colocación en puntos PDF. */
 export interface InsertImageSpec {
   rgba: Uint8Array;      // imgWidth*imgHeight*4, orden RGBA
@@ -219,6 +222,49 @@ export interface PdfEngine {
    * alcance de esta fase). `false` también si `objIndex` no es una imagen.
    */
   setObjectRect(doc: DocHandle, pageIndex: number, objIndex: number, rectPt: RectPt): boolean;
+  /**
+   * Píxeles RGBA del objeto IMAGEN en `objIndex`, a su resolución NATIVA
+   * (`FPDFImageObj_GetBitmap` + `FPDFBitmap_GetFormat`, no el tamaño con que
+   * se ve en la página). Base de los filtros de imagen (#25 de la tabla de
+   * paridad, §9) y de la compresión (#29): a diferencia de la app vieja, que
+   * rasteriza la PÁGINA entera, esto opera solo sobre el bitmap del objeto —
+   * el texto y los vectores de la página no se tocan. Convierte desde el
+   * formato que devuelva PDFium (BGRA, BGR, BGRx o Gray) a RGBA — BGR (3
+   * bytes/píxel, sin alfa) es el más común de los cuatro: PDFium lo usa para
+   * CUALQUIER imagen totalmente opaca (alfa 255 en todos los píxeles) tras
+   * pasar por `FPDFImageObj_SetBitmap`, no solo BGRA/BGRx/Gray como podría
+   * asumirse. `null` si `objIndex` no es una imagen, o si el bitmap viene en
+   * un formato que ninguno de esos cuatro cubre (no debería darse con los
+   * documentos que produce este motor; sí podría darse con un PDF externo
+   * con un espacio de color exótico, p. ej. CMYK indexado).
+   */
+  getImagePixels(doc: DocHandle, pageIndex: number, objIndex: number): ImagePixels | null;
+  /**
+   * Sustituye los píxeles del objeto IMAGEN en `objIndex` por `rgba`
+   * (`width`×`height`, puede tener una resolución distinta a la anterior),
+   * conservando la MATRIZ actual del objeto — es decir, su posición y tamaño
+   * en la página no cambian, solo el contenido del bitmap
+   * (`FPDFImageObj_SetBitmap`). `false` si `objIndex` no es una imagen.
+   */
+  replaceImagePixels(doc: DocHandle, pageIndex: number, objIndex: number, rgba: Uint8Array, width: number, height: number): boolean;
+  /**
+   * Sustituye el objeto IMAGEN en `objIndex` por un JPEG YA CODIFICADO
+   * (`jpegBytes`), conservando la MATRIZ actual (posición/tamaño en la
+   * página) — `FPDFImageObj_LoadJpegFileInline`, que guarda el JPEG tal cual
+   * como stream `DCTDecode` en vez de decodificar y recomprimir. Base de
+   * `ComprimirDocumentoCmd`: la codificación JPEG en sí ocurre en el
+   * navegador (canvas), este método solo la incrusta. `false` si `objIndex`
+   * no es una imagen o si PDFium rechaza el JPEG (datos corruptos).
+   */
+  replaceImageJpeg(doc: DocHandle, pageIndex: number, objIndex: number, jpegBytes: Uint8Array): boolean;
+  /**
+   * Tamaño en bytes del stream de imagen TAL COMO está codificado hoy en el
+   * PDF (`FPDFImageObj_GetImageDataRaw`, solo para consultar el tamaño). Lo
+   * usa `ComprimirDocumentoCmd` para no sustituir una imagen por un JPEG que
+   * saldría MÁS pesado que lo que ya había. `null` si `objIndex` no es una
+   * imagen.
+   */
+  getImageRawSize(doc: DocHandle, pageIndex: number, objIndex: number): number | null;
   /**
    * Elimina el objeto de página en `objIndex` (de cualquier tipo:
    * `FPDFPage_RemoveObject` + `FPDFPageObj_Destroy`). Reindexa los objetos

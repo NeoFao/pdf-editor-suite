@@ -1,11 +1,19 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem, ImagePixels } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_PAGEOBJ_PATH = 2;
 const FPDF_PAGEOBJ_IMAGE = 3;
+// FPDFBitmap_GetFormat (public/fpdfview.h): formato del bitmap devuelto por
+// FPDFImageObj_GetBitmap. Sin constantes propias en los .d.ts del paquete
+// (son structs/enums C planos, invisibles para el wrapper) — valores
+// estables de la API pública de PDFium.
+const FPDFBitmap_Gray = 1;
+const FPDFBitmap_BGR = 2;  // 3 bytes/píxel, sin alfa: el formato más común (imagen opaca), ver getImagePixels.
+const FPDFBitmap_BGRx = 3;
+const FPDFBitmap_BGRA = 4;
 const FPDF_SEGMENT_MOVETO = 2; // FPDF_SEGMENTTYPE: inicia un subtrazo nuevo, sin conectar con el punto anterior.
 const FPDF_ANNOT_TEXT = 1;    // FPDF_ANNOTATION_SUBTYPE: nota adhesiva ("sticky note")
 const FPDF_ANNOT_FLAG = 0x01; // flag de FPDF_RenderPageBitmap: pinta también las anotaciones
@@ -811,6 +819,259 @@ export class PdfiumEngine implements PdfEngine {
       m.free(setBuf);
       this.p.FPDFPage_GenerateContent(page);
       return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /**
+   * Carga TODAS las páginas del documento y devuelve el puntero al array
+   * (para pasarlo tal cual a `FPDFImageObj_SetBitmap`/`LoadJpegFileInline`,
+   * que lo piden para poder invalidar el caché de render de cualquier
+   * página que comparta el objeto imagen que se está sustituyendo) junto
+   * con los handles, reutilizando `keepOpenPage` (ya cargado por el
+   * llamante) en su propio índice en vez de volver a cargarlo. Liberar
+   * SIEMPRE con `freeAllPagesArray` en un `finally`.
+   */
+  private loadAllPagesArray(doc: DocHandle, keepOpenPageIndex: number, keepOpenPage: number): { pagesPtr: number; handles: number[] } {
+    const m = this.mem;
+    const count = Math.max(1, this.p.FPDF_GetPageCount(doc));
+    const handles: number[] = [];
+    const pagesPtr = m.malloc(count * 4);
+    for (let i = 0; i < count; i++) {
+      const pg = i === keepOpenPageIndex ? keepOpenPage : this.p.FPDF_LoadPage(doc, i);
+      handles.push(pg);
+      m.setValue(pagesPtr + i * 4, pg, 'i32');
+    }
+    return { pagesPtr, handles };
+  }
+
+  /** Contraparte de `loadAllPagesArray`: libera el array y cierra todas las páginas salvo la que ya tenía abierta el llamante. */
+  private freeAllPagesArray(pagesPtr: number, handles: number[], keepOpenPageIndex: number): void {
+    this.mem.free(pagesPtr);
+    handles.forEach((pg, i) => { if (i !== keepOpenPageIndex) this.p.FPDF_ClosePage(pg); });
+  }
+
+  /**
+   * Píxeles RGBA del objeto IMAGEN en `objIndex`, a su resolución nativa.
+   * Ver JSDoc del contrato (`PdfEngine.getImagePixels`).
+   */
+  getImagePixels(doc: DocHandle, pageIndex: number, objIndex: number): ImagePixels | null {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const heap = this.mem.HEAPU8;
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, objIndex);
+      if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_IMAGE) return null;
+      const bmp = this.p.FPDFImageObj_GetBitmap(obj);
+      if (!bmp) return null;
+      try {
+        const width = this.p.FPDFBitmap_GetWidth(bmp);
+        const height = this.p.FPDFBitmap_GetHeight(bmp);
+        const stride = this.p.FPDFBitmap_GetStride(bmp);
+        const format = this.p.FPDFBitmap_GetFormat(bmp);
+        const buf = this.p.FPDFBitmap_GetBuffer(bmp);
+        if (width <= 0 || height <= 0 || !buf) return null;
+
+        // FPDFImageObj_GetBitmap da el bitmap de COLOR a resolución NATIVA,
+        // pero NUNCA compone la máscara de transparencia (/SMask o /Mask):
+        // comprobado contra el motor real, una imagen con alfa real vuelve
+        // aquí con sus 4 píxeles en 255 (opaco), aunque el propio formato
+        // sea BGRA. Por eso el alfa se llena primero a 255 (placeholder) y
+        // se sustituye más abajo por el de FPDFImageObj_GetRenderedBitmap,
+        // que SÍ compone la máscara (verificado con un caso 255/0 conocido:
+        // los 4 cuadrantes de un 2×2 con solo el primer píxel opaco salen
+        // [255,0,0,0]).
+        const rgba = new Uint8Array(width * height * 4);
+        if (format === FPDFBitmap_BGRA) {
+          for (let y = 0; y < height; y++) {
+            const row = buf + y * stride;
+            for (let x = 0; x < width; x++) {
+              const s = row + x * 4, d = (y * width + x) * 4;
+              rgba[d] = heap[s + 2]!; rgba[d + 1] = heap[s + 1]!; rgba[d + 2] = heap[s]!; rgba[d + 3] = 255;
+            }
+          }
+        } else if (format === FPDFBitmap_BGRx) {
+          for (let y = 0; y < height; y++) {
+            const row = buf + y * stride;
+            for (let x = 0; x < width; x++) {
+              const s = row + x * 4, d = (y * width + x) * 4;
+              rgba[d] = heap[s + 2]!; rgba[d + 1] = heap[s + 1]!; rgba[d + 2] = heap[s]!; rgba[d + 3] = 255;
+            }
+          }
+        } else if (format === FPDFBitmap_BGR) {
+          // 3 bytes/píxel, sin alfa: el formato que PDFium usa de hecho para
+          // CUALQUIER imagen SIN transparencia real tras pasar por
+          // FPDFImageObj_SetBitmap/insertImage — el caso más común con
+          // diferencia (cualquier foto o página escaneada opaca). No estaba
+          // en la lista original del contrato (solo BGRA/BGRx/Gray); se
+          // añadió al comprobarlo contra el motor real: sin esto,
+          // getImagePixels devolvía null para casi cualquier imagen normal.
+          for (let y = 0; y < height; y++) {
+            const row = buf + y * stride;
+            for (let x = 0; x < width; x++) {
+              const s = row + x * 3, d = (y * width + x) * 4;
+              rgba[d] = heap[s + 2]!; rgba[d + 1] = heap[s + 1]!; rgba[d + 2] = heap[s]!; rgba[d + 3] = 255;
+            }
+          }
+        } else if (format === FPDFBitmap_Gray) {
+          for (let y = 0; y < height; y++) {
+            const row = buf + y * stride;
+            for (let x = 0; x < width; x++) {
+              const g = heap[row + x]!, d = (y * width + x) * 4;
+              rgba[d] = g; rgba[d + 1] = g; rgba[d + 2] = g; rgba[d + 3] = 255;
+            }
+          }
+        } else {
+          return null; // formato no soportado por ninguno de los 4 casos anteriores
+        }
+
+        // Alfa REAL: FPDFImageObj_GetRenderedBitmap sí compone la máscara,
+        // pero a la resolución de COLOCACIÓN en la página (p. ej. una imagen
+        // nativa de 8×6 puesta en una caja de 80×60pt puede volver como
+        // 80×60), no la nativa — por eso solo se usa para el canal alfa,
+        // remuestreado al tamaño nativo por vecino más cercano (basta para
+        // una máscara de transparencia; no es una imagen de color que deba
+        // verse nítida). Si falla o no aporta un formato con alfa, el
+        // bitmap se queda opaco (el valor por defecto puesto arriba).
+        const rendBmp = this.p.FPDFImageObj_GetRenderedBitmap(doc, page, obj);
+        if (rendBmp) {
+          try {
+            const rw = this.p.FPDFBitmap_GetWidth(rendBmp);
+            const rh = this.p.FPDFBitmap_GetHeight(rendBmp);
+            const rformat = this.p.FPDFBitmap_GetFormat(rendBmp);
+            if (rw > 0 && rh > 0 && rformat === FPDFBitmap_BGRA) {
+              const rstride = this.p.FPDFBitmap_GetStride(rendBmp);
+              const rbuf = this.p.FPDFBitmap_GetBuffer(rendBmp);
+              for (let y = 0; y < height; y++) {
+                const ry = Math.min(rh - 1, Math.floor((y * rh) / height));
+                const rrow = rbuf + ry * rstride;
+                for (let x = 0; x < width; x++) {
+                  const rx = Math.min(rw - 1, Math.floor((x * rw) / width));
+                  rgba[(y * width + x) * 4 + 3] = heap[rrow + rx * 4 + 3]!;
+                }
+              }
+            }
+          } finally {
+            this.p.FPDFBitmap_Destroy(rendBmp);
+          }
+        }
+
+        return { rgba, width, height };
+      } finally {
+        this.p.FPDFBitmap_Destroy(bmp);
+      }
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /**
+   * Sustituye los píxeles del objeto IMAGEN en `objIndex` conservando su
+   * matriz actual (posición/tamaño en la página). Ver JSDoc del contrato.
+   */
+  replaceImagePixels(doc: DocHandle, pageIndex: number, objIndex: number, rgba: Uint8Array, width: number, height: number): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const m = this.mem;
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, objIndex);
+      if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_IMAGE) return false;
+
+      // Mismo volcado BGRA que insertImage, sobre un bitmap del tamaño NUEVO
+      // (puede no coincidir con el de la imagen anterior: SetBitmap sustituye
+      // el bitmap entero, no lo redimensiona en sitio).
+      const bmp = this.p.FPDFBitmap_Create(width, height, 1);
+      try {
+        const stride = this.p.FPDFBitmap_GetStride(bmp);
+        const buf = this.p.FPDFBitmap_GetBuffer(bmp);
+        const heap = m.HEAPU8;
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            const s = (y * width + x) * 4;
+            const d = buf + y * stride + x * 4;
+            heap[d] = rgba[s + 2]!; heap[d + 1] = rgba[s + 1]!; heap[d + 2] = rgba[s]!; heap[d + 3] = rgba[s + 3]!;
+          }
+        }
+
+        const { pagesPtr, handles } = this.loadAllPagesArray(doc, pageIndex, page);
+        try {
+          const ok = this.p.FPDFImageObj_SetBitmap(pagesPtr, handles.length, obj, bmp);
+          if (!ok) return false;
+          this.p.FPDFPage_GenerateContent(page);
+          return true;
+        } finally {
+          this.freeAllPagesArray(pagesPtr, handles, pageIndex);
+        }
+      } finally {
+        this.p.FPDFBitmap_Destroy(bmp);
+      }
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /**
+   * Sustituye el objeto IMAGEN en `objIndex` por un JPEG ya codificado
+   * (`jpegBytes`), conservando su matriz actual. Ver JSDoc del contrato.
+   */
+  replaceImageJpeg(doc: DocHandle, pageIndex: number, objIndex: number, jpegBytes: Uint8Array): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const m = this.mem;
+    let jpegPtr = 0;
+    let cb = -1;
+    let fa = 0;
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, objIndex);
+      if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_IMAGE) return false;
+
+      jpegPtr = m.copyIn(jpegBytes);
+      // FPDF_FILEACCESS.m_GetBlock: int(*)(void* param, unsigned long position,
+      // unsigned char* pBuf, unsigned long size) → 1 si copió `size` bytes
+      // desde `position` a `pBuf`, 0 si falló. Firma Emscripten 'iiiii'
+      // (retorno + 4 argumentos). `jpegPtr` viene del closure, no de `param`
+      // (que PDFium rellena con FPDF_FILEACCESS.m_Param, sin usar aquí).
+      cb = m.addFunction((_param: number, position: number, pBufPtr: number, size: number): number => {
+        m.HEAPU8.set(m.HEAPU8.subarray(jpegPtr + position, jpegPtr + position + size), pBufPtr);
+        return 1;
+      }, 'iiiii');
+
+      // FPDF_FILEACCESS (12 bytes, wasm32 sin padding): m_FileLen (i32) @0,
+      // m_GetBlock (puntero a función) @4, m_Param (i32) @8 — mismo patrón de
+      // struct-a-mano que FPDF_FILEWRITE en save() (8 bytes: version + WriteBlock).
+      fa = m.malloc(12);
+      m.setValue(fa, jpegBytes.length, 'i32');
+      m.setValue(fa + 4, cb, 'i32');
+      m.setValue(fa + 8, 0, 'i32');
+
+      const { pagesPtr, handles } = this.loadAllPagesArray(doc, pageIndex, page);
+      try {
+        // LoadJpegFileInline conserva el JPEG tal cual (stream DCTDecode) en
+        // vez de decodificar y recomprimir (LoadJpegFile sin "Inline" sí lo haría).
+        const ok = this.p.FPDFImageObj_LoadJpegFileInline(pagesPtr, handles.length, obj, fa);
+        if (!ok) return false;
+        this.p.FPDFPage_GenerateContent(page);
+        return true;
+      } finally {
+        this.freeAllPagesArray(pagesPtr, handles, pageIndex);
+      }
+    } finally {
+      if (fa) m.free(fa);
+      if (cb >= 0) m.removeFunction(cb);
+      if (jpegPtr) m.free(jpegPtr);
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /** Tamaño en bytes del stream de imagen tal como está codificado hoy. Ver JSDoc del contrato. */
+  getImageRawSize(doc: DocHandle, pageIndex: number, objIndex: number): number | null {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const obj = this.p.FPDFPage_GetObject(page, objIndex);
+      if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_IMAGE) return null;
+      return this.p.FPDFImageObj_GetImageDataRaw(obj, 0, 0);
     } finally {
       this.p.FPDF_ClosePage(page);
     }

@@ -29,8 +29,12 @@ import { DrawStrokeCmd } from '../commands/DrawStroke';
 import { DrawRectCmd } from '../commands/DrawRect';
 import { OcrPageCmd } from '../commands/OcrPage';
 import { TesseractOcr } from '../ocr/TesseractOcr';
+import { FiltrarPaginaCmd, type TipoFiltro } from '../commands/FiltrarPagina';
+import { ComprimirDocumentoCmd } from '../commands/ComprimirDocumento';
 import { SignaturePad } from './SignaturePad';
+import { CompressPanel } from './CompressPanel';
 import { quitarFondo } from './quitarFondo';
+import { formatoBytes } from './formatoBytes';
 import { registrarGesto } from './gesto';
 import { parseRange } from './pageRange';
 import { Viewer, type ToolMode } from './Viewer';
@@ -123,6 +127,9 @@ export class App {
   private readonly btnRect: HTMLButtonElement;
   private readonly btnEraser: HTMLButtonElement;
   private readonly btnOcr: HTMLButtonElement;
+  private readonly filterSelect: HTMLSelectElement;
+  private readonly btnFilter: HTMLButtonElement;
+  private readonly btnCompress: HTMLButtonElement;
   private readonly colorInput: HTMLInputElement;
   private readonly toolColorInput: HTMLInputElement;
   private readonly propsPanel: HTMLElement;
@@ -166,6 +173,30 @@ export class App {
     this.btnRect = this.button('Rectángulo', 'btn-rect', () => this.setTool(this.tool === 'rect' ? 'none' : 'rect'));
     this.btnEraser = this.button('Borrador', 'btn-eraser', () => this.setTool(this.tool === 'eraser' ? 'none' : 'eraser'));
     this.btnOcr = this.button('OCR', 'btn-ocr', () => void this.runOcr());
+
+    // Filtros de imagen (#25 de la tabla de paridad, §9): a diferencia de la
+    // app vieja (rasteriza la página entera), actúan solo sobre los objetos
+    // imagen de la página actual — el texto y los vectores no se tocan.
+    this.filterSelect = document.createElement('select');
+    this.filterSelect.id = 'filter-select';
+    this.filterSelect.title = 'Filtro de imagen para la página actual';
+    const FILTROS: { value: '' | TipoFiltro; label: string }[] = [
+      { value: '', label: 'Ninguno' },
+      { value: 'magico', label: 'Color mágico' },
+      { value: 'grises', label: 'Escala de grises' },
+      { value: 'bn', label: 'Blanco y negro' }
+    ];
+    for (const { value, label } of FILTROS) {
+      const opt = document.createElement('option');
+      opt.value = value; opt.textContent = label;
+      this.filterSelect.appendChild(opt);
+    }
+    this.btnFilter = this.button('Aplicar filtro', 'btn-filter', () => void this.applyImageFilter());
+
+    // Comprimir documento (#26 → #29 de la tabla de paridad, §9): abre un
+    // panel pequeño (calidad + dpi máximo) y comprime solo los objetos
+    // imagen de TODAS las páginas.
+    this.btnCompress = this.button('Comprimir', 'btn-compress', () => this.openCompressPanel());
 
     this.colorInput = document.createElement('input');
     this.colorInput.type = 'color'; this.colorInput.id = 'btn-color'; this.colorInput.title = 'Color del texto (de la línea seleccionada)';
@@ -277,7 +308,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, btnNew, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, signUpload, this.btnPen, this.btnRect, this.btnEraser, this.btnNote, this.btnOcr, swatchesEl, this.propsPanel, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnFitWidth, btnExtract, this.rangeInput, btnSplit, btnSave, btnPrint, btnUndo, btnRedo, this.status);
+    bar.append(file, btnNew, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, signUpload, this.btnPen, this.btnRect, this.btnEraser, this.btnNote, this.btnOcr, this.filterSelect, this.btnFilter, this.btnCompress, swatchesEl, this.propsPanel, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnFitWidth, btnExtract, this.rangeInput, btnSplit, btnSave, btnPrint, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -854,6 +885,60 @@ export class App {
       this.setStatus('Error de OCR.');
     } finally {
       this.btnOcr.disabled = false;
+    }
+  }
+
+  /**
+   * `#btn-filter`: aplica el filtro elegido en `#filter-select` a TODAS las
+   * imágenes de la página actual (#25 de la tabla de paridad, §9). Si la
+   * página no tiene imágenes, se avisa en `#status` sin ejecutar ningún
+   * comando (los filtros solo afectan a imágenes; el texto queda intacto).
+   */
+  private async applyImageFilter(): Promise<void> {
+    if (!this.session || !this.bus) { this.setStatus('Abre un documento antes de aplicar un filtro.'); return; }
+    const valor = this.filterSelect.value as TipoFiltro | '';
+    if (!valor) { this.setStatus('Elige un filtro antes de aplicarlo.'); return; }
+    const imgs = this.session.engine.listImageObjects(this.session.doc, this.currentPage);
+    if (imgs.length === 0) {
+      this.setStatus('Esta página no tiene imágenes; los filtros solo afectan a imágenes (el texto queda intacto).');
+      return;
+    }
+    this.btnFilter.disabled = true;
+    try {
+      const cmd = new FiltrarPaginaCmd(this.currentPage, valor);
+      await this.bus.execute(cmd);
+      this.setStatus(`Filtro aplicado a ${cmd.imagenesAfectadas} imagen(es).`);
+    } finally {
+      this.btnFilter.disabled = false;
+    }
+  }
+
+  /** `#btn-compress`: abre el panel de calidad/dpi (`CompressPanel`) y lanza la compresión al confirmar. */
+  private openCompressPanel(): void {
+    if (!this.session || !this.bus) { this.setStatus('Abre un documento antes de comprimir.'); return; }
+    CompressPanel.open(async ({ calidad, dpiMax }) => { await this.runCompress(calidad, dpiMax); });
+  }
+
+  /**
+   * Comprime el documento entero (#29 de la tabla de paridad, §9), actuando
+   * solo sobre los objetos imagen de cada página (el texto y los vectores no
+   * se tocan). Puede tardar (recodifica JPEG en el navegador por cada
+   * imagen): `#btn-compress` se deshabilita mientras corre.
+   */
+  private async runCompress(calidad: number, dpiMax: number): Promise<void> {
+    if (!this.bus) return;
+    this.btnCompress.disabled = true;
+    this.setStatus('Comprimiendo… (puede tardar)');
+    try {
+      const cmd = new ComprimirDocumentoCmd({ calidad, dpiMax });
+      await this.bus.execute(cmd);
+      const { antesBytes, despuesBytes } = cmd.informe;
+      const pct = antesBytes > 0 ? Math.round((1 - despuesBytes / antesBytes) * 100) : 0;
+      this.setStatus(`Comprimido: ${formatoBytes(antesBytes)} → ${formatoBytes(despuesBytes)} (−${pct}%)`);
+    } catch {
+      this.setStatus('Error al comprimir.');
+    } finally {
+      this.btnCompress.disabled = false;
     }
   }
 
