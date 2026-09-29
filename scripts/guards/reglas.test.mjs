@@ -271,6 +271,77 @@ describe('navegacion-por-gotopage', () => {
   });
 });
 
+describe('webserver-next-no-reusar', () => {
+  const regla = detectarEn('webserver-next-no-reusar');
+  // Mismo trocado que usa la regla: separa las entradas de webServer por la
+  // aparición de "command:".
+  function entradasDe(cuerpo) {
+    return cuerpo.split(/(?=\bcommand\s*:)/).filter((e) => /\bcommand\s*:/.test(e));
+  }
+
+  test('detecta el patrón exacto de E-033: build:next con reuseExistingServer condicionado a CI', () => {
+    const cuerpo = [
+      '    {',
+      "      command: 'node server.js',",
+      '      port: 3100,',
+      '      reuseExistingServer: !process.env.CI,',
+      '      timeout: 30_000',
+      '    },',
+      '    {',
+      "      command: 'npm run build:next && npm run preview:next',",
+      '      port: 4173,',
+      '      reuseExistingServer: !process.env.CI,',
+      '      timeout: 120_000',
+      '    }',
+      '  '
+    ].join('\n');
+    const entradas = entradasDe(cuerpo);
+    const deNext = entradas.find((e) => /build:next/.test(e));
+    assert.ok(deNext, 'la entrada de build:next debe aislarse');
+    assert.doesNotMatch(deNext, /reuseExistingServer\s*:\s*false\b/);
+    assert.ok(regla.comoArreglar.includes('E-033') || regla.comoArreglar.includes('reuseExistingServer'));
+  });
+
+  test('acepta build:next con reuseExistingServer: false', () => {
+    const cuerpo = [
+      '    {',
+      "      command: 'node server.js',",
+      '      reuseExistingServer: !process.env.CI',
+      '    },',
+      '    {',
+      "      command: 'npm run build:next && npm run preview:next',",
+      '      reuseExistingServer: false',
+      '    }',
+      '  '
+    ].join('\n');
+    const entradas = entradasDe(cuerpo);
+    const deNext = entradas.find((e) => /build:next/.test(e));
+    assert.match(deNext, /reuseExistingServer\s*:\s*false\b/);
+  });
+
+  test('no exige reuseExistingServer: false en la entrada de la app vieja (node server.js)', () => {
+    const cuerpo = [
+      '    {',
+      "      command: 'node server.js',",
+      '      reuseExistingServer: !process.env.CI',
+      '    },',
+      '    {',
+      "      command: 'npm run build:next && npm run preview:next',",
+      '      reuseExistingServer: false',
+      '    }',
+      '  '
+    ].join('\n');
+    const entradas = entradasDe(cuerpo);
+    const vieja = entradas.find((e) => !/build:next/.test(e));
+    assert.ok(vieja, 'la entrada de la app vieja debe aislarse');
+    // La regla nunca examina esta entrada: server.js sirve el disco en vivo.
+  });
+
+  test('sobre el repo real no encuentra nada: playwright.config.js ya tiene reuseExistingServer: false en build:next', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega

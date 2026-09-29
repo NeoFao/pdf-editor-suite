@@ -50,7 +50,39 @@ npm run test:e2e        # suite completa
 npm run test:e2e:ui     # modo interactivo, para depurar un test concreto
 npm run test:unit       # tests de las reglas, sin navegador (rápido)
 npm run verify          # TODO: lo mismo que corre CI
+npm run e2e:liberar     # libera los puertos 4173/3100 si quedaron ocupados (ver abajo)
 ```
+
+## El webServer de la app nueva nunca reutiliza un proceso vivo (E-033)
+
+`playwright.config.js` arranca dos servidores. El de la app vieja
+(`node server.js`, puerto 3100) lee los ficheros del disco en cada petición,
+así que reutilizar un proceso que ya estaba vivo nunca sirve código
+desactualizado: su `webServer` usa `reuseExistingServer: !process.env.CI`
+(en CI, siempre arranca uno nuevo).
+
+El de la app nueva (`npm run build:next && npm run preview:next`, puerto
+4173) es distinto: `vite preview` sirve un `dist/` **congelado en el momento
+del build**. Por eso su `reuseExistingServer` es **siempre `false`**, incluso
+en local: si un `vite preview` de una sesión anterior sigue vivo en el 4173,
+Playwright falla con un error de "puerto ya en uso" en vez de reutilizarlo en
+silencio y correr los tests de `tests/e2e/next/` contra un build viejo. Ese
+fallo alto es intencional — la alternativa (E-033) es peor: `npm run verify`
+dando un resultado falso sobre código que ya no existe.
+
+Si te encuentras ese error de puerto ocupado:
+
+```bash
+npm run e2e:liberar     # mata SOLO si el proceso en 4173/3100 es node o vite
+npm run test:e2e        # vuelve a intentar: ahora reconstruye de verdad
+```
+
+`scripts/liberar-puertos.mjs` es multiplataforma (netstat/taskkill en
+Windows, lsof/kill en Unix) y nunca mata un proceso que no pueda identificar
+como `node` o `vite` — si no logra determinar el nombre, avisa y lo deja
+vivo. No forma parte de `npm run verify`: matar procesos automáticamente en
+un pipeline es invasivo, y el propio mensaje de error de Playwright ya dice
+qué hacer.
 
 Para un solo archivo o un solo test:
 

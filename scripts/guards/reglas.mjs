@@ -529,6 +529,59 @@ export const conNavegacionPorGoToPage = {
   }
 };
 
+/* ── E-033 · el webServer de la app nueva nunca reutiliza un preview rancio ─ */
+export const conWebServerNextSinReusar = {
+  id: 'webserver-next-no-reusar',
+  titulo: 'el webServer de build:next en playwright.config.js no reutiliza un proceso vivo',
+  comoArreglar:
+    'Pon reuseExistingServer: false en la entrada de webServer cuyo command contenga ' +
+    '"build:next". A diferencia de `node server.js` (sirve el disco en vivo), ese ' +
+    'comando sirve un dist/ congelado en el momento del build: reutilizar un ' +
+    '`vite preview` que quedó vivo de una sesión anterior salta el build por ' +
+    'completo y los tests de tests/e2e/next/ corren contra código que ya no existe ' +
+    '— npm run verify dando un resultado falso (E-033, visto en el PR #52). Si el ' +
+    'puerto está ocupado, libéralo con npm run e2e:liberar.',
+  ejecutar() {
+    const ruta = 'playwright.config.js';
+    if (!existe(ruta)) return [];
+    if (tieneDeuda(ruta, this.id)) return [];
+    const contenido = leer(ruta);
+
+    // Heurística por texto, no un parser de JS: localiza el array webServer y
+    // separa sus entradas por la aparición de "command:", que en este fichero
+    // es siempre la primera propiedad de cada objeto. Límite conocido nº1: si
+    // algún día una entrada NO empieza por "command:" como primera propiedad,
+    // el trozo previo queda mezclado con la entrada anterior y la regla podría
+    // no aislar bien esa entrada. Límite conocido nº2: cada trozo se extiende
+    // hasta el siguiente "command:", así que puede arrastrar el comentario que
+    // precede a la entrada siguiente (como el de esta misma regla, que
+    // menciona "build:next" en prosa) — por eso el criterio de "es la entrada
+    // de la app nueva" exige ver el literal build:next DENTRO del propio valor
+    // de command (comillas), no en cualquier parte del trozo. Con dos entradas
+    // fijas y bien conocidas hoy es suficiente; si esto crece, conviene un
+    // parser real (p. ej. de AST).
+    const bloque = contenido.match(/webServer\s*:\s*\[([\s\S]*?)\n\s*\]/);
+    if (!bloque) {
+      return [hallazgo(ruta, null, 'no se encuentra el array webServer — la regla no puede verificar el invariante')];
+    }
+    const cuerpo = bloque[1];
+    const inicioCuerpo = contenido.indexOf(cuerpo, bloque.index);
+    const partes = cuerpo.split(/(?=\bcommand\s*:)/).filter((e) => /\bcommand\s*:/.test(e));
+
+    const hallazgos = [];
+    let cursor = 0;
+    for (const entrada of partes) {
+      const posLocal = cuerpo.indexOf(entrada, cursor);
+      cursor = posLocal + entrada.length;
+      if (!/command\s*:\s*['"][^'"]*build:next[^'"]*['"]/.test(entrada)) continue;
+      if (/reuseExistingServer\s*:\s*false\b/.test(entrada)) continue;
+      const linea = contenido.slice(0, inicioCuerpo + posLocal).split('\n').length;
+      hallazgos.push(hallazgo(ruta, linea, 'webServer de build:next no tiene reuseExistingServer: false'));
+    }
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -545,5 +598,6 @@ export const TODAS = [
   conPdfJsSinEval,
   conMotorEncapsulado,
   conPdfiumBufferFijo,
-  conNavegacionPorGoToPage
+  conNavegacionPorGoToPage,
+  conWebServerNextSinReusar
 ];
