@@ -6,6 +6,6 @@ export class RotatePageCmd implements Command {
   readonly label = 'Rotar página';
   constructor(readonly pageIndex: number, readonly deltaDeg: number) {}
 
-  execute(c: Ctx): void { c.engine.rotatePage(c.doc, this.pageIndex, this.deltaDeg); c.refresh(); }
-  undo(c: Ctx): void { c.engine.rotatePage(c.doc, this.pageIndex, -this.deltaDeg); c.refresh(); }
+  execute(c: Ctx): void { c.engine.rotatePage(c.doc, this.pageIndex, this.deltaDeg); c.refreshPage(this.pageIndex); }
+  undo(c: Ctx): void { c.engine.rotatePage(c.doc, this.pageIndex, -this.deltaDeg); c.refreshPage(this.pageIndex); }
 }

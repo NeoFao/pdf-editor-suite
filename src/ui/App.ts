@@ -54,6 +54,7 @@ import type { RectPt, OutlineItem } from '../engine/PdfEngine';
 import { STANDARD_FONTS } from '../engine/standardFontFor';
 import { stripSubsetPrefix } from '../engine/fontClassify';
 import { crearIcono, type NombreIcono } from './iconos';
+import { contarRenderPage } from '../diagnostico';
 
 /**
  * Pestañas de herramientas (rediseño de interfaz, §1 del encargo): agrupan
@@ -105,6 +106,21 @@ const TOOL_STATUS: Record<ToolMode, string> = {
   rect: 'Modo rectángulo: arrastra para dibujarlo.',
   eraser: 'Modo borrador: haz clic sobre un trazo o un rectángulo para borrarlo.'
 };
+
+/**
+ * Nº de páginas entre cada cesión del hilo principal en una operación de
+ * documento completo (búsqueda, Texto…, Markdown — E-043,
+ * docs/ERRORES-CONOCIDOS.md). Un valor bajo cede más a menudo (interfaz más
+ * responsiva) a costa de más idas y vueltas al bucle de eventos; 20 mantiene
+ * la sobrecarga baja (25 cesiones para 500 páginas) sin dejar de ceder con
+ * frecuencia suficiente para que la interfaz responda.
+ */
+const PAGE_YIELD_CHUNK = 20;
+
+/** Cede el hilo principal al bucle de eventos (deja pintar un frame, atender `pointermove`, etc.) antes de continuar. */
+function cederHilo(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
 
 /** Orquesta motor + sesión + comandos + visor. Punto de entrada de la app nueva. */
 export class App {
@@ -158,6 +174,14 @@ export class App {
   private readonly thumbsEl: HTMLElement;
   /** Ancho CSS (px) con el que se renderizaron las miniaturas la última vez — ver `buildThumbnails`/el `ResizeObserver` de `#thumbs`. */
   private thumbsRenderedWidthCss = 0;
+  /** Ancho de RENDER (px de bitmap, ya × devicePixelRatio) fijado en el último `buildThumbnails()` — lo reutiliza `refreshThumbnail` para que una miniatura repintada sola no quede con otra resolución que sus vecinas. */
+  private thumbsAnchoRenderPx = 0;
+  /** Miniaturas perezosas (E-043, docs/ERRORES-CONOCIDOS.md): observador que pinta el bitmap de una miniatura la primera vez que entra (o casi entra, ver `rootMargin`) en el viewport de `#thumbs`. */
+  private thumbObserver: IntersectionObserver | null = null;
+  /** Páginas cuya miniatura YA tiene bitmap pintado (no placeholder). */
+  private thumbRendered = new Set<number>();
+  /** Orden en que se pintaron las miniaturas ya renderizadas — para desalojar las más antiguas si se acumulan demasiadas (`maybeEvictFarThumbs`). */
+  private thumbRenderOrder: number[] = [];
   private readonly outlineEl: HTMLElement;
   private readonly tabPages: HTMLButtonElement;
   private readonly tabOutline: HTMLButtonElement;
@@ -181,6 +205,8 @@ export class App {
   private readonly propFont: HTMLSelectElement;
   private readonly propSize: HTMLInputElement;
   private readonly searchInput: HTMLInputElement;
+  /** Incrementado en cada `search()`: una búsqueda vieja que sigue en vuelo se abandona en cuanto detecta que ya no es la última (ver `search`). */
+  private searchSeq = 0;
   private readonly rangeInput: HTMLInputElement;
   private currentPage = 0;
   /** `#file-input`: se guarda como campo para poder disparar `.click()` desde el atajo Ctrl/Cmd+O (§9, #34). */
@@ -259,11 +285,11 @@ export class App {
     // modal de OCR de la app vieja. También sirve para leer el texto que un
     // OCR acaba de reconocer, sin que el diálogo se abra solo (ver el estado
     // que deja `runOcr`).
-    const btnExtractText = this.iconBoton('texto-panel', 'Texto…', 'btn-extract-text', () => this.openTextPanel(), { mostrarEtiqueta: true });
+    const btnExtractText = this.iconBoton('texto-panel', 'Texto…', 'btn-extract-text', () => void this.openTextPanel(), { mostrarEtiqueta: true });
     // Exportar Markdown estructurado de todo el documento (#31 de la tabla de
     // paridad, §9): descarga directa, sin diálogo previo — como
     // `exportPDFToMarkdown` en la app vieja.
-    const btnExportMd = this.iconBoton('exportar-md', 'Exportar Markdown', 'btn-export-md', () => this.exportMarkdown(), { mostrarEtiqueta: true });
+    const btnExportMd = this.iconBoton('exportar-md', 'Exportar Markdown', 'btn-export-md', () => void this.exportMarkdown(), { mostrarEtiqueta: true });
 
     // Filtros de imagen (#25 de la tabla de paridad, §9): a diferencia de la
     // app vieja (rasteriza la página entera), actúan solo sobre los objetos
@@ -358,7 +384,7 @@ export class App {
 
     this.searchInput = document.createElement('input');
     this.searchInput.type = 'search'; this.searchInput.id = 'btn-search'; this.searchInput.placeholder = 'Buscar…';
-    this.searchInput.addEventListener('input', () => this.search());
+    this.searchInput.addEventListener('input', () => void this.search());
     const searchBox = document.createElement('div');
     searchBox.className = 'search-box';
     searchBox.appendChild(crearIcono('buscar'));
@@ -1013,7 +1039,11 @@ export class App {
     // o móvil) — ver `fitWidth`. Necesita el wrapper de la página ya en el DOM
     // (lo crea `new Viewer(...)` de forma síncrona, arriba) para medir.
     this.fitWidth();
-    // Tras una operación de página (rotar/eliminar → refresh), rehacer miniaturas.
+    // Tras una operación que cambia el CONJUNTO de páginas (eliminar/mover/
+    // duplicar/insertar PDF → EditSession.refresh(), onReload), rehacer
+    // miniaturas y marcadores enteros — sus índices ya no significan lo
+    // mismo. `buildThumbnails()` es perezosa (E-043): esto NO vuelve a
+    // renderizar las N páginas de golpe, solo recrea los placeholders.
     this.session.model.onReload(() => {
       const total = this.session?.model.pages.length ?? 0;
       if (this.currentPage >= total) this.currentPage = Math.max(0, total - 1);
@@ -1022,20 +1052,30 @@ export class App {
       this.setActiveThumb(this.currentPage);
       this.updateIndicator();
     });
+    // Tras un cambio de UNA sola página (`EditSession.refreshPage`, E-043/
+    // E-044 — rotar, insertar texto/imagen, resaltar, formulario…): el
+    // conjunto de páginas no cambió, así que basta con refrescar la
+    // miniatura de esa página (nunca las 500) — `refreshThumbnail` no hace
+    // nada si esa miniatura seguía sin pintar (placeholder fuera de vista).
+    this.session.model.on('change', (pageIndex) => this.refreshThumbnail(pageIndex));
     // Tras CUALQUIER recarga del modelo (deshacer/rehacer de un cambio de
     // fuente/tamaño/página, que recrean el documento desde una copia —
-    // `EditSession.reload`— o lo reconstruyen en sitio —`refresh`—) el
-    // panel de propiedades puede haber quedado desincronizado del documento
-    // real: `appliedFontLabel` recordaba la última fuente elegida por el
-    // usuario para la selección ANTERIOR al reload, y `this.selection.runId`
-    // puede haber dejado de existir (el objeto de texto se recreó con otro
-    // índice, o desapareció). Sin esto, deshacer un cambio de fuente volvía
-    // el DOCUMENTO a la fuente original pero el panel seguía mostrando la
+    // `EditSession.reload`—, lo reconstruyen en sitio —`refresh()`— o tocan
+    // solo una página —`refreshPage()`—) el panel de propiedades puede
+    // haber quedado desincronizado del documento real: `appliedFontLabel`
+    // recordaba la última fuente elegida por el usuario para la selección
+    // ANTERIOR al cambio, y `this.selection.runId` puede haber dejado de
+    // existir (el objeto de texto se recreó con otro índice, o
+    // desapareció). Sin esto, deshacer un cambio de fuente volvía el
+    // DOCUMENTO a la fuente original pero el panel seguía mostrando la
     // fuente descartada — mentía sobre el estado real (bug de revisión de
-    // PR #51). Único punto de enganche: cubre execute Y undo/redo de todos
-    // los comandos que reindexan runs (ver grep de `c.refresh()`/`c.reload()`
-    // en src/commands/*.ts), no solo los de fuente/tamaño.
+    // PR #51). Único punto de enganche para AMBAS señales ('change' y
+    // onReload): cubre execute Y undo/redo de todos los comandos que
+    // reindexan runs, tanto los de una sola página (`refreshPage`, la
+    // mayoría desde E-043/E-044) como los de todo el documento (`refresh`/
+    // `reload`).
     this.session.model.onReload(() => this.reconcileSelectionAfterReload());
+    this.session.model.onPageRebuilt(() => this.reconcileSelectionAfterReload());
     this.buildThumbnails();
     this.buildOutline();
     this.showSidebarTab('pages');
@@ -1719,8 +1759,24 @@ export class App {
     return Math.max(1, this.thumbsEl.clientWidth - pad);
   }
 
+  /**
+   * Miniaturas perezosas (E-043, docs/ERRORES-CONOCIDOS.md): antes se
+   * renderizaba (llamaba a `engine.renderPage`, la operación cara del
+   * motor) TODAS las páginas de golpe al abrir el documento — en uno de 500
+   * páginas eso es 500 renders síncronos antes de que el panel se pudiera
+   * ni pintar. Ahora se crea un `<canvas>` PLACEHOLDER por página, del
+   * tamaño y proporción EXACTOS que tendrá su bitmap (`canvas.width`/
+   * `height` fijados desde `page.sizePt`, sin llamar al motor) — así el
+   * scroll del panel mide lo mismo desde el primer instante, sin saltos — y
+   * un `IntersectionObserver` (`observeThumbs`) pinta el bitmap real la
+   * primera vez que la miniatura entra (o casi entra, `rootMargin`) en el
+   * viewport de `#thumbs`. `renderThumb` hace el trabajo de verdad.
+   */
   private buildThumbnails(): void {
     this.thumbsEl.textContent = '';
+    this.thumbObserver?.disconnect();
+    this.thumbRendered = new Set();
+    this.thumbRenderOrder = [];
     const s = this.session;
     if (!s) return;
     // Renderiza al ancho en que se MUESTRAN (`anchoUtilThumbs()`, nunca a un
@@ -1730,22 +1786,24 @@ export class App {
     // el ancho final de render (900px): un `devicePixelRatio` de 3-4 sobre
     // un cajón de hasta 320px ya cubriría de sobra sin el tope; sin él, un
     // documento con muchas páginas en un dispositivo de dpr alto tardaría
-    // más de lo razonable en construir el panel entero.
+    // más de lo razonable en pintar cada miniatura que sí llega a verse.
     const anchoCss = this.anchoUtilThumbs();
     this.thumbsRenderedWidthCss = anchoCss;
     const dpr = Math.min(window.devicePixelRatio || 1, 3);
     const anchoRenderPx = Math.min(anchoCss * dpr, 900);
+    this.thumbsAnchoRenderPx = anchoRenderPx;
     for (const page of s.model.pages) {
       const scale = anchoRenderPx / page.sizePt.widthPt;
-      const { width, height, data } = s.engine.renderPage(s.doc, page.index, scale);
+      const width = Math.max(1, Math.round(page.sizePt.widthPt * scale));
+      const height = Math.max(1, Math.round(page.sizePt.heightPt * scale));
       const canvas = document.createElement('canvas');
+      // Tamaño intrínseco correcto DESDE YA (proporción real de la página):
+      // el panel mide bien su scroll sin haber pintado un solo píxel.
       canvas.width = width; canvas.height = height;
       canvas.dataset.page = String(page.index);
+      canvas.dataset.scale = String(scale);
       canvas.className = 'thumb';
       Object.assign(canvas.style, { display: 'block', width: '100%', height: 'auto', marginBottom: '8px', cursor: 'pointer', background: '#fff', boxSizing: 'border-box' });
-      const img = new ImageData(width, height);
-      img.data.set(data);
-      canvas.getContext('2d')!.putImageData(img, 0, 0);
 
       // Un clic SIN arrastre navega (comportamiento de siempre); un arrastre
       // que supere el umbral reordena y no debe además disparar el 'click'
@@ -1774,6 +1832,90 @@ export class App {
     // `ResizeObserver` de arriba, al cambiar el ancho del panel) no debe
     // saltar la miniatura activa de vuelta a la primera página.
     this.setActiveThumb(this.currentPage);
+    this.observeThumbs();
+  }
+
+  /** Observa cada placeholder de `#thumbs`: en cuanto entra (o casi, `rootMargin` es un margen POR DELANTE en px del propio panel) en el viewport del panel, pinta su bitmap real. */
+  private observeThumbs(): void {
+    this.thumbObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const canvas = entry.target as HTMLCanvasElement;
+        const i = Number(canvas.dataset.page);
+        if (Number.isFinite(i)) this.renderThumb(canvas, i);
+      }
+    }, { root: this.thumbsEl, rootMargin: '600px 0px' });
+    for (const el of Array.from(this.thumbsEl.children)) this.thumbObserver.observe(el);
+  }
+
+  /** Pinta el bitmap real de una miniatura (si no lo tenía ya) y desaloja las más antiguas si hay demasiadas pintadas a la vez. */
+  private renderThumb(canvas: HTMLCanvasElement, i: number): void {
+    if (this.thumbRendered.has(i)) return;
+    const s = this.session;
+    if (!s) return;
+    const scale = Number(canvas.dataset.scale);
+    contarRenderPage();
+    const { width, height, data } = s.engine.renderPage(s.doc, i, scale);
+    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+    const img = new ImageData(width, height);
+    img.data.set(data);
+    canvas.getContext('2d')!.putImageData(img, 0, 0);
+    this.thumbRendered.add(i);
+    this.thumbRenderOrder.push(i);
+    // Ya no hace falta seguir observando esta miniatura salvo que se
+    // descarte por memoria (`maybeEvictFarThumbs` la vuelve a observar en
+    // ese caso).
+    this.thumbObserver?.unobserve(canvas);
+    this.maybeEvictFarThumbs(i);
+  }
+
+  /**
+   * Descarta (vuelve a placeholder) el bitmap de las miniaturas pintadas
+   * MÁS ANTIGUAS cuando hay más de `MAX_MINIATURAS_PINTADAS` a la vez, salvo
+   * las que sigan cerca de la que se acaba de pintar — así un documento de
+   * 500 páginas no acumula 500 bitmaps en memoria si el usuario se ha
+   * paseado por todo el panel. Las descartadas vuelven a observarse: si el
+   * usuario regresa a esa zona, se repintan solas.
+   */
+  private maybeEvictFarThumbs(justRendered: number): void {
+    const MAX_MINIATURAS_PINTADAS = 120;
+    const MARGEN_CERCANIA = 30;
+    if (this.thumbRenderOrder.length <= MAX_MINIATURAS_PINTADAS) return;
+    while (this.thumbRenderOrder.length > MAX_MINIATURAS_PINTADAS) {
+      const victima = this.thumbRenderOrder[0]!;
+      if (Math.abs(victima - justRendered) < MARGEN_CERCANIA) break; // no descartes lo que sigue cerca: para aquí
+      this.thumbRenderOrder.shift();
+      if (!this.thumbRendered.has(victima)) continue;
+      const canvas = this.thumbsEl.querySelector<HTMLCanvasElement>(`canvas.thumb[data-page="${victima}"]`);
+      if (!canvas) continue;
+      canvas.getContext('2d')!.clearRect(0, 0, canvas.width, canvas.height);
+      this.thumbRendered.delete(victima);
+      this.thumbObserver?.observe(canvas);
+    }
+  }
+
+  /**
+   * Refresca UNA miniatura tras un cambio de esa página (`refreshPage`,
+   * E-043/E-044): recalcula su tamaño (la rotación puede cambiar la
+   * proporción) con el MISMO ancho de render que el resto del panel
+   * (`thumbsAnchoRenderPx`) y, si ya tenía bitmap pintado, la repinta de
+   * inmediato — si todavía era un placeholder sin pintar, se deja así (el
+   * observer la pintará si/cuando entre en el viewport, nunca antes).
+   */
+  private refreshThumbnail(pageIndex: number): void {
+    const s = this.session;
+    if (!s) return;
+    const canvas = this.thumbsEl.querySelector<HTMLCanvasElement>(`canvas.thumb[data-page="${pageIndex}"]`);
+    const page = s.model.pages[pageIndex];
+    if (!canvas || !page || this.thumbsAnchoRenderPx <= 0) return;
+    const scale = this.thumbsAnchoRenderPx / page.sizePt.widthPt;
+    canvas.width = Math.max(1, Math.round(page.sizePt.widthPt * scale));
+    canvas.height = Math.max(1, Math.round(page.sizePt.heightPt * scale));
+    canvas.dataset.scale = String(scale);
+    const pintadaAntes = this.thumbRendered.has(pageIndex);
+    this.thumbRendered.delete(pageIndex);
+    this.thumbRenderOrder = this.thumbRenderOrder.filter((i) => i !== pageIndex);
+    if (pintadaAntes) this.renderThumb(canvas, pageIndex);
   }
 
   /**
@@ -1877,15 +2019,38 @@ export class App {
     this.setStatus('Página reordenada.');
   }
 
-  private search(): void {
+  /**
+   * Busca `q` en TODAS las páginas. Operación de documento completo
+   * (E-043, docs/ERRORES-CONOCIDOS.md): en un documento grande, recorrer
+   * cientos de páginas de una sentada bloquearía el hilo principal, así que
+   * cede el hilo cada `PAGE_YIELD_CHUNK` páginas (`cederHilo`) y muestra el
+   * avance en `#status`. `searchSeq` es la "cancelación" de esta operación:
+   * si el usuario teclea de nuevo antes de que termine, la búsqueda vieja se
+   * abandona sin pintar sus resultados (ni seguir gastando ciclos en
+   * `#status`) — no hay forma de abortar `findText` a media página, pero
+   * dejar de continuar el bucle y de aplicar el resultado es equivalente
+   * desde fuera.
+   */
+  private async search(): Promise<void> {
     if (!this.session || !this.viewer) return;
+    const token = ++this.searchSeq;
     const q = this.searchInput.value.trim();
     const byPage = new Map<number, RectPt[]>();
     let total = 0;
-    for (const page of this.session.model.pages) {
-      const rects = q ? this.session.engine.findText(this.session.doc, page.index, q) : [];
-      if (rects.length) { byPage.set(page.index, rects); total += rects.length; }
+    if (q) {
+      const pages = this.session.model.pages;
+      for (let i = 0; i < pages.length; i++) {
+        if (this.searchSeq !== token) return; // una búsqueda más reciente ya la reemplazó
+        const page = pages[i]!;
+        const rects = this.session.engine.findText(this.session.doc, page.index, q);
+        if (rects.length) { byPage.set(page.index, rects); total += rects.length; }
+        if ((i + 1) % PAGE_YIELD_CHUNK === 0 || i === pages.length - 1) {
+          if (pages.length > PAGE_YIELD_CHUNK) this.setStatus(`Buscando… ${i + 1}/${pages.length}`);
+          await cederHilo();
+        }
+      }
     }
+    if (this.searchSeq !== token) return;
     this.viewer.setHighlights(byPage);
     this.setStatus(q ? `${total} coincidencia(s)` : '');
   }
@@ -2075,24 +2240,50 @@ export class App {
     descargarArchivo(data, filename, mimeType);
   }
 
-  /** Runs de texto de TODAS las páginas, agrupados en líneas de lectura (`estructura.ts`), en orden de página. */
-  private allPagesLineas(): Linea[][] {
+  /**
+   * Runs de texto de TODAS las páginas, agrupados en líneas de lectura
+   * (`estructura.ts`), en orden de página. Operación de documento completo
+   * (E-043, docs/ERRORES-CONOCIDOS.md): en un documento de cientos de
+   * páginas, extraer el texto de todas de golpe bloquearía el hilo
+   * principal, así que cede el hilo cada `PAGE_YIELD_CHUNK` páginas
+   * (`cederHilo`) e informa el avance en `#status`. Usa `session.ensureText`
+   * (nunca `engine.getPageText` directo, regla `texto-perezoso-via-
+   * editsession`): las páginas ya vistas en el visor no se vuelven a leer
+   * del motor.
+   */
+  private async allPagesLineas(onProgreso?: (hechas: number, total: number) => void): Promise<Linea[][]> {
     const s = this.session;
     if (!s) return [];
-    return s.model.pages.map((page) => agruparLineas(s.engine.getPageText(s.doc, page.index)));
+    const pages = s.model.pages;
+    const out: Linea[][] = [];
+    for (let i = 0; i < pages.length; i++) {
+      out.push(agruparLineas(s.ensureText(pages[i]!.index)));
+      if ((i + 1) % PAGE_YIELD_CHUNK === 0 || i === pages.length - 1) {
+        onProgreso?.(i + 1, pages.length);
+        await cederHilo();
+      }
+    }
+    return out;
   }
 
   /** `#btn-extract-text`: abre el diálogo de texto plano de todo el documento (#27 de la tabla de paridad, §9). */
-  private openTextPanel(): void {
+  private async openTextPanel(): Promise<void> {
     if (!this.session) { this.setStatus('Abre un documento antes de extraer texto.'); return; }
-    const texto = aTextoPlano(this.allPagesLineas());
+    const total = this.session.model.pages.length;
+    this.setStatus(total > PAGE_YIELD_CHUNK ? `Extrayendo texto… 0/${total}` : 'Extrayendo texto…');
+    const lineas = await this.allPagesLineas((hechas, t) => this.setStatus(`Extrayendo texto… ${hechas}/${t}`));
+    const texto = aTextoPlano(lineas);
     TextPanel.open(texto, this.docName.replace(/\.pdf$/i, ''));
+    this.setStatus(`Texto extraído (${lineas.length} página(s)).`);
   }
 
   /** `#btn-export-md`: descarga el Markdown estructurado de todo el documento (#31 de la tabla de paridad, §9). */
-  private exportMarkdown(): void {
+  private async exportMarkdown(): Promise<void> {
     if (!this.session) { this.setStatus('Abre un documento antes de exportar Markdown.'); return; }
-    const md = aMarkdown(this.allPagesLineas());
+    const total = this.session.model.pages.length;
+    this.setStatus(total > PAGE_YIELD_CHUNK ? `Generando Markdown… 0/${total}` : 'Generando Markdown…');
+    const lineas = await this.allPagesLineas((hechas, t) => this.setStatus(`Generando Markdown… ${hechas}/${t}`));
+    const md = aMarkdown(lineas);
     this.download(md, `${this.docName.replace(/\.pdf$/i, '')}.md`, 'text/markdown;charset=utf-8');
     this.setStatus('Markdown exportado.');
   }

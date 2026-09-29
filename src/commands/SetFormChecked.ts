@@ -13,7 +13,7 @@ export class SetFormCheckedCmd implements Command {
 
   private aplicar(c: Ctx, checked: boolean): void {
     c.engine.setFormChecked(c.doc, this.pageIndex, this.annotIndex, checked);
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
 
   execute(c: Ctx): void { this.aplicar(c, this.checked); }

@@ -16,7 +16,7 @@ export class DeleteObjectCmd implements Command {
   execute(c: Ctx): void {
     this.before = c.engine.save(c.doc);
     c.engine.deleteObject(c.doc, this.pageIndex, this.objIndex);
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
 
   async undo(c: Ctx): Promise<void> { if (this.before) await c.reload(this.before); }

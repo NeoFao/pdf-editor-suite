@@ -14,7 +14,7 @@ export class MoveRunCmd implements Command {
 
   private aplicar(c: Ctx, dx: number, dy: number): void {
     c.engine.moveRun(c.doc, this.pageIndex, this.runId, dx, dy);
-    c.model.setPageRuns(this.pageIndex, c.engine.getPageText(c.doc, this.pageIndex));
+    c.refreshPage(this.pageIndex);
   }
 
   execute(c: Ctx): void { this.aplicar(c, this.dxPt, this.dyPt); }

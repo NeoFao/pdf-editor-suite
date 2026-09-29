@@ -18,7 +18,7 @@ async function crearSesion() {
   const engine = await PdfiumEngine.create();
   const s = await EditSession.open(engine, await d.save());
   const bus = new CommandBus(s);
-  const run = s.model.pages[0]!.runs.find((r) => r.text.includes('TEXTO'))!;
+  const run = s.ensureText(0).find((r) => r.text.includes('TEXTO'))!;
   return { s, bus, run };
 }
 

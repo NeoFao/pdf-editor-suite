@@ -12,7 +12,7 @@ async function sesion(): Promise<{ session: EditSession; runId: number }> {
   p.drawText('✁✂✃✄', { x: 40, y: 130, size: 18, font: f, color: rgb(0, 0, 0) });
   const engine = await PdfiumEngine.create();
   const session = await EditSession.open(engine, await d.save());
-  const r = session.model.pages[0]!.runs[0]!;
+  const r = session.ensureText(0)[0]!;
   return { session, runId: r.runId };
 }
 
@@ -24,7 +24,7 @@ test('execute sustituye texto y fuente; el comando expone ok y fontName', async 
 
   expect(cmd.ok).toBe(true);
   expect(cmd.fontName).toBe('Helvetica');
-  const run = session.model.pages[0]!.runs.find((r) => r.text === 'Mañana €');
+  const run = session.ensureText(0).find((r) => r.text === 'Mañana €');
   expect(run).toBeDefined();
 });
 
@@ -37,7 +37,7 @@ test('undo (snapshot) restaura el texto y la fuente originales', async () => {
 
   await bus.undo();
 
-  const runs = session.model.pages[0]!.runs;
+  const runs = session.ensureText(0);
   expect(runs).toHaveLength(1);
   expect(runs[0]!.text).toBe('✁✂✃✄');
   expect(runs[0]!.fontName).toBe('ZapfDingbats');
@@ -54,6 +54,6 @@ test('CJK: execute deja ok=false y no modifica el documento', async () => {
 
   expect(cmd.ok).toBe(false);
   expect(cmd.fontName).toBeNull();
-  const runs = session.model.pages[0]!.runs;
+  const runs = session.ensureText(0);
   expect(runs[0]!.text).toBe('✁✂✃✄');
 });

@@ -14,7 +14,7 @@ export class SetColorCmd implements Command {
 
   private aplicar(c: Ctx, color: [number, number, number]): void {
     c.engine.setRunColor(c.doc, this.pageIndex, this.runId, color);
-    c.model.setPageRuns(this.pageIndex, c.engine.getPageText(c.doc, this.pageIndex));
+    c.refreshPage(this.pageIndex);
   }
 
   execute(c: Ctx): void { this.aplicar(c, this.newColor); }

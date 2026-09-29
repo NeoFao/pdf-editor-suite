@@ -18,7 +18,7 @@ test('insertar otro PDF añade sus páginas; deshacer las quita (snapshot)', asy
   const bus = new CommandBus(s);
   await bus.execute(new InsertPdfCmd(await unaPagina('EXTRA'), 1));
   expect(s.model.pages.length).toBe(2);
-  expect(s.model.pages[1]!.runs.map((r) => r.text).join(' ')).toContain('EXTRA');
+  expect(s.ensureText(1).map((r) => r.text).join(' ')).toContain('EXTRA');
   await bus.undo();
   expect(s.model.pages.length).toBe(1);
 });

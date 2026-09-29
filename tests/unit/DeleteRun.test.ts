@@ -18,16 +18,16 @@ async function sesionDos(): Promise<EditSession> {
 test('borrar elimina el run del modelo y del motor; deshacer lo restaura (snapshot)', async () => {
   const s = await sesionDos();
   const bus = new CommandBus(s);
-  const objetivo = s.model.pages[0]!.runs.find((r) => r.text.includes('CONFIDENCIAL'))!;
+  const objetivo = s.ensureText(0).find((r) => r.text.includes('CONFIDENCIAL'))!;
 
   await bus.execute(new DeleteRunCmd(0, objetivo.runId));
-  const tras = s.model.pages[0]!.runs.map((r) => r.text).join(' | ');
+  const tras = s.ensureText(0).map((r) => r.text).join(' | ');
   expect(tras).not.toContain('CONFIDENCIAL');
   expect(tras).toContain('se queda');
   expect(s.engine.getPageText(s.doc, 0).map((r) => r.text).join(' | ')).not.toContain('CONFIDENCIAL');
 
   await bus.undo();
-  const vuelta = s.model.pages[0]!.runs.map((r) => r.text).join(' | ');
+  const vuelta = s.ensureText(0).map((r) => r.text).join(' | ');
   expect(vuelta).toContain('CONFIDENCIAL');
   expect(vuelta).toContain('se queda');
 });

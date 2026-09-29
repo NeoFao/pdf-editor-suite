@@ -12,7 +12,7 @@ async function sesion(): Promise<{ session: EditSession; runId: number; original
   p.drawText('ORIGINAL', { x: 40, y: 150, size: 18, font: f, color: rgb(0, 0, 0) });
   const engine = await PdfiumEngine.create();
   const session = await EditSession.open(engine, await d.save());
-  const r = session.model.pages[0]!.runs.find((x) => x.text.includes('ORIGINAL'))!;
+  const r = session.ensureText(0).find((x) => x.text.includes('ORIGINAL'))!;
   return { session, runId: r.runId, original: r.text };
 }
 
@@ -21,9 +21,9 @@ test('dos ediciones con la misma clave = UN paso de deshacer; undo restaura el o
   const bus = new CommandBus(session);
   await bus.execute(new EditTextRunCmd(0, runId, 'AB', original));
   await bus.execute(new EditTextRunCmd(0, runId, 'ABC', 'AB'));
-  expect(session.model.pages[0]!.runs[0]!.text).toBe('ABC');
+  expect(session.ensureText(0)[0]!.text).toBe('ABC');
   await bus.undo();
-  expect(session.model.pages[0]!.runs[0]!.text).toBe(original);
+  expect(session.ensureText(0)[0]!.text).toBe(original);
   expect(bus.canUndo()).toBe(false);
   expect(session.engine.getPageText(session.doc, 0)[0]!.text).toBe(original);
 });
@@ -33,7 +33,7 @@ test('redo reaplica la edición', async () => {
   const bus = new CommandBus(session);
   await bus.execute(new EditTextRunCmd(0, runId, 'NUEVO', original));
   await bus.undo();
-  expect(session.model.pages[0]!.runs[0]!.text).toBe(original);
+  expect(session.ensureText(0)[0]!.text).toBe(original);
   await bus.redo();
-  expect(session.model.pages[0]!.runs[0]!.text).toBe('NUEVO');
+  expect(session.ensureText(0)[0]!.text).toBe('NUEVO');
 });

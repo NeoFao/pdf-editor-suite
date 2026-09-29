@@ -10,7 +10,7 @@ export class AddNoteCmd implements Command {
   execute(c: Ctx): void {
     this.before = c.engine.save(c.doc);
     c.engine.addNote(c.doc, this.pageIndex, { xPt: this.xPt, yPt: this.yPt, text: this.text });
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
   async undo(c: Ctx): Promise<void> { if (this.before) await c.reload(this.before); }
 }

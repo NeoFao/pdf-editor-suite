@@ -909,6 +909,56 @@ export const conDescompresionAcotada = {
   }
 };
 
+/* ── E-043 · el texto de una página se pide siempre vía EditSession.ensureText ── */
+export const conTextoPerezosoViaEditSession = {
+  id: 'texto-perezoso-via-editsession',
+  titulo: 'engine.getPageText() solo se llama desde src/model/EditSession.ts',
+  comoArreglar:
+    'Llama a session.ensureText(pageIndex) (o session.refreshPage(pageIndex), que ya ' +
+    'lo recarga) en vez de engine.getPageText() directo. getPageText() es la ' +
+    'operación más cara por página del motor (recorre cada objeto de texto y lee ' +
+    'varias cadenas de PDFium por cada uno, E-028): pedirla para una página que ya ' +
+    'se cargó vuelve a hacer el mismo trabajo caro, y pedirla para TODAS las ' +
+    'páginas de un documento grande al abrirlo o tras un comando de una sola ' +
+    'página fue exactamente el defecto de E-043/E-044 (docs/ERRORES-CONOCIDOS.md) — ' +
+    'ensureText() cachea por página (y refreshPage() invalida solo la que cambió), ' +
+    'así que la misma página nunca se relee sin necesidad.',
+  ejecutar() {
+    const raizSrc = path.join(RAIZ, 'src');
+    if (!fs.existsSync(raizSrc)) return [];
+    const hallazgos = [];
+    const permitido = 'src/model/EditSession.ts';
+    const recorrer = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { recorrer(full); continue; }
+        if (!e.name.endsWith('.ts')) continue;
+        const rel = path.relative(RAIZ, full).replace(/\\/g, '/');
+        if (rel === permitido) continue;
+        if (rel.startsWith('src/engine/')) continue; // el motor define el método, no lo "llama" en este sentido
+        if (tieneDeuda(rel, this.id)) continue;
+        const contenido = leer(rel);
+        const exentas = lineasExentas(contenido, this.id);
+        contenido.split('\n').forEach((linea, i) => {
+          const n = i + 1;
+          if (exentas.has(n)) return;
+          // Solo código real: una línea de comentario (`//…`, `/**…`, ` *…`
+          // de un bloque JSDoc) puede legítimamente MENCIONAR
+          // `engine.getPageText()` en prosa (como hace este mismo fichero
+          // de reglas, o src/diagnostico.ts) sin ser una llamada real.
+          const codigo = linea.trim();
+          if (/^(\/\/|\/?\*)/.test(codigo)) return;
+          if (/\.getPageText\(/.test(linea)) {
+            hallazgos.push(hallazgo(rel, n, 'llama a engine.getPageText() directo — usa session.ensureText(pageIndex) para no saltarte el caché por página'));
+          }
+        });
+      }
+    };
+    recorrer(raizSrc);
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -933,5 +983,6 @@ export const TODAS = [
   conMotorLoteEnBucle,
   conCapturasSinTransicionesEnCurso,
   sinCronometrajeEnUnit,
-  conDescompresionAcotada
+  conDescompresionAcotada,
+  conTextoPerezosoViaEditSession
 ];

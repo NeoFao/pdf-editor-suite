@@ -13,15 +13,15 @@ test('cambiar color actualiza el modelo; deshacer restaura el color previo', asy
   const engine = await PdfiumEngine.create();
   const s = await EditSession.open(engine, await d.save());
   const bus = new CommandBus(s);
-  const run = s.model.pages[0]!.runs.find((r) => r.text.includes('COLOR'))!;
+  const run = s.ensureText(0).find((r) => r.text.includes('COLOR'))!;
   const viejo: [number, number, number] = [run.color[0], run.color[1], run.color[2]];
 
   await bus.execute(new SetColorCmd(0, run.runId, [10, 20, 200], viejo));
-  const azul = s.model.pages[0]!.runs.find((r) => r.text.includes('COLOR'))!;
+  const azul = s.ensureText(0).find((r) => r.text.includes('COLOR'))!;
   expect(azul.color[2]).toBeGreaterThan(150);
   expect(azul.color[0]).toBeLessThan(80);
 
   await bus.undo();
-  const rojo = s.model.pages[0]!.runs.find((r) => r.text.includes('COLOR'))!;
+  const rojo = s.ensureText(0).find((r) => r.text.includes('COLOR'))!;
   expect(rojo.color[0]).toBeGreaterThan(200);
 });

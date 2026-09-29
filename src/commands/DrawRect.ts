@@ -16,7 +16,7 @@ export class DrawRectCmd implements Command {
   execute(c: Ctx): void {
     this.before = c.engine.save(c.doc);
     c.engine.drawRect(c.doc, this.pageIndex, this.rect, this.color, this.widthPt);
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
   async undo(c: Ctx): Promise<void> { if (this.before) await c.reload(this.before); }
 }

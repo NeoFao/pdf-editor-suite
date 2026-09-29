@@ -11,7 +11,7 @@ export class DeleteRunCmd implements Command {
   execute(c: Ctx): void {
     this.before = c.engine.save(c.doc);           // snapshot previo
     c.engine.deleteRun(c.doc, this.pageIndex, this.runId);
-    c.refresh();                                   // el borrado reindexa: reconstruir modelo
+    c.refreshPage(this.pageIndex);                  // el borrado reindexa runs DE ESTA página: solo hace falta recargarla a ella
   }
 
   async undo(c: Ctx): Promise<void> {

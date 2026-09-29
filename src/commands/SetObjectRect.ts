@@ -21,7 +21,7 @@ export class SetObjectRectCmd implements Command {
 
   private aplicar(c: Ctx, rect: RectPt): void {
     c.engine.setObjectRect(c.doc, this.pageIndex, this.objIndex, rect);
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
 
   execute(c: Ctx): void { this.aplicar(c, this.newRect); }

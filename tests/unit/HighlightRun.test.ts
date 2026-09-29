@@ -17,7 +17,7 @@ test('resaltar pinta amarillo; deshacer lo quita (snapshot)', async () => {
   const engine = await PdfiumEngine.create();
   const s = await EditSession.open(engine, await d.save());
   const bus = new CommandBus(s);
-  const run = s.model.pages[0]!.runs.find((r) => r.text.includes('TEXTO'))!;
+  const run = s.ensureText(0).find((r) => r.text.includes('TEXTO'))!;
 
   await bus.execute(new HighlightRunCmd(0, run.boxPt));
   expect(hayAmarillo(s.engine.renderPage(s.doc, 0, 1).data)).toBe(true);

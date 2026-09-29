@@ -13,16 +13,16 @@ test('mover desplaza el run en el modelo; deshacer lo devuelve', async () => {
   const engine = await PdfiumEngine.create();
   const s = await EditSession.open(engine, await d.save());
   const bus = new CommandBus(s);
-  const antes = s.model.pages[0]!.runs.find((r) => r.text.includes('MOVER'))!;
+  const antes = s.ensureText(0).find((r) => r.text.includes('MOVER'))!;
   const x0 = Math.round(antes.boxPt.xPt), y0 = Math.round(antes.boxPt.yPt);
 
   await bus.execute(new MoveRunCmd(0, antes.runId, 25, 15));
-  const mov = s.model.pages[0]!.runs.find((r) => r.text.includes('MOVER'))!;
+  const mov = s.ensureText(0).find((r) => r.text.includes('MOVER'))!;
   expect(Math.round(mov.boxPt.xPt)).toBe(x0 + 25);
   expect(Math.round(mov.boxPt.yPt)).toBe(y0 + 15);
 
   await bus.undo();
-  const fin = s.model.pages[0]!.runs.find((r) => r.text.includes('MOVER'))!;
+  const fin = s.ensureText(0).find((r) => r.text.includes('MOVER'))!;
   expect(Math.round(fin.boxPt.xPt)).toBe(x0);
   expect(Math.round(fin.boxPt.yPt)).toBe(y0);
 });

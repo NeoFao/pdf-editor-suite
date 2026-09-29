@@ -23,7 +23,7 @@ export class SetFormTextCmd implements Command {
 
   private aplicar(c: Ctx, value: string): void {
     c.engine.setFormText(c.doc, this.pageIndex, this.annotIndex, value);
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
 
   execute(c: Ctx): void { this.aplicar(c, this.newValue); }

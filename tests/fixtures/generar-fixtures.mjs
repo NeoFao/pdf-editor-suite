@@ -352,6 +352,34 @@ async function pdfPaginasPequenas() {
   return doc.save();
 }
 
+/**
+ * Nº de páginas de `grande.pdf` — usado también por los tests que lo abren,
+ * para no repetir el número mágico.
+ */
+export const PAGINAS_GRANDE = 500;
+
+/**
+ * Documento A4 de 500 páginas, cada una con texto único ("Página N" + dos
+ * líneas de relleno), para medir y arreglar el rendimiento con documentos
+ * grandes (E-043 y siguientes, docs/ERRORES-CONOCIDOS.md): todas las fixtures
+ * anteriores tenían 1-4 páginas, muy por debajo de un contrato o manual real
+ * (300-1000 páginas). Reutiliza la MISMA fuente estándar embebida
+ * (`StandardFonts.Helvetica`, embebida UNA vez por `doc.embedFont`, no una
+ * por página) para que el fichero no pese de más — pdf-lib comparte el
+ * objeto de fuente entre `drawText` de todas las páginas.
+ */
+async function pdfGrande() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (let i = 1; i <= PAGINAS_GRANDE; i++) {
+    const p = doc.addPage([595.28, 841.89]);
+    p.drawText(`Pagina ${i}`, { x: 60, y: 780, size: 20, font });
+    p.drawText(`Linea de contenido A de la pagina ${i}.`, { x: 60, y: 740, size: 12, font });
+    p.drawText(`Linea de contenido B de la pagina ${i}.`, { x: 60, y: 720, size: 12, font });
+  }
+  return doc.save();
+}
+
 /** Igual que `paginas-pequenas.pdf`, con un marcador por página (E-032, caso (c) de pagina-actual.spec.ts). */
 async function pdfPaginasPequenasMarcadores() {
   const doc = await PDFDocument.create();
@@ -636,6 +664,7 @@ async function main() {
     'marcadores.pdf': await pdfMarcadores(),
     'outline-ciclo.pdf': await pdfOutlineCiclo(),
     'paginas-pequenas.pdf': await pdfPaginasPequenas(),
+    'grande.pdf': await pdfGrande(),
     'paginas-pequenas-marcadores.pdf': await pdfPaginasPequenasMarcadores(),
     'escaneado.pdf': await pdfEscaneado(),
     'estructurado.pdf': await pdfEstructurado(),

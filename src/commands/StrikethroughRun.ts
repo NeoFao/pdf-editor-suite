@@ -12,7 +12,7 @@ export class StrikethroughRunCmd implements Command {
     this.before = c.engine.save(c.doc);
     const rect: RectPt = { xPt: this.box.xPt, yPt: this.box.yPt + this.box.hPt * 0.45, wPt: this.box.wPt, hPt: Math.max(1, this.box.hPt * 0.08) };
     c.engine.fillRect(c.doc, this.pageIndex, rect, this.color);
-    c.refresh();
+    c.refreshPage(this.pageIndex);
   }
   async undo(c: Ctx): Promise<void> { if (this.before) await c.reload(this.before); }
 }
