@@ -15,21 +15,23 @@ async function descargar(page: import('@playwright/test').Page, nombre: string):
   return new Uint8Array(fs.readFileSync(destino));
 }
 
-// (a) #18: muestras de color — elegir una muestra fija el color de herramienta
-// y lo usa la pluma (verificado en el motor, no solo en pantalla).
-test('muestras de color: clic en la azul la marca aria-pressed y el trazo de la pluma sale azul en el motor', async ({ page }) => {
+// (a) #18: muestras de color — la paleta afecta al color de la HERRAMIENTA
+// ACTIVA (aquí, la pluma; revisión del PR #56: cada herramienta recuerda su
+// propio color, así que hay que activarla antes de elegir la muestra).
+test('muestras de color: con la pluma activa, clic en la azul la marca aria-pressed y el trazo sale azul en el motor', async ({ page }) => {
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await page.locator('#btn-pen').click();
+  await expect(page.locator('#btn-pen')).toHaveAttribute('aria-pressed', 'true');
+
   const azul = page.locator('.swatch[data-color="#2563eb"]');
   await azul.click();
   await expect(azul).toHaveAttribute('aria-pressed', 'true');
-  // La roja (por defecto) deja de estar marcada.
+  // La roja (por defecto de la pluma) deja de estar marcada.
   await expect(page.locator('.swatch[data-color="#dc1414"]')).toHaveAttribute('aria-pressed', 'false');
 
-  await page.locator('#btn-pen').click();
-  await expect(page.locator('#btn-pen')).toHaveAttribute('aria-pressed', 'true');
   const pagina = page.locator('.page').first();
   const b = (await pagina.boundingBox())!;
   await page.mouse.move(b.x + 60, b.y + 120);
@@ -51,6 +53,65 @@ test('muestras de color: clic en la azul la marca aria-pressed y el trazo de la 
   }
   expect(azulEncontrado).toBe(true);
   eng.close(doc);
+});
+
+// Revisión del PR #56: el color de herramienta NO se comparte entre
+// herramientas — cada una recuerda el suyo. Elegir azul con la pluma activa
+// no debe teñir el resaltador (que sigue en su amarillo de siempre); al
+// volver a la pluma, la paleta vuelve a mostrar el azul elegido y el trazo
+// sale azul otra vez.
+test('colores por herramienta: elegir un color con la pluma activa no cambia el color del resaltador', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(FIXTURE);
+  const run = page.locator('.run').first();
+  await expect(run).toBeVisible();
+
+  await page.locator('#btn-pen').click();
+  await page.locator('.swatch[data-color="#2563eb"]').click();
+  await expect(page.locator('.swatch[data-color="#2563eb"]')).toHaveAttribute('aria-pressed', 'true');
+
+  await page.keyboard.press('Escape'); // sale del modo pluma
+  await expect(page.locator('#btn-pen')).toHaveAttribute('aria-pressed', 'false');
+  // Sin modo activo, la paleta refleja el resaltador: amarillo, no tocado.
+  await expect(page.locator('.swatch[data-color="#facc15"]')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.swatch[data-color="#2563eb"]')).toHaveAttribute('aria-pressed', 'false');
+
+  await run.click();
+  await page.locator('#btn-highlight').click();
+  await expect(page.locator('#status')).toHaveText('Resaltado.');
+
+  const bytesResaltado = await descargar(page, 'resaltado-no-afectado.pdf');
+  const eng = await PdfiumEngine.create();
+  const docResaltado = await eng.open(bytesResaltado);
+  const { data: dataResaltado } = eng.renderPage(docResaltado, 0, 1);
+  let amarillo = false;
+  for (let i = 0; i < dataResaltado.length; i += 4) {
+    if (dataResaltado[i]! > 200 && dataResaltado[i + 1]! > 180 && dataResaltado[i + 2]! < 120) { amarillo = true; break; }
+  }
+  expect(amarillo).toBe(true);
+  eng.close(docResaltado);
+
+  // Vuelve a la pluma: la paleta muestra el azul elegido antes, y el trazo sale azul.
+  await page.locator('#btn-pen').click();
+  await expect(page.locator('.swatch[data-color="#2563eb"]')).toHaveAttribute('aria-pressed', 'true');
+  const pagina = page.locator('.page').first();
+  const b = (await pagina.boundingBox())!;
+  await page.mouse.move(b.x + 60, b.y + 300);
+  await page.mouse.down();
+  await page.mouse.move(b.x + 180, b.y + 340, { steps: 8 });
+  await page.mouse.up();
+  await expect(page.locator('#status')).toHaveText('Trazo dibujado.');
+
+  const bytesTrazo = await descargar(page, 'pluma-recordada-azul.pdf');
+  const eng2 = await PdfiumEngine.create();
+  const docTrazo = await eng2.open(bytesTrazo);
+  const { data: dataTrazo } = eng2.renderPage(docTrazo, 0, 1);
+  let azul = false;
+  for (let i = 0; i < dataTrazo.length; i += 4) {
+    if (dataTrazo[i]! < 90 && dataTrazo[i + 1]! < 150 && dataTrazo[i + 2]! > 150) { azul = true; break; }
+  }
+  expect(azul).toBe(true);
+  eng2.close(docTrazo);
 });
 
 // (b) #16: rectángulo — arrastrar dibuja uno, verificado en el motor

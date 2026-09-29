@@ -76,8 +76,21 @@ export class App {
    * (§1 del lote D de herramientas).
    */
   private tool: ToolMode = 'none';
-  /** Color de herramienta (§2, #18): usado por pluma, rectángulo y resaltado. Rojo por defecto (mismo que traía la pluma antes de unificarse). */
-  private toolColor: [number, number, number] = [220, 20, 20];
+  /**
+   * Color de herramienta (§2, #18) — UNO POR HERRAMIENTA, no compartido: en
+   * Acrobat el resaltador es amarillo por defecto y cada herramienta
+   * recuerda el suyo, cambiar el color de la pluma no debe teñir el
+   * resaltador (ni al revés). `pen`/`rect` conservan el rojo que ya traía la
+   * pluma; `highlight` conserva el amarillo que ya traía `HighlightRunCmd`
+   * antes de este PR — ningún color por defecto cambia respecto a `main`,
+   * solo se hacen elegibles desde la paleta. Subrayar/tachar NO están aquí:
+   * conservan el color fijo que ya traían sus comandos, sin tocar.
+   */
+  private toolColors: { pen: [number, number, number]; rect: [number, number, number]; highlight: [number, number, number] } = {
+    pen: [220, 20, 20],
+    rect: [220, 20, 20],
+    highlight: [250, 204, 21]
+  };
   private swatchButtons: HTMLButtonElement[] = [];
   private selection: { pageIndex: number; runId: number } | null = null;
   /** Imagen seleccionada en el marco interactivo (sello/firma, #20/#21), o null. Mutuamente excluyente con `selection`. */
@@ -158,16 +171,17 @@ export class App {
     this.colorInput.type = 'color'; this.colorInput.id = 'btn-color'; this.colorInput.title = 'Color del texto (de la línea seleccionada)';
     this.colorInput.addEventListener('input', () => this.applyColor());
 
-    // Paleta de color de herramienta (§2, #18 de la tabla de paridad): pluma,
-    // rectángulo y resaltado la usan (`this.toolColor`). Deliberadamente
-    // distinta de `#btn-color` de arriba (que cambia el color del TEXTO ya
-    // en el documento, seleccionado): título explícito en cada una para que
-    // no se confundan.
+    // Paleta de color de herramienta (§2, #18 de la tabla de paridad):
+    // afecta a la herramienta ACTIVA (pluma o rectángulo) o, si ninguna está
+    // activa, al resaltador — "Resaltar" no es un modo, actúa de inmediato
+    // sobre la selección (ver `activeColorKey`/`reflectSwatches`).
+    // Deliberadamente distinta de `#btn-color` de arriba (que cambia el
+    // color del TEXTO ya en el documento, seleccionado): título explícito en
+    // cada una para que no se confundan.
     const swatchesEl = document.createElement('div');
     swatchesEl.id = 'swatches';
-    swatchesEl.title = 'Color de herramienta (pluma, rectángulo, resaltado)';
+    swatchesEl.title = 'Color de la herramienta activa (o del resaltador)';
     Object.assign(swatchesEl.style, { display: 'flex', gap: '3px', alignItems: 'center' });
-    const defaultHex = rgbToHex(...this.toolColor);
     for (const { color, label } of PALETTE) {
       const swatch = document.createElement('button');
       swatch.type = 'button';
@@ -175,22 +189,21 @@ export class App {
       swatch.dataset.color = color;
       swatch.title = label;
       swatch.setAttribute('aria-label', label);
-      const activo = color.toLowerCase() === defaultHex.toLowerCase();
-      swatch.setAttribute('aria-pressed', String(activo));
+      swatch.setAttribute('aria-pressed', 'false'); // reflectSwatches() lo corrige justo debajo
       Object.assign(swatch.style, {
         width: '18px', height: '18px', padding: '0', borderRadius: '3px', cursor: 'pointer',
-        background: color, border: activo ? '2px solid #111827' : '2px solid transparent'
+        background: color, border: '2px solid transparent'
       });
-      swatch.addEventListener('click', () => this.setToolColor(hexToRgb(color), swatch));
+      swatch.addEventListener('click', () => this.setToolColor(hexToRgb(color)));
       swatchesEl.appendChild(swatch);
       this.swatchButtons.push(swatch);
     }
     this.toolColorInput = document.createElement('input');
     this.toolColorInput.type = 'color'; this.toolColorInput.id = 'tool-color';
     this.toolColorInput.title = 'Color de herramienta (personalizado)';
-    this.toolColorInput.value = defaultHex;
     this.toolColorInput.addEventListener('input', () => this.setToolColor(hexToRgb(this.toolColorInput.value)));
     swatchesEl.appendChild(this.toolColorInput);
+    this.reflectSwatches(); // marca la muestra del color activo al arrancar (ninguna herramienta activa → resaltador, amarillo)
 
     // Panel de propiedades de la línea seleccionada (fuente, tamaño, color),
     // como en Acrobat. Vive dentro de la propia barra de herramientas —igual
@@ -389,6 +402,13 @@ export class App {
       btn.style.background = activo ? '#c7d2fe' : '';
     }
     this.viewer?.setTool(tool);
+    // La vista previa de pluma/rectángulo en el visor usa un único color a
+    // la vez: al activar cualquiera de las dos, empujarle el color QUE ESA
+    // herramienta recuerda (nunca el de la otra).
+    if (tool === 'pen' || tool === 'rect') this.viewer?.setToolColor(this.toolColors[tool]);
+    // La paleta pasa a reflejar la herramienta recién activada (o el
+    // resaltador, si `tool` no es pluma ni rectángulo).
+    this.reflectSwatches();
     this.setStatus(TOOL_STATUS[tool]);
   }
 
@@ -397,15 +417,35 @@ export class App {
     return { insert: this.btnInsert, pen: this.btnPen, note: this.btnNote, rect: this.btnRect, eraser: this.btnEraser };
   }
 
-  /** `#swatches`/`#tool-color`: fija el color de herramienta (§2, #18) y refleja la muestra activa. */
-  private setToolColor(rgb: [number, number, number], sourceBtn?: HTMLButtonElement): void {
-    this.toolColor = rgb;
+  /**
+   * A qué color de `toolColors` afecta la paleta EN ESTE MOMENTO: el de la
+   * herramienta activa si es pluma o rectángulo; si no hay ninguna de esas
+   * dos activa (incluido el borrador, insertar, nota o ningún modo), el
+   * resaltador — porque "Resaltar" no es un modo (`tool`), actúa al
+   * instante sobre la línea seleccionada (`highlightSelected`).
+   */
+  private activeColorKey(): 'pen' | 'rect' | 'highlight' {
+    if (this.tool === 'pen') return 'pen';
+    if (this.tool === 'rect') return 'rect';
+    return 'highlight';
+  }
+
+  /** `#swatches`/`#tool-color`: fija el color de la herramienta A LA QUE APLICARÍA ahora mismo (§2, #18) — nunca comparte color entre herramientas. */
+  private setToolColor(rgb: [number, number, number]): void {
+    this.toolColors[this.activeColorKey()] = rgb;
+    this.reflectSwatches();
+    if (this.tool === 'pen' || this.tool === 'rect') this.viewer?.setToolColor(rgb);
+  }
+
+  /** Marca en la paleta (`aria-pressed` + borde) la muestra que coincide con el color de `activeColorKey()`, y sincroniza `#tool-color`. */
+  private reflectSwatches(): void {
+    const hex = rgbToHex(...this.toolColors[this.activeColorKey()]);
     for (const b of this.swatchButtons) {
-      const activo = b === sourceBtn;
+      const activo = (b.dataset.color ?? '').toLowerCase() === hex.toLowerCase();
       b.setAttribute('aria-pressed', String(activo));
       b.style.borderColor = activo ? '#111827' : 'transparent';
     }
-    this.viewer?.setToolColor(rgb);
+    this.toolColorInput.value = hex;
   }
 
   private async ensureEngine(): Promise<PdfiumEngine> {
@@ -469,8 +509,8 @@ export class App {
       },
       onMove: (pageIndex, runId, dxPt, dyPt) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt)); },
       onPageChange: (i) => { this.currentPage = i; this.updateIndicator(); this.setActiveThumb(i); },
-      onStroke: (pageIndex, points) => { void this.bus?.execute(new DrawStrokeCmd(pageIndex, points, this.toolColor)); this.setStatus('Trazo dibujado.'); },
-      onDrawRect: (pageIndex, rect) => { void this.bus?.execute(new DrawRectCmd(pageIndex, rect, this.toolColor)); this.setStatus('Rectángulo dibujado.'); },
+      onStroke: (pageIndex, points) => { void this.bus?.execute(new DrawStrokeCmd(pageIndex, points, this.toolColors.pen)); this.setStatus('Trazo dibujado.'); },
+      onDrawRect: (pageIndex, rect) => { void this.bus?.execute(new DrawRectCmd(pageIndex, rect, this.toolColors.rect)); this.setStatus('Rectángulo dibujado.'); },
       onErase: (pageIndex, objIndex) => { void this.bus?.execute(new DeleteObjectCmd(pageIndex, objIndex)); this.setStatus('Trazo borrado.'); },
       onFormText: (pageIndex, annotIndex, value, oldValue) => {
         void this.bus?.execute(new SetFormTextCmd(pageIndex, annotIndex, value, oldValue));
@@ -784,7 +824,7 @@ export class App {
   private highlightSelected(): void {
     const run = this.selectedRun();
     if (!run || !this.bus || !this.selection) { this.setStatus('Selecciona una línea para resaltarla.'); return; }
-    void this.bus.execute(new HighlightRunCmd(this.selection.pageIndex, run.boxPt, this.toolColor));
+    void this.bus.execute(new HighlightRunCmd(this.selection.pageIndex, run.boxPt, this.toolColors.highlight));
     this.setStatus('Resaltado.');
   }
 
