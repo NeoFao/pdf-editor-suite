@@ -120,6 +120,130 @@
         border-radius: 2px;
         background: #6366f1;
       }
+
+      /*
+       * Atajos de teclado (#34, App.ts/atajos.ts): el diálogo de ayuda
+       * (`AtajosPanel`) y su tabla usan el `<dialog>` nativo — sin CSS propio
+       * aquí, los estilos de la tabla van en línea en AtajosPanel.ts igual
+       * que el resto de diálogos de esta app (TextPanel, CompressPanel).
+       */
+
+      /*
+       * Cajón móvil / responsive (#35 de la tabla de paridad, §9).
+       *
+       * `#toolbar-primary`/`#toolbar-more` son `display: contents` por
+       * defecto (escritorio): el envoltorio "desaparece" de la caja visual y
+       * sus hijos quedan como hijos directos de `#toolbar`, IDÉNTICO al
+       * flujo plano de antes de este PR (mismo orden de wrap, mismo aspecto).
+       * Solo en ≤768px estos envoltorios pasan a ser contenedores flex de
+       * verdad: la fila principal (scroll horizontal propio, nunca el de la
+       * página) y el menú "⋯" (oculto hasta que `#btn-more` lo abre).
+       *
+       * `#sidebar` (miniaturas/marcadores) es igual: fijo de 150px en
+       * escritorio (aquí, no inline — ver el comentario en App.ts) y cajón
+       * deslizante (`position: absolute` + `transform`) en ≤768px, oculto
+       * hasta que `#btn-drawer` le añade la clase `.abierto`. `absolute`
+       * (anclado al contenedor miniaturas+visor, que ya empieza debajo de
+       * `#toolbar` — ver `area.style.position = 'relative'` en App.ts) y NO
+       * `fixed` (a toda la ventana) a propósito: con `fixed` el cajón y su
+       * telón tapaban la barra entera, incluido el propio `#btn-drawer` que
+       * lo abrió — el mismo defecto que E-025 en la app vieja, con otro
+       * mecanismo. Con `absolute` la barra queda SIEMPRE alcanzable mientras
+       * el cajón está abierto, sin tener que medir su altura en JS.
+       *
+       * `#btn-drawer`/`#btn-more` no existen visualmente en escritorio: no
+       * hay nada que abrir/cerrar cuando todo ya se ve entero.
+       */
+      #sidebar { width: 150px; flex: 0 0 150px; }
+      #toolbar-primary, #toolbar-more { display: contents; }
+      #btn-drawer, #btn-more, #btn-open-mobile { display: none; }
+      #drawer-backdrop { display: none; }
+
+      @media (max-width: 768px) {
+        #toolbar {
+          flex-direction: column;
+          align-items: stretch;
+          background: #f3f4f6;
+        }
+
+        #toolbar-primary {
+          display: flex;
+          flex-wrap: nowrap;
+          overflow-x: auto;
+          -webkit-overflow-scrolling: touch;
+          gap: 6px;
+          width: 100%;
+        }
+        #toolbar-primary > * { flex: 0 0 auto; }
+
+        #toolbar-more {
+          display: none;
+          flex-wrap: wrap;
+          gap: 6px;
+          width: 100%;
+          padding-top: 6px;
+          border-top: 1px solid #d1d5db;
+        }
+        #toolbar-more.open { display: flex; }
+        #toolbar-more input, #toolbar-more select { max-width: 45vw; }
+
+        /* Objetivos táctiles ≥ 40×40 px en móvil. */
+        #toolbar button, #toolbar select, #toolbar input[type="color"] {
+          min-width: 40px;
+          min-height: 40px;
+        }
+        /*
+         * Excepción deliberada: la paleta de 8 muestras de color (§2/#18 de
+         * la tabla de paridad) es un grupo denso y contiguo de swatches, no
+         * botones de acción independientes — a 40px cada una (320px + el
+         * selector personalizado) desborda los 390px del viewport de
+         * referencia. Se mantiene su tamaño de diseño (18px, con separación
+         * entre ellas) en vez de forzar el mínimo general; `#tool-color`
+         * (el selector personalizado, justo al lado) sigue en 40px.
+         */
+        #swatches button.swatch { min-width: 18px; min-height: 18px; }
+
+        /* `#btn-drawer`/`#btn-more` siempre alcanzables sin desplazar la
+           fila con scroll horizontal hasta el extremo. */
+        #btn-drawer, #btn-more {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          position: sticky;
+          background: #f3f4f6;
+          z-index: 1;
+        }
+        #btn-drawer { left: 0; }
+        #btn-more { right: 0; }
+
+        /* El input de archivo nativo (ancho impredecible, ver el comentario
+           en App.ts) cede su sitio a `#btn-open-mobile`, compacto. */
+        #toolbar-primary #file-input { display: none; }
+        #btn-open-mobile { display: inline-flex; align-items: center; justify-content: center; }
+
+        #sidebar {
+          position: absolute;
+          top: 0;
+          left: 0;
+          bottom: 0;
+          width: 82vw;
+          max-width: 320px;
+          z-index: 50;
+          transform: translateX(-100%);
+          transition: transform .2s ease;
+          box-shadow: 2px 0 12px rgba(0, 0, 0, .35);
+        }
+        #sidebar.abierto { transform: translateX(0); }
+        #sidebar button { min-height: 40px; }
+
+        #drawer-backdrop.visible {
+          display: block;
+          position: absolute;
+          inset: 0;
+          background: rgba(0, 0, 0, .4);
+          z-index: 40;
+        }
+      }
     </style>
   </head>
   <body>

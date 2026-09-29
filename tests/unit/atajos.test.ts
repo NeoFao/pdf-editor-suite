@@ -1,0 +1,166 @@
+import { test, expect } from 'vitest';
+import { resolverAtajo, esCampoEditable, TABLA_ATAJOS } from '../../src/ui/atajos';
+
+/** Construye un evento normalizado con los campos por defecto en `false`/vacíos. */
+function ev(over: Partial<Parameters<typeof resolverAtajo>[0]>) {
+  return { key: '', ctrl: false, meta: false, shift: false, alt: false, editable: false, ...over };
+}
+
+test('Ctrl+Z (Windows/Linux) resuelve a deshacer', () => {
+  expect(resolverAtajo(ev({ key: 'z', ctrl: true }))?.accion).toBe('deshacer');
+});
+
+test('Cmd+Z (macOS, metaKey) resuelve a deshacer', () => {
+  expect(resolverAtajo(ev({ key: 'z', meta: true }))?.accion).toBe('deshacer');
+});
+
+test('Ctrl+Y resuelve a rehacer', () => {
+  expect(resolverAtajo(ev({ key: 'y', ctrl: true }))?.accion).toBe('rehacer');
+});
+
+test('Ctrl+Shift+Z resuelve a rehacer (alternativa a Ctrl+Y)', () => {
+  expect(resolverAtajo(ev({ key: 'Z', ctrl: true, shift: true }))?.accion).toBe('rehacer');
+});
+
+test('Cmd+Shift+Z (macOS) resuelve a rehacer', () => {
+  expect(resolverAtajo(ev({ key: 'z', meta: true, shift: true }))?.accion).toBe('rehacer');
+});
+
+test('Ctrl+Z con Mayús NO es deshacer (evita colisión con rehacer)', () => {
+  expect(resolverAtajo(ev({ key: 'z', ctrl: true, shift: true }))?.accion).toBe('rehacer');
+});
+
+test('Ctrl+S resuelve a guardar', () => {
+  expect(resolverAtajo(ev({ key: 's', ctrl: true }))?.accion).toBe('guardar');
+});
+
+test('Ctrl+O resuelve a abrir', () => {
+  expect(resolverAtajo(ev({ key: 'o', ctrl: true }))?.accion).toBe('abrir');
+});
+
+test('Ctrl+P resuelve a imprimir', () => {
+  expect(resolverAtajo(ev({ key: 'p', ctrl: true }))?.accion).toBe('imprimir');
+});
+
+test('Ctrl+F resuelve a buscar', () => {
+  expect(resolverAtajo(ev({ key: 'f', ctrl: true }))?.accion).toBe('buscar');
+});
+
+test('Ctrl+"+" resuelve a zoom-in', () => {
+  expect(resolverAtajo(ev({ key: '+', ctrl: true }))?.accion).toBe('zoom-in');
+});
+
+test('Ctrl+"=" (mismo físico sin Mayús) también resuelve a zoom-in', () => {
+  expect(resolverAtajo(ev({ key: '=', ctrl: true }))?.accion).toBe('zoom-in');
+});
+
+test('Ctrl+"-" resuelve a zoom-out', () => {
+  expect(resolverAtajo(ev({ key: '-', ctrl: true }))?.accion).toBe('zoom-out');
+});
+
+test('Ctrl+0 resuelve a zoom-ajustar (ajustar al ancho)', () => {
+  expect(resolverAtajo(ev({ key: '0', ctrl: true }))?.accion).toBe('zoom-ajustar');
+});
+
+test('Inicio (sin campo editable) resuelve a primera-pagina', () => {
+  expect(resolverAtajo(ev({ key: 'Home' }))?.accion).toBe('primera-pagina');
+});
+
+test('Fin (sin campo editable) resuelve a ultima-pagina', () => {
+  expect(resolverAtajo(ev({ key: 'End' }))?.accion).toBe('ultima-pagina');
+});
+
+test('RePág (sin campo editable) resuelve a pagina-anterior', () => {
+  expect(resolverAtajo(ev({ key: 'PageUp' }))?.accion).toBe('pagina-anterior');
+});
+
+test('AvPág (sin campo editable) resuelve a pagina-siguiente', () => {
+  expect(resolverAtajo(ev({ key: 'PageDown' }))?.accion).toBe('pagina-siguiente');
+});
+
+test('Escape (sin campo editable) resuelve a escape', () => {
+  expect(resolverAtajo(ev({ key: 'Escape' }))?.accion).toBe('escape');
+});
+
+test('Supr (sin campo editable) resuelve a suprimir', () => {
+  expect(resolverAtajo(ev({ key: 'Delete' }))?.accion).toBe('suprimir');
+  expect(resolverAtajo(ev({ key: 'Backspace' }))?.accion).toBe('suprimir');
+});
+
+test('"?" (sin campo editable) resuelve a ayuda', () => {
+  expect(resolverAtajo(ev({ key: '?' }))?.accion).toBe('ayuda');
+});
+
+test('regla de oro: AvPág con el foco en un campo editable no dispara nada', () => {
+  expect(resolverAtajo(ev({ key: 'PageDown', editable: true }))).toBeNull();
+});
+
+test('regla de oro: Inicio con el foco en un campo editable no dispara nada', () => {
+  expect(resolverAtajo(ev({ key: 'Home', editable: true }))).toBeNull();
+});
+
+test('regla de oro: "?" con el foco en un campo editable no dispara nada (para poder escribir el carácter)', () => {
+  expect(resolverAtajo(ev({ key: '?', editable: true }))).toBeNull();
+});
+
+test('regla de oro: Escape con el foco en un campo editable no dispara la acción global', () => {
+  expect(resolverAtajo(ev({ key: 'Escape', editable: true }))).toBeNull();
+});
+
+test('regla de oro: Supr con el foco en un campo editable no dispara nada (deja borrar el carácter)', () => {
+  expect(resolverAtajo(ev({ key: 'Delete', editable: true }))).toBeNull();
+});
+
+test('regla de oro: Ctrl+Z con el foco en un campo editable deja actuar al navegador (deshacer nativo del input)', () => {
+  expect(resolverAtajo(ev({ key: 'z', ctrl: true, editable: true }))).toBeNull();
+});
+
+test('regla de oro: Ctrl+Y con el foco en un campo editable deja actuar al navegador', () => {
+  expect(resolverAtajo(ev({ key: 'y', ctrl: true, editable: true }))).toBeNull();
+});
+
+test('Ctrl+S SÍ dispara aunque el foco esté en un campo editable (evita el diálogo de guardar del navegador)', () => {
+  expect(resolverAtajo(ev({ key: 's', ctrl: true, editable: true }))?.accion).toBe('guardar');
+});
+
+test('Ctrl+F SÍ dispara aunque el foco esté en un campo editable', () => {
+  expect(resolverAtajo(ev({ key: 'f', ctrl: true, editable: true }))?.accion).toBe('buscar');
+});
+
+test('una tecla suelta sin ninguna combinación reconocida no resuelve nada', () => {
+  expect(resolverAtajo(ev({ key: 'a' }))).toBeNull();
+});
+
+test('la tabla declarativa tiene una entrada por acción, sin duplicados', () => {
+  const acciones = TABLA_ATAJOS.map((d) => d.accion);
+  expect(new Set(acciones).size).toBe(acciones.length);
+});
+
+test('esCampoEditable: un <input> es editable', () => {
+  const input = { tagName: 'INPUT', isContentEditable: false } as unknown as HTMLElement;
+  expect(esCampoEditable(input)).toBe(true);
+});
+
+test('esCampoEditable: un <textarea> es editable', () => {
+  const el = { tagName: 'TEXTAREA', isContentEditable: false } as unknown as HTMLElement;
+  expect(esCampoEditable(el)).toBe(true);
+});
+
+test('esCampoEditable: un <select> es editable', () => {
+  const el = { tagName: 'SELECT', isContentEditable: false } as unknown as HTMLElement;
+  expect(esCampoEditable(el)).toBe(true);
+});
+
+test('esCampoEditable: un elemento contentEditable (p. ej. una .run en edición) es editable', () => {
+  const el = { tagName: 'DIV', isContentEditable: true } as unknown as HTMLElement;
+  expect(esCampoEditable(el)).toBe(true);
+});
+
+test('esCampoEditable: un <button> no es editable', () => {
+  const el = { tagName: 'BUTTON', isContentEditable: false } as unknown as HTMLElement;
+  expect(esCampoEditable(el)).toBe(false);
+});
+
+test('esCampoEditable: null no es editable', () => {
+  expect(esCampoEditable(null)).toBe(false);
+});
