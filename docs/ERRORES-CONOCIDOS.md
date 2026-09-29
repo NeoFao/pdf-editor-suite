@@ -959,6 +959,48 @@ revisó y no necesitó cambios.
 
 ---
 
+### E-035 · `Mem.HEAPU8` capturado una vez se desconectaba al crecer la memoria WASM
+
+**Síntoma.** Encontrado implementando el lote E (filtros/compresión de
+imagen, §9 #25 y #29), al procesar una imagen grande (~2000×2000 px o más:
+el caso real de una página escaneada a buena resolución). `replaceImageJpeg`
+—y, por el mismo motivo, cualquier operación que procese suficientes
+píxeles como para que el heap WASM tenga que crecer— fallaba con
+`TypeError: Cannot perform Construct on a detached ArrayBuffer` a mitad de
+la llamada, dentro del propio motor PDFium.
+
+**Causa raíz.** `makeMem()` (`src/engine/pdfium/mem.ts`) construía el
+objeto `Mem` con `HEAPU8: m.HEAPU8` — una propiedad de datos normal,
+evaluada UNA SOLA VEZ en el momento de crear el motor (`PdfiumEngine.create()`).
+Cuando el módulo Emscripten necesita más memoria de la reservada
+inicialmente, no la amplía en sitio: crea un `ArrayBuffer` nuevo y
+reasigna sus propias vistas (`Module.HEAPU8`, etc.) para que apunten ahí,
+dejando el `ArrayBuffer` anterior **desconectado** ("detached"). Cualquier
+`Uint8Array` construido sobre ese buffer antiguo —como el `HEAPU8`
+capturado en `makeMem()`— pasa a ser inválido: hasta un simple
+`.subarray()` sobre él lanza esa excepción. Como casi todas las operaciones
+del motor tocan pocos KB, el heap raramente necesita crecer y el defecto
+llevaba invisible desde que `mem.ts` existe; una imagen de varios
+megapíxeles (RGBA sin comprimir) sí lo dispara con facilidad. Nótese que
+`copyIn()`/`wide()`, en el mismo fichero, nunca sufrieron esto: leen
+`m.HEAPU8` directamente en cada llamada (variable de closure, no un campo
+capturado), así que siempre ven la vista vigente.
+
+**Cómo se detecta ahora.**
+- Test `replaceImageJpeg con una imagen grande no falla por buffer WASM
+  desconectado` en `tests/unit/PdfiumEngine.heapgrowth.test.ts`: inserta una
+  imagen de 2000×2000 y sustituye su bitmap por un JPEG real (generado con
+  Chromium vía Playwright, igual que en `PdfiumEngine.imagepixels.test.ts`)
+  — fallaba con el `TypeError` de arriba antes del arreglo.
+- `Mem.HEAPU8` (`src/engine/pdfium/mem.ts`) es ahora un **getter**
+  (`get HEAPU8() { return m.HEAPU8; }`), no un valor capturado: cada
+  `mem.HEAPU8` relee la vista actual del módulo, crezca o no el heap entre
+  medias.
+- Regla `heapu8-siempre-getter` — bloquea que `mem.ts` vuelva a declarar
+  `HEAPU8: m.HEAPU8` como propiedad de datos en vez de getter.
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que

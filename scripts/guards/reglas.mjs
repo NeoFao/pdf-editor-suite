@@ -628,6 +628,35 @@ export const conGestoConCancelacion = {
   }
 };
 
+/* ── E-035 · Mem.HEAPU8 tiene que ser un getter, nunca un valor capturado ── */
+export const conHeapU8Getter = {
+  id: 'heapu8-siempre-getter',
+  titulo: 'Mem.HEAPU8 (src/engine/pdfium/mem.ts) se define como getter, no como valor capturado',
+  comoArreglar:
+    'En makeMem(), declara HEAPU8 con `get HEAPU8() { return m.HEAPU8; }`, nunca ' +
+    '`HEAPU8: m.HEAPU8`. La memoria WASM puede crecer (p. ej. al procesar una imagen ' +
+    'grande) y Emscripten reemplaza el ArrayBuffer subyacente por uno nuevo, dejando ' +
+    '"detached" cualquier Uint8Array capturado antes de ese crecimiento. Un valor ' +
+    'capturado en makeMem() se congela en el momento de crear el motor y falla con ' +
+    '"Cannot perform Construct on a detached ArrayBuffer" en cuanto el heap crece a ' +
+    'mitad de una operación (E-035, reproducido con una imagen de 2000×2000 en ' +
+    'replaceImageJpeg). Un getter relee la vista ACTUAL en cada acceso.',
+  ejecutar() {
+    const ruta = 'src/engine/pdfium/mem.ts';
+    if (!existe(ruta)) return [];
+    if (tieneDeuda(ruta, this.id)) return [];
+    const contenido = leer(ruta);
+    if (/\bHEAPU8\s*:\s*m\.HEAPU8/.test(contenido) && !/get\s+HEAPU8\s*\(\s*\)/.test(contenido)) {
+      const linea = contenido.slice(0, contenido.indexOf('HEAPU8: m.HEAPU8')).split('\n').length;
+      return [hallazgo(ruta, linea, 'HEAPU8 se captura como valor en vez de como getter — se desconectará si el heap WASM crece')];
+    }
+    if (!/get\s+HEAPU8\s*\(\s*\)/.test(contenido)) {
+      return [hallazgo(ruta, null, 'no se encuentra "get HEAPU8()" — el getter puede haberse renombrado o eliminado')];
+    }
+    return [];
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -646,5 +675,6 @@ export const TODAS = [
   conPdfiumBufferFijo,
   conNavegacionPorGoToPage,
   conWebServerNextSinReusar,
-  conGestoConCancelacion
+  conGestoConCancelacion,
+  conHeapU8Getter
 ];

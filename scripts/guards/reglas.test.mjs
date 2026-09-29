@@ -370,6 +370,28 @@ describe('gesto-con-cancelacion', () => {
   });
 });
 
+describe('heapu8-siempre-getter', () => {
+  const regla = detectarEn('heapu8-siempre-getter');
+  const patronMal = /\bHEAPU8\s*:\s*m\.HEAPU8/;
+  const patronGetter = /get\s+HEAPU8\s*\(\s*\)/;
+
+  test('detecta el patrón exacto de E-035: HEAPU8 capturado como valor en vez de getter', () => {
+    const linea = '    HEAPU8: m.HEAPU8,';
+    assert.match(linea, patronMal);
+    assert.ok(regla.comoArreglar.includes('get HEAPU8'));
+  });
+
+  test('acepta HEAPU8 declarado como getter', () => {
+    const cuerpo = '  return {\n    get HEAPU8() { return m.HEAPU8; },\n    malloc: (n) => m._malloc(n),\n  };';
+    assert.doesNotMatch(cuerpo, patronMal);
+    assert.match(cuerpo, patronGetter);
+  });
+
+  test('sobre el repo real no encuentra nada: src/engine/pdfium/mem.ts ya declara HEAPU8 como getter', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega

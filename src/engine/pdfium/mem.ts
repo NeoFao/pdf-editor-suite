@@ -10,6 +10,8 @@ export interface Mem {
   UTF8ToString(ptr: number): string;
   readU16(ptr: number): string;
   addFunction(fn: (...args: number[]) => number, sig: string): number;
+  /** Libera un slot de tabla de funciones reservado por `addFunction`. Llamar SIEMPRE en un `finally` (§2.6). */
+  removeFunction(idx: number): void;
   copyIn(bytes: Uint8Array): number;
   wide(s: string): number;
 }
@@ -17,7 +19,16 @@ export interface Mem {
 export function makeMem(p: Pdfium): Mem {
   const m = (p as any).pdfium;
   return {
-    HEAPU8: m.HEAPU8,
+    // GETTER, no un valor capturado: la memoria WASM puede CRECER (p. ej. al
+    // procesar una imagen grande, varios MB) y Emscripten entonces
+    // reemplaza el ArrayBuffer subyacente por uno nuevo, dejando cualquier
+    // Uint8Array anterior "detached" (E-035). Guardar `m.HEAPU8` una sola
+    // vez en un campo normal daba `TypeError: Cannot perform Construct on a
+    // detached ArrayBuffer` en cuanto el heap crecía a mitad de una
+    // operación (reproducido con una imagen de 2000×2000 en
+    // replaceImageJpeg). Con el getter, cada `mem.HEAPU8` relee la vista
+    // ACTUAL del módulo.
+    get HEAPU8() { return m.HEAPU8 as Uint8Array; },
     malloc: (n) => m._malloc(n),
     free: (ptr) => m._free(ptr),
     setValue: (ptr, v, type) => m.setValue(ptr, v, type),
@@ -25,6 +36,7 @@ export function makeMem(p: Pdfium): Mem {
     UTF8ToString: (ptr) => m.UTF8ToString(ptr),
     readU16: (ptr) => m.UTF16ToString(ptr),
     addFunction: (fn, sig) => m.addFunction(fn, sig),
+    removeFunction: (idx) => m.removeFunction(idx),
     copyIn(bytes) { const ptr = m._malloc(bytes.length); m.HEAPU8.set(bytes, ptr); return ptr; },
     wide(s) {
       const b = new Uint8Array((s.length + 1) * 2);
