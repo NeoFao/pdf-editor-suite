@@ -51,7 +51,13 @@ export type AccionAtajo =
   | 'pagina-siguiente'
   | 'suprimir'
   | 'escape'
-  | 'ayuda';
+  | 'ayuda'
+  | 'tool-none'
+  | 'tool-insert'
+  | 'tool-pen'
+  | 'tool-rect'
+  | 'tool-eraser'
+  | 'tool-note';
 
 export interface DefinicionAtajo {
   /** Texto para el panel de ayuda (`AtajosPanel`), no usado por `resolverAtajo`. */
@@ -190,6 +196,53 @@ export const TABLA_ATAJOS: DefinicionAtajo[] = [
     descripcion: 'Mostrar esta ayuda',
     bloqueaEnEditable: true,
     coincide: (e) => !ctrlOMeta(e) && tecla(e) === '?'
+  },
+  // Atajos de una letra (§6 del rediseño de interfaz — paridad con E-017 de
+  // la app vieja, ver js/app.js: V=seleccionar, P=pluma, T=texto, E=borrador,
+  // R=rectángulo; N=nota es nuevo aquí, la app vieja no lo tenía). Todos
+  // bloqueados en campos editables (`bloqueaEnEditable: true`) y sin
+  // Ctrl/Cmd/Alt para no chocar con atajos del sistema o del navegador.
+  {
+    combinacion: 'V',
+    accion: 'tool-none',
+    descripcion: 'Herramienta Seleccionar (ninguna herramienta)',
+    bloqueaEnEditable: true,
+    coincide: (e) => !ctrlOMeta(e) && !e.alt && tecla(e) === 'v'
+  },
+  {
+    combinacion: 'T',
+    accion: 'tool-insert',
+    descripcion: 'Herramienta Insertar texto',
+    bloqueaEnEditable: true,
+    coincide: (e) => !ctrlOMeta(e) && !e.alt && tecla(e) === 't'
+  },
+  {
+    combinacion: 'P',
+    accion: 'tool-pen',
+    descripcion: 'Herramienta Pluma',
+    bloqueaEnEditable: true,
+    coincide: (e) => !ctrlOMeta(e) && !e.alt && tecla(e) === 'p'
+  },
+  {
+    combinacion: 'R',
+    accion: 'tool-rect',
+    descripcion: 'Herramienta Rectángulo',
+    bloqueaEnEditable: true,
+    coincide: (e) => !ctrlOMeta(e) && !e.alt && tecla(e) === 'r'
+  },
+  {
+    combinacion: 'E',
+    accion: 'tool-eraser',
+    descripcion: 'Herramienta Borrador',
+    bloqueaEnEditable: true,
+    coincide: (e) => !ctrlOMeta(e) && !e.alt && tecla(e) === 'e'
+  },
+  {
+    combinacion: 'N',
+    accion: 'tool-note',
+    descripcion: 'Herramienta Nota',
+    bloqueaEnEditable: true,
+    coincide: (e) => !ctrlOMeta(e) && !e.alt && tecla(e) === 'n'
   }
 ];
 

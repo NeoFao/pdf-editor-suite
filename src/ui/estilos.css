@@ -1,0 +1,550 @@
+/**
+ * Sistema visual de la interfaz "profesional" (rediseño §3 del encargo),
+ * inspirado en la estructura de Adobe Acrobat: barra superior + pestañas de
+ * herramientas + barra contextual + panel lateral + barra de estado.
+ *
+ * Vive en un fichero CSS aparte (no en el <style> de index.next.html) porque
+ * es sustancial (tokens + ~15 componentes) y Vite lo bundlea igual de bien
+ * importado desde main.ts — mantiene index.next.html centrado en los pocos
+ * estados de capa que SÍ dependen de invariantes de producto documentados
+ * (E-002/E-029/E-030, ver los comentarios de ese fichero), sin mezclarlos con
+ * el maquetado de la interfaz.
+ *
+ * Retícula de espaciado en múltiplos de 4px. Un único color de acento
+ * (índigo) — el mismo que ya usaba el resto de la app para selección de
+ * runs/imágenes/miniaturas antes de este PR (`#6366f1`), para que el rediseño
+ * no introduzca un segundo acento que compita visualmente con el existente.
+ */
+
+:root {
+  --ed-bg: #dfe2e6;
+  --ed-surface: #f6f7f8;
+  --ed-surface-2: #ffffff;
+  --ed-border: #d3d7dc;
+  --ed-border-strong: #b7bcc4;
+  --ed-text: #20242c;
+  --ed-text-muted: #5b6472;
+  --ed-text-faint: #8a92a0;
+  --ed-accent: #6366f1;
+  --ed-accent-strong: #4338ca;
+  --ed-accent-soft: #e6e6fd;
+  --ed-hover: rgba(15, 23, 42, 0.06);
+  --ed-active: rgba(15, 23, 42, 0.11);
+  --ed-danger: #dc2626;
+  --ed-stage: #4b4f56;
+  --ed-focus-ring: #2563eb;
+
+  --ed-radius-sm: 4px;
+  --ed-radius-md: 6px;
+  --ed-radius-lg: 10px;
+
+  --ed-sp-1: 4px;
+  --ed-sp-2: 8px;
+  --ed-sp-3: 12px;
+  --ed-sp-4: 16px;
+
+  --ed-font-xs: 11.5px;
+  --ed-font-sm: 12.5px;
+  --ed-font-md: 13.5px;
+
+  --ed-topbar-h: 48px;
+  --ed-tablist-h: 36px;
+  --ed-contextbar-h: 44px;
+  --ed-statusbar-h: 28px;
+  --ed-sidebar-w: 168px;
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ed-bg: #16181d;
+    --ed-surface: #1f2228;
+    --ed-surface-2: #24272e;
+    --ed-border: #34383f;
+    --ed-border-strong: #454a53;
+    --ed-text: #e7e9ee;
+    --ed-text-muted: #a7adb8;
+    --ed-text-faint: #767c88;
+    --ed-accent: #818cf8;
+    --ed-accent-strong: #a5b4fc;
+    --ed-accent-soft: #302f5e;
+    --ed-hover: rgba(255, 255, 255, 0.08);
+    --ed-active: rgba(255, 255, 255, 0.14);
+    --ed-stage: #202226;
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ed-bg: #16181d;
+  --ed-surface: #1f2228;
+  --ed-surface-2: #24272e;
+  --ed-border: #34383f;
+  --ed-border-strong: #454a53;
+  --ed-text: #e7e9ee;
+  --ed-text-muted: #a7adb8;
+  --ed-text-faint: #767c88;
+  --ed-accent: #818cf8;
+  --ed-accent-strong: #a5b4fc;
+  --ed-accent-soft: #302f5e;
+  --ed-hover: rgba(255, 255, 255, 0.08);
+  --ed-active: rgba(255, 255, 255, 0.14);
+  --ed-stage: #202226;
+  color-scheme: dark;
+}
+
+html, body { height: 100%; margin: 0; }
+
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: var(--ed-font-md);
+  color: var(--ed-text);
+  background: var(--ed-bg);
+}
+
+#app.drop-activo { outline: 3px dashed var(--ed-accent); outline-offset: -3px; }
+
+button { font-family: inherit; }
+
+/* `#toolbar` envuelve la barra superior + pestañas/barra contextual, para
+   medir su altura conjunta en móvil (ver el test "no supera 2 filas"). */
+#toolbar { display: flex; flex-direction: column; flex: 0 0 auto; }
+
+/* ── Barra superior ───────────────────────────────────────────────────── */
+.topbar {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  height: var(--ed-topbar-h);
+  padding: 0 var(--ed-sp-2);
+  gap: var(--ed-sp-1);
+  background: var(--ed-surface);
+  border-bottom: 1px solid var(--ed-border);
+  box-sizing: border-box;
+}
+.topbar-group { display: flex; align-items: center; gap: 2px; }
+.topbar-spacer { flex: 1 1 auto; min-width: var(--ed-sp-2); }
+.topbar-sep { width: 1px; align-self: stretch; margin: var(--ed-sp-2) var(--ed-sp-1); background: var(--ed-border); flex: 0 0 auto; }
+.doc-name {
+  font-weight: 600;
+  font-size: var(--ed-font-md);
+  color: var(--ed-text);
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 0 var(--ed-sp-2) 0 var(--ed-sp-1);
+}
+.zoom-pct {
+  min-width: 3.4em;
+  text-align: center;
+  font-size: var(--ed-font-sm);
+  color: var(--ed-text-muted);
+  padding: 0 2px;
+}
+.search-box {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--ed-surface-2);
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius-md);
+  padding: 0 var(--ed-sp-2);
+  height: 30px;
+  color: var(--ed-text-faint);
+}
+.search-box input {
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--ed-text);
+  font-size: var(--ed-font-sm);
+  width: 150px;
+}
+.search-box:focus-within { border-color: var(--ed-accent); color: var(--ed-accent); }
+
+/* ── Botones de icono (comunes a barra superior y contextual) ───────────── */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  min-width: 32px;
+  padding: 0 var(--ed-sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--ed-radius-sm);
+  background: transparent;
+  color: var(--ed-text);
+  cursor: pointer;
+  line-height: 1;
+}
+.icon-btn .icono { flex: 0 0 auto; }
+.icon-btn .etiqueta { font-size: var(--ed-font-sm); white-space: nowrap; }
+.icon-btn:hover { background: var(--ed-hover); }
+.icon-btn:active { background: var(--ed-active); }
+.icon-btn[aria-pressed="true"] {
+  background: var(--ed-accent-soft);
+  border-color: var(--ed-accent);
+  color: var(--ed-accent-strong);
+}
+.icon-btn:disabled { opacity: .4; cursor: not-allowed; background: transparent; }
+.icon-btn:focus-visible,
+.tab:focus-visible,
+input:focus-visible,
+select:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--ed-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Botón grande de la barra contextual: icono encima, etiqueta debajo (estilo ribbon de Acrobat). */
+.context-bar .icon-btn {
+  flex-direction: column;
+  height: 100%;
+  min-height: 40px;
+  gap: 2px;
+  padding: 4px var(--ed-sp-2);
+}
+.context-bar .icon-btn .etiqueta { font-size: 10.5px; color: var(--ed-text-muted); }
+.context-bar .icon-btn[aria-pressed="true"] .etiqueta { color: var(--ed-accent-strong); }
+
+/* ── Pestañas de herramientas ────────────────────────────────────────── */
+.tablist {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+  height: var(--ed-tablist-h);
+  padding: 0 var(--ed-sp-2);
+  gap: 2px;
+  background: var(--ed-surface);
+  border-bottom: 1px solid var(--ed-border);
+  overflow-x: auto;
+}
+.tab {
+  border: none;
+  background: transparent;
+  color: var(--ed-text-muted);
+  font-size: var(--ed-font-sm);
+  font-weight: 600;
+  padding: 0 var(--ed-sp-3);
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tab:hover { color: var(--ed-text); background: var(--ed-hover); }
+.tab[aria-selected="true"] { color: var(--ed-accent-strong); border-bottom-color: var(--ed-accent); }
+
+/* ── Pestañas + barra contextual ──────────────────────────────────────── */
+/*
+ * `#toolbar-more` agrupa `.tablist` + todas las `.context-bar` (una por
+ * pestaña). En escritorio es simplemente la columna que las apila, siempre
+ * visible — el nombre se conserva del PR #62 (menú "⋯" móvil) porque en
+ * ≤768px vuelve a cumplir el mismo papel: contenedor que `#btn-more`
+ * revela/oculta entero (ver el bloque de medios más abajo).
+ */
+#toolbar-more { display: flex; flex-direction: column; flex: 0 0 auto; background: var(--ed-surface-2); border-bottom: 1px solid var(--ed-border); }
+.context-bar {
+  display: none;
+  align-items: stretch;
+  min-height: var(--ed-contextbar-h);
+  padding: var(--ed-sp-1) var(--ed-sp-2);
+  gap: 2px;
+  flex-wrap: wrap;
+}
+.context-bar.activa { display: flex; }
+.context-sep { width: 1px; margin: var(--ed-sp-1) var(--ed-sp-2); background: var(--ed-border); flex: 0 0 auto; }
+
+#props-panel { display: none; align-items: center; gap: var(--ed-sp-2); padding: 0 var(--ed-sp-2); }
+#props-panel label { display: flex; align-items: center; gap: 4px; font-size: var(--ed-font-xs); color: var(--ed-text-muted); }
+#props-panel select, #props-panel input[type="number"] {
+  font-size: var(--ed-font-sm);
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius-sm);
+  background: var(--ed-surface-2);
+  color: var(--ed-text);
+  padding: 3px 4px;
+}
+
+#swatches { display: flex; align-items: center; gap: 4px; }
+#swatches .swatch { border-radius: 3px; cursor: pointer; }
+#swatches .swatch[aria-pressed="true"] { outline: 2px solid var(--ed-text); outline-offset: 1px; }
+
+select, input[type="text"], input[type="search"], input[type="number"] {
+  color-scheme: light dark;
+}
+
+/* ── Cuerpo: panel lateral + visor ───────────────────────────────────── */
+.workarea { flex: 1; min-height: 0; display: flex; position: relative; }
+
+#sidebar {
+  width: var(--ed-sidebar-w);
+  flex: 0 0 var(--ed-sidebar-w);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--ed-surface);
+  border-right: 1px solid var(--ed-border);
+  box-sizing: border-box;
+}
+.sidebar-tabs { display: flex; flex: 0 0 auto; border-bottom: 1px solid var(--ed-border); }
+.sidebar-tabs .tab { flex: 1; padding: var(--ed-sp-2) 4px; border-bottom: 2px solid transparent; color: var(--ed-text-muted); }
+.sidebar-tabs .tab[aria-selected="true"] { color: var(--ed-accent-strong); border-bottom-color: var(--ed-accent); background: var(--ed-hover); }
+
+#thumbs, #outline-panel { flex: 1; overflow: auto; padding: var(--ed-sp-2); box-sizing: border-box; }
+#thumbs canvas.thumb { border-radius: var(--ed-radius-sm); }
+#outline-panel { color: var(--ed-text); font-size: var(--ed-font-sm); }
+.outline-item, .outline-toggle { color: inherit; }
+
+#viewer {
+  flex: 1;
+  overflow: auto;
+  background: var(--ed-stage);
+  padding: var(--ed-sp-4);
+}
+
+/* ── Barra de estado ──────────────────────────────────────────────────── */
+.statusbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: 0 0 auto;
+  height: var(--ed-statusbar-h);
+  padding: 0 var(--ed-sp-3);
+  background: var(--ed-surface);
+  border-top: 1px solid var(--ed-border);
+  color: var(--ed-text-muted);
+  font-size: var(--ed-font-xs);
+}
+.page-nav { display: flex; align-items: center; gap: 2px; }
+.page-nav .icon-btn { height: 22px; min-width: 22px; }
+#page-indicator { min-width: 4.5em; text-align: center; }
+
+/*
+ * Capa de texto vivo (E-029): estados por CSS, no por JS inline.
+ * En reposo el motor (PDFium) ya pintó la línea en el canvas de abajo;
+ * `.run` es solo el hitbox (texto transparente, sin fondo). Al pasar
+ * el ratón o seleccionar, un contorno sutil y el tirador se hacen
+ * visibles. Al editar, el fondo blanco tapa la línea original (la
+ * caja sale SIEMPRE de la geometría original del run, nunca de
+ * `offsetHeight` en edición — E-002) y el texto se ve con la mejor
+ * aproximación de su tipografía real (fijada en línea por
+ * TextLayer/cssFontFor, como la geometría).
+ *
+ * E-030 — Al editar, `.run` se REPOSICIONA (línea base = `run.originPt`,
+ * no el borde de `boxPt`), así que ya no cubre de forma fiable la caja
+ * ORIGINAL. `.run-mask` es un elemento aparte, siempre fijo en `boxPt`
+ * (nunca se mueve ni se reposiciona), que es quien de verdad garantiza
+ * E-002: tapar la línea original pase lo que pase con `.run`.
+ */
+.run {
+  color: transparent;
+  background: transparent;
+  outline: none;
+  box-sizing: border-box;
+  border: none;
+  padding: 0;
+  cursor: text;
+  white-space: pre;
+}
+.run:hover,
+.run.selected {
+  outline: 1px dashed var(--ed-accent);
+}
+.run.editing {
+  background: #fff;
+  outline: 1px solid var(--ed-accent);
+  z-index: 1;
+}
+.run-mask {
+  background: transparent;
+  pointer-events: none;
+  box-sizing: border-box;
+}
+.run-mask.active {
+  background: #fff;
+}
+.run-drag {
+  border-radius: 50%;
+  background: var(--ed-accent);
+  border: 2px solid #fff;
+  cursor: move;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .1s;
+}
+.run:hover .run-drag,
+.run.selected .run-drag {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/*
+ * Marco interactivo del sello/firma insertados (#20/#21, ImageLayer):
+ * en reposo INVISIBLE (sin borde, misma idea que `.run` — E-029): el
+ * motor ya pintó la imagen en el canvas de abajo, este `<div>` solo
+ * aporta el hitbox para seleccionar/mover/redimensionar. Seleccionada
+ * (`.selected`), un borde índigo la enmarca y aparecen 4 tiradores en
+ * las esquinas, ocultos por CSS (opacity/pointer-events) el resto del
+ * tiempo — igual que `.run-drag` con `.run.selected`.
+ */
+.image-box {
+  box-sizing: border-box;
+  border: 2px solid transparent;
+  cursor: move;
+}
+.image-box.selected {
+  border-color: var(--ed-accent);
+}
+.image-handle {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: var(--ed-accent);
+  border: 2px solid #fff;
+  border-radius: 2px;
+  opacity: 0;
+  pointer-events: none;
+}
+.image-box.selected .image-handle {
+  opacity: 1;
+  pointer-events: auto;
+}
+.image-handle-nw { left: -7px; top: -7px; cursor: nwse-resize; }
+.image-handle-ne { right: -7px; top: -7px; cursor: nesw-resize; }
+.image-handle-sw { left: -7px; bottom: -7px; cursor: nesw-resize; }
+.image-handle-se { right: -7px; bottom: -7px; cursor: nwse-resize; }
+
+/*
+ * Arrastrar miniaturas para reordenar páginas (App.beginThumbDrag):
+ * la miniatura que se arrastra se atenúa in situ (nunca se mueve del
+ * DOM hasta soltar) y una línea de inserción se coloca entre las
+ * miniaturas en el punto exacto donde caería.
+ */
+.thumb-dragging {
+  opacity: 0.35;
+}
+.thumb-drop-indicator {
+  height: 3px;
+  margin-bottom: 8px;
+  border-radius: 2px;
+  background: var(--ed-accent);
+}
+
+/*
+ * Cajón móvil / responsive (#35 de la tabla de paridad, §9 — y adaptado a la
+ * nueva estructura de pestañas en el rediseño de interfaz).
+ *
+ * En escritorio (>768px) la estructura es la descrita arriba: barra
+ * superior siempre visible, pestañas + barra contextual (solo la pestaña
+ * activa, `.context-bar.activa`), panel lateral fijo, barra de estado.
+ *
+ * En ≤768px las pestañas dejan de filtrar qué se ve: `#btn-more` (el menú
+ * "⋯" heredado del PR #62) revela TODAS las barras contextuales apiladas a
+ * la vez dentro de `#toolbar-more` — el mismo papel que tenía
+ * `#toolbar-more` antes de este PR, ahora reutilizado como contenedor de las
+ * `.context-bar` en vez de una lista plana de controles. `#sidebar` sigue
+ * siendo el cajón deslizante que abre `#btn-drawer`.
+ */
+#btn-drawer, #btn-more { display: none; }
+#drawer-backdrop { display: none; }
+
+@media (max-width: 768px) {
+  #toolbar { flex-direction: column; align-items: stretch; }
+  .topbar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; width: 100%; box-sizing: border-box; }
+  .topbar-spacer { display: none; }
+  .search-box input { width: 90px; }
+  .doc-name { display: none; }
+  .tablist { display: none; }
+
+  /* Cerrado: todo el bloque de pestañas/barra contextual desaparece — el
+     mismo papel que tenía `#toolbar-more` antes de este PR. Abierto con
+     `#btn-more`: se apilan TODAS las `.context-bar` (no solo la de la
+     pestaña activa — en móvil no hay concepto de pestaña visible, ver el
+     comentario de `#toolbar-more` arriba), con su propio scroll vertical
+     para no desbordar la ventana. */
+  #toolbar-more { display: none; }
+  #toolbar-more.open {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-height: 60vh;
+    overflow-y: auto;
+    border-top: 1px solid var(--ed-border);
+    box-sizing: border-box;
+  }
+  .context-bar.activa { display: none; }
+  #toolbar-more.open .context-bar {
+    display: flex;
+    align-items: flex-start;
+    border-top: 1px solid var(--ed-border-strong);
+    padding: var(--ed-sp-3) var(--ed-sp-2);
+    row-gap: var(--ed-sp-2);
+  }
+  /* Los separadores tienen sentido en una sola fila (escritorio); apiladas
+     en móvil, el borde entre `.context-bar` ya separa los grupos. */
+  #toolbar-more.open .context-sep { display: none; }
+  /* Los grupos compuestos (paleta de color, panel de propiedades, rango +
+     dividir) ocupan su propia fila entera en vez de encajar entre iconos. */
+  #toolbar-more.open #swatches,
+  #toolbar-more.open #props-panel,
+  #toolbar-more.open #btn-range {
+    flex-basis: 100%;
+    margin-top: var(--ed-sp-2);
+  }
+  #toolbar-more.open #swatches { flex-wrap: wrap; }
+
+  #app { position: relative; }
+  .icon-btn, select, input[type="color"] {
+    min-width: 40px;
+    min-height: 40px;
+  }
+  /*
+   * Excepción deliberada: la paleta de 8 muestras de color (§2/#18 de la
+   * tabla de paridad) es un grupo denso y contiguo de swatches, no botones
+   * de acción independientes — a 40px cada una desborda un viewport de
+   * 390px. Se mantiene su tamaño de diseño (18px) en vez del mínimo
+   * general; `#tool-color` (el selector personalizado, justo al lado)
+   * sigue en 40px.
+   */
+  #swatches button.swatch { min-width: 18px; min-height: 18px; }
+
+  #btn-drawer, #btn-more {
+    display: inline-flex;
+    position: sticky;
+    background: var(--ed-surface);
+    z-index: 1;
+  }
+  #btn-drawer { left: 0; }
+  #btn-more { right: 0; margin-left: auto; }
+
+  .topbar #file-input, .topbar #btn-open-image { display: none; }
+  #btn-open-mobile { display: inline-flex; }
+
+  #sidebar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 82vw;
+    max-width: 320px;
+    z-index: 50;
+    transform: translateX(-100%);
+    transition: transform .2s ease;
+    box-shadow: 2px 0 12px rgba(0, 0, 0, .35);
+  }
+  #sidebar.abierto { transform: translateX(0); }
+  #sidebar button { min-height: 40px; }
+
+  #drawer-backdrop.visible {
+    display: block;
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, .4);
+    z-index: 40;
+  }
+}
