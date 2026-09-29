@@ -186,12 +186,29 @@ test('borrador: clic en el borde de un rectángulo lo borra; clic en su centro n
     return n;
   };
 
+  // La caja de `.page` se vuelve a medir antes de cada clic (no se reutiliza
+  // `b`/`x0..y1` de cuando se dibujó el rectángulo): la barra de
+  // herramientas envuelve en varias filas (`flexWrap`) y su alto puede
+  // cambiar entre acciones al activar/desactivar herramientas, desplazando
+  // verticalmente `.page` unos px — con coordenadas obsoletas, el clic del
+  // borde podía caer fuera del trazo y no borrar nada.
+  const cajaActual = async (): Promise<{ x0: number; y0: number; x1: number; y1: number }> => {
+    const caja = (await pagina.boundingBox())!;
+    return { x0: caja.x + 60, y0: caja.y + 80, x1: caja.x + 280, y1: caja.y + 300 };
+  };
+
   // Clic bien dentro del hueco interior: no debe borrar nada.
-  await page.mouse.click((x0 + x1) / 2, (y0 + y1) / 2);
+  {
+    const { x0, y0, x1, y1 } = await cajaActual();
+    await page.mouse.click((x0 + x1) / 2, (y0 + y1) / 2);
+  }
   expect(await contarPaths('borrador-centro.pdf')).toBe(1);
 
   // Clic sobre el borde superior: sí lo borra.
-  await page.mouse.click((x0 + x1) / 2, y0);
+  {
+    const { x0, y0, x1 } = await cajaActual();
+    await page.mouse.click((x0 + x1) / 2, y0);
+  }
   await expect(page.locator('#status')).toHaveText('Trazo borrado.');
   expect(await contarPaths('borrador-borde.pdf')).toBe(0);
 });
