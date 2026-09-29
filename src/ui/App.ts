@@ -41,6 +41,8 @@ import { descargarArchivo } from './descargarArchivo';
 import { quitarFondo } from './quitarFondo';
 import { formatoBytes } from './formatoBytes';
 import { registrarGesto } from './gesto';
+import { resolverAtajo, esCampoEditable, type AccionAtajo } from './atajos';
+import { AtajosPanel } from './AtajosPanel';
 import { parseRange } from './pageRange';
 import { Viewer, type ToolMode } from './Viewer';
 import type { EditRequest } from './TextLayer';
@@ -143,16 +145,44 @@ export class App {
   private readonly searchInput: HTMLInputElement;
   private readonly rangeInput: HTMLInputElement;
   private currentPage = 0;
+  /** `#file-input`: se guarda como campo para poder disparar `.click()` desde el atajo Ctrl/Cmd+O (§9, #34). */
+  private readonly fileInput: HTMLInputElement;
+  /**
+   * Cajón móvil (#35 de la tabla de paridad, §9): en escritorio `#sidebar`
+   * (miniaturas/marcadores) es siempre visible, como hoy; en ≤768px pasa a
+   * ser un cajón deslizante (ver el `<style>` de `index.next.html`) que
+   * `#btn-drawer` abre/cierra. `drawerOpen` es el único punto de verdad de
+   * su estado — todo lo que lo cierra (telón, Escape, elegir página) pasa
+   * por `closeDrawer()`.
+   */
+  private drawerOpen = false;
+  private readonly sidebarEl: HTMLElement;
+  private readonly backdropEl: HTMLElement;
+  private readonly btnDrawer: HTMLButtonElement;
+  /** Foco a devolver al cerrar el cajón (normalmente `#btn-drawer`), como pide un diálogo modal accesible. */
+  private drawerReturnFocus: HTMLElement | null = null;
+  /**
+   * Menú "⋯" móvil (`#toolbar-more`, #35): agrupa los controles secundarios
+   * de la barra para que la barra principal no supere 2 filas en 390px (en
+   * escritorio `#toolbar-more` es `display: contents` — sus hijos se ven
+   * exactamente igual que si fueran hijos directos de `#toolbar`, sin cambio
+   * visual respecto a antes de este PR).
+   */
+  private moreOpen = false;
+  private readonly toolbarMoreEl: HTMLElement;
+  private readonly btnMore: HTMLButtonElement;
 
   constructor(rootEl: HTMLElement) {
     rootEl.textContent = '';
     const bar = document.createElement('div');
+    bar.id = 'toolbar';
     bar.className = 'toolbar';
     Object.assign(bar.style, { display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', padding: '8px', borderBottom: '1px solid #ccc', font: '14px sans-serif', flex: '0 0 auto' });
 
     const file = document.createElement('input');
     file.type = 'file'; file.accept = 'application/pdf,.md,.markdown,text/markdown'; file.id = 'file-input';
     file.addEventListener('change', () => { const f = file.files?.[0]; if (f) void this.openFile(f); });
+    this.fileInput = file;
 
     const btnNew = this.button('Nuevo', 'btn-new', () => void this.newBlank());
 
@@ -323,19 +353,121 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, btnNew, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, signUpload, this.btnPen, this.btnRect, this.btnEraser, this.btnNote, this.btnOcr, btnExtractText, btnExportMd, this.filterSelect, this.btnFilter, this.btnCompress, swatchesEl, this.propsPanel, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnFitWidth, btnExtract, this.rangeInput, btnSplit, btnSave, btnPrint, btnUndo, btnRedo, this.status);
+    const btnShortcuts = this.button('?', 'btn-shortcuts', () => AtajosPanel.open());
+    btnShortcuts.title = 'Atajos de teclado';
+    btnShortcuts.setAttribute('aria-label', 'Mostrar los atajos de teclado');
+
+    // Cajón móvil (§9 #35): abre/cierra `#sidebar` en ≤768px. Oculto por
+    // completo en escritorio (CSS), donde el panel lateral ya es siempre
+    // visible y este botón no tendría nada que hacer.
+    this.btnDrawer = this.button('☰', 'btn-drawer', () => this.toggleDrawer());
+    this.btnDrawer.title = 'Páginas y marcadores';
+    this.btnDrawer.setAttribute('aria-label', 'Mostrar páginas y marcadores');
+    this.btnDrawer.setAttribute('aria-controls', 'sidebar');
+    this.btnDrawer.setAttribute('aria-expanded', 'false');
+
+    // Menú "⋯" móvil (§9 #35): revela `#toolbar-more`. Oculto en escritorio,
+    // donde `#toolbar-more` es `display: contents` y ya se ve todo entero.
+    this.btnMore = this.button('⋯', 'btn-more', () => this.toggleMore());
+    this.btnMore.title = 'Más herramientas';
+    this.btnMore.setAttribute('aria-label', 'Más herramientas');
+    this.btnMore.setAttribute('aria-controls', 'toolbar-more');
+    this.btnMore.setAttribute('aria-expanded', 'false');
+
+    // Barra principal (§9 #35): en escritorio, `#toolbar-primary` es
+    // `display: contents` — sus hijos quedan como hijos directos de
+    // `#toolbar`, IDÉNTICO al flujo de antes de este PR. En ≤768px pasa a
+    // ser una fila con scroll horizontal propio (nunca el de la página, ver
+    // el `<style>` de index.next.html) con las acciones más usadas: abrir,
+    // deshacer/rehacer, guardar, las herramientas de edición y zoom — el
+    // resto (filtros, comprimir, insertar PDF/imagen, dividir, buscar,
+    // marcar/subrayar/tachar, firma, OCR, exportar…) vive en `#toolbar-more`,
+    // porque son controles de uso ocasional (varios son un `<select>` +
+    // botón o un rango + botón, que no caben bien como icono suelto en una
+    // fila). Se prefiere el scroll horizontal (una de las dos opciones que
+    // pedía el encargo) para las acciones frecuentes en vez de esconderlas
+    // también tras "⋯": menos toques para lo que el usuario hace todo el
+    // rato, a costa de que la fila entera se deba recorrer con el dedo en
+    // vez de crecer en alto — con los 15 controles de este grupo no supera
+    // nunca 1 fila (el requisito es ≤2), y `#btn-drawer`/`#btn-more` quedan
+    // fijos (`position: sticky`) en los extremos para no perderse al hacer
+    // scroll dentro de la fila.
+    // El `<input type="file">` nativo muestra "Elegir archivo" + el nombre
+    // del último fichero abierto — de ancho impredecible (crece con el
+    // nombre) y se comía casi toda la fila principal en 390px, dejando fuera
+    // de la vista inicial justo lo más usado (deshacer/rehacer/guardar). En
+    // móvil se oculta (el input real sigue ahí, sigue siendo el único sitio
+    // que abre archivos) y este botón compacto lo dispara con `.click()`; en
+    // escritorio se mantiene oculto y el input de siempre sigue visible,
+    // exactamente igual que antes de este PR.
+    const btnOpenMobile = this.button('📂', 'btn-open-mobile', () => this.fileInput.click());
+    btnOpenMobile.title = 'Abrir un archivo';
+    btnOpenMobile.setAttribute('aria-label', 'Abrir un archivo');
+
+    const primaryEl = document.createElement('div');
+    primaryEl.id = 'toolbar-primary';
+    primaryEl.append(
+      this.btnDrawer, file, btnOpenMobile, btnNew, btnUndo, btnRedo, btnSave,
+      this.btnInsert, this.btnPen, this.btnRect, this.btnEraser, this.btnNote,
+      btnZoomOut, btnZoomIn, btnFitWidth,
+      this.btnMore
+    );
+
+    // Barra secundaria (§9 #35): controles de uso ocasional, ver el
+    // comentario de arriba. En escritorio se ve exactamente igual que hoy
+    // (mismo `display: contents`); en móvil solo aparece con `#btn-more`
+    // abierto.
+    this.toolbarMoreEl = document.createElement('div');
+    this.toolbarMoreEl.id = 'toolbar-more';
+    this.toolbarMoreEl.append(
+      openImg, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, signUpload,
+      this.btnOcr, btnExtractText, btnExportMd,
+      this.filterSelect, this.btnFilter, this.btnCompress,
+      this.colorInput, swatchesEl, this.propsPanel,
+      this.searchInput, btnPrev, this.pageIndicator, btnNext,
+      btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown,
+      insertPdf, insertImage, btnExtract, this.rangeInput, btnSplit,
+      btnPrint, btnShortcuts
+    );
+
+    bar.append(primaryEl, this.toolbarMoreEl, this.status);
     rootEl.appendChild(bar);
+
+    // Telón de fondo del cajón móvil (§9 #35): clic cierra el cajón.
+    // Colocado DENTRO de `area` (más abajo), no de `rootEl` — como `area`
+    // (position: relative) empieza justo debajo de `#toolbar`, un
+    // `position: absolute` anclado a ella nunca se sale por encima de la
+    // barra: E-025 en la app vieja fue exactamente este defecto (el telón
+    // tapaba la cabecera) pero con `position: fixed` a toda la ventana. Aquí
+    // se evita por construcción, sin tener que medir la altura de la barra.
+    this.backdropEl = document.createElement('div');
+    this.backdropEl.id = 'drawer-backdrop';
+    this.backdropEl.addEventListener('click', () => this.closeDrawer());
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
     // siempre quede bajo la barra aunque esta ocupe varias filas.
     const area = document.createElement('div');
-    Object.assign(area.style, { flex: '1', minHeight: '0', display: 'flex' });
+    // `position: relative` (§9 #35): ancla `#sidebar`/`#drawer-backdrop` en
+    // móvil (`position: absolute`, ver el CSS) a partir de AQUÍ, que ya
+    // empieza debajo de `#toolbar` — nunca a la ventana entera. Sin efecto en
+    // escritorio (sidebar/backdrop siguen en el flujo normal ahí).
+    Object.assign(area.style, { flex: '1', minHeight: '0', display: 'flex', position: 'relative' });
 
     // Panel lateral: dos pestañas ("Páginas"/"Marcadores") que alternan entre
     // las miniaturas y el árbol de marcadores dentro del mismo hueco.
     const sidebar = document.createElement('div');
     sidebar.id = 'sidebar';
-    Object.assign(sidebar.style, { width: '150px', flex: '0 0 150px', display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#3f4145', boxSizing: 'border-box' });
+    // `width`/`flex` (150px en escritorio) viven en el CSS de
+    // index.next.html, no inline: en móvil el mismo selector `#sidebar` pasa
+    // a `position: fixed` con otro ancho (cajón, §9 #35) — un valor inline
+    // aquí ganaría siempre a esa regla de medios y el cajón no podría
+    // cambiar de tamaño ni anclarse a la izquierda.
+    Object.assign(sidebar.style, { display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#3f4145', boxSizing: 'border-box' });
+    // Atrapa el Tab dentro del cajón mientras está abierto (foco "razonable",
+    // no exhaustivo): con el cajón cerrado el elemento ni siquiera es
+    // alcanzable por tabulación normal en móvil salvo por script.
+    sidebar.addEventListener('keydown', (e) => this.trapFocoCajon(e));
+    this.sidebarEl = sidebar;
 
     const tabs = document.createElement('div');
     Object.assign(tabs.style, { display: 'flex', flex: '0 0 auto', borderBottom: '1px solid #2a2c2f' });
@@ -365,26 +497,29 @@ export class App {
     this.viewerEl.tabIndex = -1;
     Object.assign(this.viewerEl.style, { flex: '1', overflow: 'auto', background: '#525659', padding: '16px' });
 
-    area.append(sidebar, this.viewerEl);
+    area.append(sidebar, this.backdropEl, this.viewerEl);
     rootEl.appendChild(area);
     this.showSidebarTab('pages');
 
+    // Atajos de teclado (§9 #34): la tabla declarativa y la regla de oro del
+    // foco editable viven en `atajos.ts` (testeadas en Node, sin DOM); aquí
+    // solo se normaliza el `KeyboardEvent` y se ejecuta la acción resuelta.
     document.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); void this.bus?.undo(); }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); void this.bus?.redo(); }
-      // Escape sale de cualquier herramienta activa (§1). No interfiere con el
-      // Escape que ya maneja TextLayer para cancelar una edición en curso: ese
-      // no pasa por aquí con ninguna herramienta activa (edición y modo
-      // herramienta no coinciden), y si `tool` ya es 'none' esto es un no-op.
-      if (e.key === 'Escape' && this.tool !== 'none') this.setTool('none');
-      // Suprimir/Retroceso con una imagen seleccionada (#20/#21): solo si el
-      // foco no está en un campo editable (contenteditable de un run, un
-      // <input>/<textarea>/<select>) — si no, Backspace tendría que borrar
-      // un carácter ahí, no la imagen.
-      if ((e.key === 'Delete' || e.key === 'Backspace') && this.selectedImage && !this.isEditableTarget(e.target)) {
-        e.preventDefault();
-        void this.deleteSelectedImage();
-      }
+      // El cajón/menú móviles cierran con Escape ANTES que cualquier otro
+      // atajo — si el cajón está abierto, Escape es "cerrar cajón", no
+      // "salir de herramienta" ni ninguna otra cosa.
+      if (e.key === 'Escape' && this.drawerOpen) { e.preventDefault(); this.closeDrawer(); return; }
+      if (e.key === 'Escape' && this.moreOpen) { e.preventDefault(); this.closeMore(); return; }
+
+      const def = resolverAtajo({
+        key: e.key,
+        ctrl: e.ctrlKey,
+        meta: e.metaKey,
+        shift: e.shiftKey,
+        alt: e.altKey,
+        editable: esCampoEditable(e.target)
+      });
+      if (def) this.ejecutarAtajo(def.accion, e);
     });
 
     // Arrastrar y soltar un fichero (PDF o imagen) sobre la ventana entera.
@@ -734,12 +869,144 @@ export class App {
     this.setStatus('Línea borrada del documento.');
   }
 
-  /** true si `target` es un campo donde Backspace/Delete deben editar texto, no borrar la imagen seleccionada. */
-  private isEditableTarget(target: EventTarget | null): boolean {
-    const el = target as HTMLElement | null;
-    if (!el) return false;
-    if (el.isContentEditable) return true;
-    return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
+  /**
+   * Ejecuta la acción resuelta por `resolverAtajo` (§9 #34). `preventDefault`
+   * se llama aquí, no en `atajos.ts` (que es puro, sin DOM) — cada rama
+   * decide si de verdad hace falta (p. ej. "suprimir" solo si hay una imagen
+   * seleccionada, igual que el comportamiento de antes de este PR: sin
+   * imagen seleccionada, Backspace no debe robarle al navegador su acción
+   * por defecto).
+   */
+  private ejecutarAtajo(accion: AccionAtajo, e: KeyboardEvent): void {
+    switch (accion) {
+      case 'deshacer':
+        e.preventDefault();
+        void this.bus?.undo();
+        break;
+      case 'rehacer':
+        e.preventDefault();
+        void this.bus?.redo();
+        break;
+      case 'guardar':
+        e.preventDefault();
+        void this.save();
+        break;
+      case 'abrir':
+        e.preventDefault();
+        this.fileInput.click();
+        break;
+      case 'imprimir':
+        e.preventDefault();
+        void this.print();
+        break;
+      case 'buscar':
+        e.preventDefault();
+        this.searchInput.focus();
+        this.searchInput.select();
+        break;
+      case 'zoom-in':
+        e.preventDefault();
+        this.zoom(1.25);
+        break;
+      case 'zoom-out':
+        e.preventDefault();
+        this.zoom(1 / 1.25);
+        break;
+      case 'zoom-ajustar':
+        e.preventDefault();
+        this.fitWidth();
+        break;
+      case 'primera-pagina':
+        e.preventDefault();
+        this.goToPage(0);
+        break;
+      case 'ultima-pagina':
+        e.preventDefault();
+        this.goToPage((this.session?.model.pages.length ?? 0) - 1);
+        break;
+      case 'pagina-anterior':
+        e.preventDefault();
+        this.goToPage(this.currentPage - 1);
+        break;
+      case 'pagina-siguiente':
+        e.preventDefault();
+        this.goToPage(this.currentPage + 1);
+        break;
+      case 'suprimir':
+        // Igual que antes de este PR: solo si hay una imagen seleccionada
+        // (#20/#21) — si no, no hay nada que hacer aquí y el navegador
+        // conserva su comportamiento por defecto.
+        if (this.selectedImage) { e.preventDefault(); void this.deleteSelectedImage(); }
+        break;
+      case 'escape':
+        // Sale de cualquier herramienta activa (§1). No interfiere con el
+        // Escape que ya maneja TextLayer para cancelar una edición en curso:
+        // ese no llega aquí con ninguna herramienta activa (edición y modo
+        // herramienta no coinciden), y si `tool` ya es 'none' esto es un no-op.
+        if (this.tool !== 'none') this.setTool('none');
+        break;
+      case 'ayuda':
+        e.preventDefault();
+        AtajosPanel.open();
+        break;
+    }
+  }
+
+  /** `#btn-drawer` (§9 #35): abre/cierra el cajón móvil según su estado actual. */
+  private toggleDrawer(): void {
+    if (this.drawerOpen) this.closeDrawer(); else this.openDrawer();
+  }
+
+  private openDrawer(): void {
+    this.drawerOpen = true;
+    this.sidebarEl.classList.add('abierto');
+    this.backdropEl.classList.add('visible');
+    this.btnDrawer.setAttribute('aria-expanded', 'true');
+    this.drawerReturnFocus = document.activeElement as HTMLElement | null;
+    this.tabPages.focus();
+  }
+
+  /** Cierra el cajón y devuelve el foco a quien lo tenía antes de abrirlo (normalmente `#btn-drawer`). */
+  private closeDrawer(): void {
+    if (!this.drawerOpen) return;
+    this.drawerOpen = false;
+    this.sidebarEl.classList.remove('abierto');
+    this.backdropEl.classList.remove('visible');
+    this.btnDrawer.setAttribute('aria-expanded', 'false');
+    (this.drawerReturnFocus ?? this.btnDrawer).focus();
+    this.drawerReturnFocus = null;
+  }
+
+  /** `#btn-more` (§9 #35): revela/oculta `#toolbar-more` en móvil. */
+  private toggleMore(): void {
+    this.moreOpen = !this.moreOpen;
+    this.toolbarMoreEl.classList.toggle('open', this.moreOpen);
+    this.btnMore.setAttribute('aria-expanded', String(this.moreOpen));
+  }
+
+  private closeMore(): void {
+    this.moreOpen = false;
+    this.toolbarMoreEl.classList.remove('open');
+    this.btnMore.setAttribute('aria-expanded', 'false');
+  }
+
+  /**
+   * Foco "razonable" atrapado dentro del cajón (§9 #35): con Tab en el
+   * último elemento focuseable vuelve al primero, y con Mayús+Tab en el
+   * primero salta al último. No pretende cubrir cada borde posible (p. ej.
+   * un elemento que se deshabilita mientras el cajón está abierto), solo
+   * evitar que Tab saque el foco del cajón hacia la barra o el visor de
+   * detrás mientras está abierto.
+   */
+  private trapFocoCajon(e: KeyboardEvent): void {
+    if (e.key !== 'Tab' || !this.drawerOpen) return;
+    const focusables = Array.from(this.sidebarEl.querySelectorAll<HTMLElement>('button, [tabindex]'))
+      .filter((el) => el.tabIndex >= 0 && !el.hasAttribute('disabled') && el.offsetParent !== null);
+    if (focusables.length === 0) return;
+    const primero = focusables[0]!;
+    const ultimo = focusables[focusables.length - 1]!;
+    if (e.shiftKey && document.activeElement === primero) { e.preventDefault(); ultimo.focus(); }
+    else if (!e.shiftKey && document.activeElement === ultimo) { e.preventDefault(); primero.focus(); }
   }
 
   private async deleteSelectedImage(): Promise<void> {
@@ -1048,6 +1315,12 @@ export class App {
     this.updateIndicator();
     this.setActiveThumb(i);
     this.viewer?.scrollToPage(i);
+    // Cajón móvil (§9 #35): "elegir una página" es una de las formas
+    // explícitas de cerrarlo. Único punto de entrada para navegar (E-032,
+    // regla `navegacion-por-gotopage`), así que cubre miniatura, marcador,
+    // prev/next y los atajos de teclado de una sola vez. No-op en
+    // escritorio (el cajón nunca llega a abrirse ahí).
+    this.closeDrawer();
   }
 
   private updateIndicator(): void {
@@ -1173,6 +1446,15 @@ export class App {
       canvas.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return; // solo botón primario / toque simple
         this.beginThumbDrag(canvas, page.index, e, (huboArrastre) => { suprimirClick = huboArrastre; });
+      });
+      // Alcanzable por teclado (Tab): necesario para que el atrapado de foco
+      // del cajón móvil (§9 #35, `trapFocoCajon`) tenga más de dos paradas
+      // dentro del cajón, y para poder navegar sin ratón/tacto.
+      canvas.tabIndex = 0;
+      canvas.setAttribute('role', 'button');
+      canvas.setAttribute('aria-label', `Ir a la página ${page.index + 1}`);
+      canvas.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.goToPage(page.index); }
       });
       this.thumbsEl.appendChild(canvas);
     }
