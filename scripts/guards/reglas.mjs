@@ -781,6 +781,54 @@ export const conMotorLoteEnBucle = {
   }
 };
 
+/* ── prueba de oro de reposo · captura de píxeles sin animations: 'disabled' ─ */
+export const conCapturasSinTransicionesEnCurso = {
+  id: 'captura-pixel-sin-animations-disabled',
+  titulo: "toda screenshot() de comparación de píxeles en tests/e2e/next/ fija animations: 'disabled'",
+  comoArreglar:
+    "Pasa { animations: 'disabled' } como opción de screenshot(). Sin ella, una " +
+    "transición CSS real en curso (p. ej. la opacity .1s de .run-drag al perder " +
+    ":hover tras un re-render — el navegador reaplica :hover al nuevo .run bajo el " +
+    "cursor sin mousemove explícito en cuanto el .run anterior se elimina del DOM) " +
+    'puede seguir animándose entre dos capturas consecutivas: "antes" y "despues" ' +
+    'difieren por el frame de la transición, no por lo que el test dice estar ' +
+    "comparando. Visto en tests/e2e/next/sustituir-fuente.spec.ts (PR #63, un fallo " +
+    "aislado con la máquina cargada). animations: 'disabled' congela la transición a " +
+    'su estado final antes de capturar — es determinista, no relaja la comparación.',
+  ejecutar() {
+    const dir = 'tests/e2e/next';
+    if (!fs.existsSync(path.join(RAIZ, dir))) return [];
+    const hallazgos = [];
+    for (const nombre of fs.readdirSync(path.join(RAIZ, dir))) {
+      if (!nombre.endsWith('.spec.ts')) continue;
+      const rel = `${dir}/${nombre}`;
+      if (tieneDeuda(rel, this.id)) continue;
+      const contenido = leer(rel);
+      const exentas = lineasExentas(contenido, this.id);
+      const patron = /\.screenshot\(/g;
+      let m;
+      while ((m = patron.exec(contenido))) {
+        // Empareja paréntesis desde la apertura de screenshot( para aislar
+        // solo los argumentos de ESTA llamada (puede no llevar ninguno).
+        const aperturaIdx = m.index + m[0].length - 1;
+        let profundidad = 0;
+        let cierreIdx = aperturaIdx;
+        for (let i = aperturaIdx; i < contenido.length; i++) {
+          if (contenido[i] === '(') profundidad++;
+          else if (contenido[i] === ')') { profundidad--; if (profundidad === 0) { cierreIdx = i; break; } }
+        }
+        const llamada = contenido.slice(aperturaIdx, cierreIdx + 1);
+        const linea = contenido.slice(0, m.index).split('\n').length;
+        if (exentas.has(linea)) continue;
+        if (!/animations\s*:\s*['"]disabled['"]/.test(llamada)) {
+          hallazgos.push(hallazgo(rel, linea, "screenshot() sin { animations: 'disabled' } — puede capturar una transición CSS a mitad de camino"));
+        }
+      }
+    }
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -802,5 +850,6 @@ export const TODAS = [
   conGestoConCancelacion,
   conHeapU8Getter,
   conAddFunctionConRemoveFunction,
-  conMotorLoteEnBucle
+  conMotorLoteEnBucle,
+  conCapturasSinTransicionesEnCurso
 ];

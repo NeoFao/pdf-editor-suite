@@ -1273,6 +1273,92 @@ después). **NO** se aplica en:
 
 ---
 
+### E-039 · La prueba de oro de reposo (E-029) podía capturar una transición CSS a medias · defecto del TEST, no de la app
+
+**Síntoma.** Una corrida completa de `npm run verify` (PR #63) falló UNA vez,
+con la máquina cargada (varias pestañas de Chrome abiertas), en la prueba de
+oro de píxeles de `tests/e2e/next/sustituir-fuente.spec.ts`: capturar la
+página con `.run` visible y con `.run` oculta por script daba
+`Buffer.compare` distinto de `0`. En aislamiento (sin carga) el test siempre
+pasaba, lo que apuntaba a una carrera de temporización, no a una regresión
+del producto — confirmado abajo.
+
+**Causa raíz — mecanismo confirmado por instrumentación directa, no solo por
+sospecha.** El test edita una línea, la fuente original no tiene el glifo
+(`glyph-missing`) y `ReplaceRunFontCmd.execute()` llama a `c.refresh()`, que
+reconstruye TODA la capa de texto (`Viewer.rebuild()`): el `.run` original se
+elimina del DOM y se crea uno nuevo en su lugar. El cursor del ratón se había
+quedado posicionado sobre la línea (desde el `run.click()` inicial) y no se
+ha movido con un `mousemove` real desde entonces — pero Chromium, al eliminar
+del DOM el elemento que tenía `:hover`, recalcula el hit-test en la posición
+actual del cursor y aplica `:hover` al nuevo `.run` que quede debajo, SIN
+necesidad de un evento de ratón nuevo. Medido con `getComputedStyle` justo
+tras el commit, antes de que el test apartara el ratón:
+`{ matchesHover: true, outline: 'dashed', handleOpacity: '0.983538' }` — el
+tirador `.run-drag` (`src/ui/estilos.css`, `transition: opacity .1s`) ya
+estaba animándose. El test aparta el ratón a `(0, 0)` precisamente para
+evitar este contorno fantasma (comentario ya existente en el spec), y eso
+SÍ limpia `:hover` — pero dispara la transición de SALIDA del tirador, que
+tarda sus ~100 ms reales en llegar a `opacity: 0`. Medido inmediatamente
+después de apartar el ratón: `{ matchesHover: false, outline: 'none',
+handleOpacity: '0.778604' }` — la transición seguía en curso. La captura
+"antes" no esperaba a que esa transición terminara; la captura "despues" se
+toma tras un `page.evaluate()` adicional (para ocultar `.run`), con algo más
+de margen real. Bajo carga de máquina ese margen relativo entre ambas
+capturas puede ensancharse lo suficiente para que una capture el tirador a
+media transición y la otra no — un `Buffer.compare` distinto de `0` que no
+tiene nada que ver con lo que el test dice comparar (la capa de texto).
+
+**Por qué es un defecto del TEST y no de la app.** El comportamiento real
+—un contorno sutil y un tirador que aparecen con una transición suave al
+pasar el ratón, y que el hover se reafirme sobre el elemento que reemplaza al
+que tenía el foco del cursor— es exactamente el diseño intencional de E-029 y
+no algo que un usuario perciba como roto: nadie ve `Buffer.compare` en pantalla.
+El defecto es que la prueba de oro de píxeles asumía implícitamente que dos
+capturas consecutivas representan el mismo frame estable, sin tener en cuenta
+que una transición CSS real, gobernada por el reloj de pared del navegador
+(no por la velocidad del hilo de JS del test), puede seguir en curso entre
+ambas.
+
+**Arreglo.** Las cuatro capturas de píxeles de la suite
+(`tests/e2e/next/fidelidad-reposo.spec.ts` y
+`tests/e2e/next/sustituir-fuente.spec.ts`) pasan
+`{ animations: 'disabled' }` a `screenshot()`: Playwright congela cualquier
+transición/animación CSS a su estado FINAL antes de capturar. Es
+determinista y no relaja la comparación de píxeles — sigue exigiendo
+`Buffer.compare === 0` byte a byte; solo elimina la variable de "en qué
+punto de una animación en curso cayó la captura".
+
+**Reproducción.** No se logró forzar el `Buffer.compare` real a fallar en
+esta sesión pese a más de 700 repeticiones combinando `--repeat-each`,
+`--workers` sobresuscritos (hasta 16 sobre 12 núcleos), CPU throttling vía
+CDP (`Emulation.setCPUThrottlingRate`, ratio 6) y corridas completas de la
+suite `next` en paralelo: el pipeline de captura de Playwright en esta
+máquina concreta tarda, por sí solo, más que los ~100 ms de la transición, así
+que "antes" ya la capturaba completa. El mecanismo se confirmó por dos vías
+independientes: (a) lectura directa de `getComputedStyle` en los puntos
+exactos de la secuencia del test (arriba), que demuestra la transición en
+curso con datos, no con sospecha; (b) alargar artificialmente la transición
+(`transition-duration: 500ms !important` inyectado con `addStyleTag`, solo
+para el diagnóstico) junto con una espera explícita entre capturas SÍ produce
+`Buffer.compare !== 0` de forma reproducible sin el arreglo, y `=== 0` de
+forma reproducible con `animations: 'disabled'` — la ventana real en CI es
+más estrecha (la transición de producción es de ~100 ms, no 500 ms) y
+depende de que el compositor del navegador vaya con retraso respecto al
+pipeline de captura bajo carga externa real de la máquina, algo que no
+equivale a saturar solo los hilos de JS de los propios workers de Playwright.
+
+**Cómo se detecta ahora.**
+- Las cuatro capturas de píxeles en `tests/e2e/next/` pasan
+  `{ animations: 'disabled' }`.
+- Patrón obligatorio documentado en `docs/TESTING.md` § "Capturas de
+  píxeles".
+- Regla `captura-pixel-sin-animations-disabled` — cualquier `.screenshot(`
+  nuevo dentro de `tests/e2e/next/*.spec.ts` sin `animations: 'disabled'` en
+  la misma llamada falla el guard.
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que

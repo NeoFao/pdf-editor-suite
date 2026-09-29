@@ -135,6 +135,43 @@ await page.waitForTimeout(2000);
 (Hay dos `waitForTimeout` en la suite, ambos tras un cambio de zoom con
 transición CSS de 120 ms: ahí no hay evento que esperar.)
 
+## Capturas de píxeles
+
+Solo dos ficheros comparan píxeles byte a byte hoy:
+`tests/e2e/next/fidelidad-reposo.spec.ts` y
+`tests/e2e/next/sustituir-fuente.spec.ts` (la prueba de oro de reposo de
+E-029: capturar la página con `.run` visible y con `.run` oculta por script,
+y exigir `Buffer.compare(antes, despues) === 0`).
+
+**Toda `screenshot()` de este tipo pasa `{ animations: 'disabled' }`.**
+
+```js
+// Bien
+const antes = await wrapper.screenshot({ animations: 'disabled' });
+
+// Mal — puede capturar una transición CSS a medias (E-039)
+const antes = await wrapper.screenshot();
+```
+
+Motivo (E-039, `docs/ERRORES-CONOCIDOS.md`): una transición CSS real (p. ej.
+`.run-drag { transition: opacity .1s }`, el tirador de arrastre de una línea)
+puede seguir en curso en el instante de la captura — sobre todo tras un
+re-render que reconstruye la capa de texto, porque el navegador reaplica
+`:hover` al elemento que reemplaza al que tenía el foco del cursor SIN que
+el test haya movido el ratón. Esa transición corre por el reloj de pared del
+navegador, no por la velocidad del hilo de JS del test, así que dos capturas
+separadas por un `page.evaluate()` de por medio pueden caer en dos frames
+distintos de la misma animación bajo carga de máquina — un `Buffer.compare`
+distinto de `0` que no tiene nada que ver con lo que el test dice comparar.
+
+`animations: 'disabled'` congela cualquier transición/animación CSS a su
+estado FINAL antes de capturar. Es determinista y **no relaja la
+comparación**: sigue exigiendo `Buffer.compare === 0` byte a byte, solo
+elimina la variable de en qué frame de una animación en curso cayó la
+captura. La regla `captura-pixel-sin-animations-disabled`
+(`scripts/guards/reglas.mjs`) exige la opción en cualquier `.screenshot(`
+nuevo dentro de `tests/e2e/next/*.spec.ts`.
+
 ## Prohibido
 
 - `test.skip`, `test.only`, `test.fixme` — los bloquea ESLint y la regla

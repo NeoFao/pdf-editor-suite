@@ -21,13 +21,18 @@ test('fidelidad-reposo: en reposo la capa de texto no altera ni un píxel del re
   await expect(runs).toHaveCount(2);
 
   const wrapper = page.locator('.page').first();
-  const antes = await wrapper.screenshot();
+  // animations: 'disabled' congela cualquier transición CSS en curso (p. ej.
+  // la opacity .1s de .run-drag tras perder :hover) a su estado FINAL antes
+  // de capturar — ver docs/TESTING.md "Capturas de píxeles". Sin esto, dos
+  // capturas separadas por un roundtrip pueden diferir por el frame de una
+  // transición a medias, no por lo que el test dice comparar.
+  const antes = await wrapper.screenshot({ animations: 'disabled' });
 
   // Oculta toda la capa de texto por script, sin tocar el canvas de abajo.
   await page.evaluate(() => {
     document.querySelectorAll<HTMLElement>('.run').forEach((el) => { el.style.visibility = 'hidden'; });
   });
-  const despues = await wrapper.screenshot();
+  const despues = await wrapper.screenshot({ animations: 'disabled' });
 
   expect(Buffer.compare(antes, despues)).toBe(0);
 });

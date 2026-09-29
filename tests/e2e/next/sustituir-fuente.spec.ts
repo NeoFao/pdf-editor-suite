@@ -39,13 +39,25 @@ test('sustituir-fuente: editar con caracteres ausentes en el subconjunto sustitu
   // render del motor — sin ella no habría diferencia visual. El ratón se
   // aparta primero: si quedara sobre la línea, `:hover` pintaría el contorno
   // sutil de selección (CSS intencional, no fantasma) y falsearía la prueba.
+  //
+  // El commit anterior (Enter) reconstruye por completo la capa de texto
+  // (c.refresh() -> Viewer.rebuild()): el navegador vuelve a aplicar :hover
+  // al nuevo `.run` bajo el cursor SIN un mousemove explícito (recalcula el
+  // hit-test porque el elemento hover anterior fue eliminado del DOM), así
+  // que al apartar el ratón aquí se dispara de verdad la transición de salida
+  // de `.run-drag` (opacity, .1s — ver estilos.css). animations: 'disabled'
+  // congela esa transición a su estado final ANTES de capturar: sin esto, la
+  // captura "antes" puede caer a mitad de la transición y la "despues" (tras
+  // el roundtrip de evaluate) más adelante, con diferencia de píxeles real en
+  // el tirador que no tiene nada que ver con la capa de texto. Documentado en
+  // docs/TESTING.md "Capturas de píxeles".
   await page.mouse.move(0, 0);
   const wrapper = page.locator('.page').first();
-  const antes = await wrapper.screenshot();
+  const antes = await wrapper.screenshot({ animations: 'disabled' });
   await page.evaluate(() => {
     document.querySelectorAll<HTMLElement>('.run').forEach((el) => { el.style.visibility = 'hidden'; });
   });
-  const despues = await wrapper.screenshot();
+  const despues = await wrapper.screenshot({ animations: 'disabled' });
   expect(Buffer.compare(antes, despues)).toBe(0);
 
   // Restaurar la capa oculta por el paso anterior antes de seguir interactuando.
