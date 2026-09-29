@@ -30,23 +30,33 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
 
   let primeraLineaPendiente = true;
   let bufferAtomos: Atom[] = [];
+  let seEmitioAlgunaLinea = false;
+  // Un párrafo cuyo ÚNICO contenido es un salto de página (patrón habitual
+  // en Word para forzar una página nueva) no debe dejar una línea en blanco
+  // ni antes ni después del salto — solo el salto en sí. El "línea en
+  // blanco de reserva" de más abajo es solo para un párrafo REALMENTE vacío
+  // (el usuario pulsó Intro sin escribir nada), que si debe conservar su
+  // alto de línea.
+  const tieneSaltoPagina = p.partes.some((parte) => parte.tipo === 'saltoPagina');
 
   function volcar(): void {
     const primeraDeEsteVolcado = primeraLineaPendiente;
+    primeraLineaPendiente = false;
     let atomosSegmento = bufferAtomos;
     bufferAtomos = [];
     if (primeraDeEsteVolcado && p.lista) {
       atomosSegmento = [{ text: p.lista.textoMarcador, font: 'Helvetica', sizePt: p.tamanoBasePt, color: [0, 0, 0] }, ...atomosSegmento];
     }
-    const envueltas = atomosSegmento.length > 0 ? wrapAtoms(atomosSegmento, anchoDisponible, medir) : [[]];
+    if (atomosSegmento.length === 0) return; // nada que maquetar en este segmento (p. ej. justo antes/después de un salto)
+    const envueltas = wrapAtoms(atomosSegmento, anchoDisponible, medir);
     envueltas.forEach((linea, idx) => {
       const esPrimeraAbsoluta = primeraDeEsteVolcado && idx === 0;
       const esUltimaDelSegmento = idx === envueltas.length - 1;
       const x = esPrimeraAbsoluta ? xPrimeraLineaPt : xNormalPt;
       const alto = alturaLinea(linea[0]?.sizePt ?? p.tamanoBasePt);
       salida.push(lineToFlowLine(linea, x, anchoDisponible, p.alineacion, esUltimaDelSegmento, alto, medir));
+      seEmitioAlgunaLinea = true;
     });
-    primeraLineaPendiente = false;
   }
 
   for (const parte of p.partes) {
@@ -67,6 +77,12 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
     }
   }
   volcar();
+
+  if (!seEmitioAlgunaLinea && !tieneSaltoPagina) {
+    // Párrafo realmente vacío (línea en blanco intencional del usuario): se
+    // conserva su alto de línea aunque no tenga texto ni marcador.
+    salida.push({ kind: 'line', height: alturaLinea(p.tamanoBasePt), segs: [], bars: [] });
+  }
 
   if (p.espacioDespuesPt > 0) salida.push({ kind: 'gap', height: p.espacioDespuesPt, bars: [] });
   return salida;

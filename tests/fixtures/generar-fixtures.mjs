@@ -452,6 +452,178 @@ async function pdfEstructurado() {
   return doc.save();
 }
 
+// ---------------------------------------------------------------------------
+// Fixtures .docx (§9 fila #4): ZIP mínimo escrito a mano (directorio central
+// + cabeceras locales), sin ninguna librería de ZIP/DOCX — igual disciplina
+// que `src/convert/docx/zip.ts`, que es justamente lo que estos fixtures
+// ejercitan. `metodo: 0` (stored) para los documentos normales; `metodo: 8`
+// (deflate, vía `zlib.deflateRawSync`) solo para la entrada hostil.
+// ---------------------------------------------------------------------------
+
+/** Construye un ZIP (Buffer) a partir de `[{ nombre, datos, metodo? }]`. Mismo formato mínimo que `src/convert/docx/zip.ts` sabe leer. */
+function construirZip(entradas) {
+  const partesLocal = [];
+  const partesCentral = [];
+  let offset = 0;
+
+  for (const e of entradas) {
+    const metodo = e.metodo ?? 0;
+    const nombreBuf = Buffer.from(e.nombre, 'utf-8');
+    const original = Buffer.isBuffer(e.datos) ? e.datos : Buffer.from(e.datos);
+    const comprimido = metodo === 8 ? zlib.deflateRawSync(original) : original;
+    const crc = crc32(original);
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(metodo, 8);
+    local.writeUInt16LE(0, 10);
+    local.writeUInt16LE(0, 12);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(comprimido.length, 18);
+    local.writeUInt32LE(original.length, 22);
+    local.writeUInt16LE(nombreBuf.length, 26);
+    local.writeUInt16LE(0, 28);
+    const localOffset = offset;
+    partesLocal.push(local, nombreBuf, comprimido);
+    offset += local.length + nombreBuf.length + comprimido.length;
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(metodo, 10);
+    central.writeUInt16LE(0, 12);
+    central.writeUInt16LE(0, 14);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(comprimido.length, 20);
+    central.writeUInt32LE(original.length, 24);
+    central.writeUInt16LE(nombreBuf.length, 28);
+    central.writeUInt16LE(0, 30);
+    central.writeUInt16LE(0, 32);
+    central.writeUInt16LE(0, 34);
+    central.writeUInt16LE(0, 36);
+    central.writeUInt32LE(0, 38);
+    central.writeUInt32LE(localOffset, 42);
+    partesCentral.push(central, nombreBuf);
+  }
+
+  const local = Buffer.concat(partesLocal);
+  const central = Buffer.concat(partesCentral);
+  const offsetCD = local.length;
+
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(0, 4);
+  eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(entradas.length, 8);
+  eocd.writeUInt16LE(entradas.length, 10);
+  eocd.writeUInt32LE(central.length, 12);
+  eocd.writeUInt32LE(offsetCD, 16);
+  eocd.writeUInt16LE(0, 20);
+
+  return Buffer.concat([local, central, eocd]);
+}
+
+const STYLES_BASICO = `<?xml version="1.0" encoding="UTF-8"?>
+<w:styles>
+  <w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="22"/><w:rFonts w:ascii="Calibri"/></w:rPr></w:rPrDefault></w:docDefaults>
+  <w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading1">
+    <w:name w:val="heading 1"/>
+    <w:basedOn w:val="Normal"/>
+    <w:pPr><w:spacing w:before="0" w:after="200"/></w:pPr>
+    <w:rPr><w:b/><w:sz w:val="36"/><w:color w:val="1F3864"/></w:rPr>
+  </w:style>
+</w:styles>`;
+
+const NUMBERING_BASICO = `<?xml version="1.0" encoding="UTF-8"?>
+<w:numbering>
+  <w:abstractNum w:abstractNumId="0">
+    <w:lvl w:ilvl="0"><w:numFmt w:val="bullet"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl>
+    <w:lvl w:ilvl="1"><w:numFmt w:val="bullet"/><w:pPr><w:ind w:left="1440" w:hanging="360"/></w:pPr></w:lvl>
+  </w:abstractNum>
+  <w:abstractNum w:abstractNumId="1">
+    <w:lvl w:ilvl="0"><w:numFmt w:val="decimal"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl>
+  </w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+  <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
+</w:numbering>`;
+
+/** Texto de comprobación de los tests: título, párrafo con estilos mezclados y la letra ñ, listas, y la página 2 tras el salto. */
+export const DOCX_TITULO = 'Título de prueba';
+export const DOCX_PARRAFO_NEGRITA = 'negrita';
+export const DOCX_PARRAFO_CURSIVA = 'cursiva';
+export const DOCX_PARRAFO_CON_ENIE = 'con la letra ñ.';
+export const DOCX_ITEMS_VINETA = ['Primer nivel uno', 'Segundo nivel (hijo)', 'Primer nivel dos'];
+export const DOCX_ITEMS_NUMERADOS = ['Elemento numerado uno', 'Elemento numerado dos'];
+export const DOCX_PAGINA_DOS = 'Contenido de la página dos.';
+
+function docxBasico() {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>${DOCX_TITULO}</w:t></w:r></w:p>
+  <w:p>
+    <w:pPr><w:jc w:val="center"/></w:pPr>
+    <w:r><w:t xml:space="preserve">Este párrafo tiene </w:t></w:r>
+    <w:r><w:rPr><w:b/></w:rPr><w:t>${DOCX_PARRAFO_NEGRITA}</w:t></w:r>
+    <w:r><w:t xml:space="preserve">, </w:t></w:r>
+    <w:r><w:rPr><w:i/></w:rPr><w:t>${DOCX_PARRAFO_CURSIVA}</w:t></w:r>
+    <w:r><w:t xml:space="preserve"> y </w:t></w:r>
+    <w:r><w:rPr><w:color w:val="C00000"/></w:rPr><w:t>color</w:t></w:r>
+    <w:r><w:t xml:space="preserve">, ${DOCX_PARRAFO_CON_ENIE}</w:t></w:r>
+  </w:p>
+  <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>${DOCX_ITEMS_VINETA[0]}</w:t></w:r></w:p>
+  <w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>${DOCX_ITEMS_VINETA[1]}</w:t></w:r></w:p>
+  <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr></w:pPr><w:r><w:t>${DOCX_ITEMS_VINETA[2]}</w:t></w:r></w:p>
+  <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>${DOCX_ITEMS_NUMERADOS[0]}</w:t></w:r></w:p>
+  <w:p><w:pPr><w:numPr><w:ilvl w:val="0"/><w:numId w:val="2"/></w:numPr></w:pPr><w:r><w:t>${DOCX_ITEMS_NUMERADOS[1]}</w:t></w:r></w:p>
+  <w:p><w:r><w:br w:type="page"/></w:r></w:p>
+  <w:p><w:r><w:t>${DOCX_PAGINA_DOS}</w:t></w:r></w:p>
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/styles.xml', datos: Buffer.from(STYLES_BASICO, 'utf-8') },
+    { nombre: 'word/numbering.xml', datos: Buffer.from(NUMBERING_BASICO, 'utf-8') }
+  ]);
+}
+
+/** Texto de las celdas de la tabla y advertencias esperadas (tabla + imagen). */
+export const DOCX_TABLA_CELDAS = ['Producto', 'Precio', 'Manzanas', '3,50'];
+
+function docxTablaImagen() {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:p><w:r><w:t>Documento con una tabla y una imagen no soportadas en fase 1.</w:t></w:r></w:p>
+  <w:tbl>
+    <w:tr><w:tc><w:p><w:r><w:t>${DOCX_TABLA_CELDAS[0]}</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>${DOCX_TABLA_CELDAS[1]}</w:t></w:r></w:p></w:tc></w:tr>
+    <w:tr><w:tc><w:p><w:r><w:t>${DOCX_TABLA_CELDAS[2]}</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>${DOCX_TABLA_CELDAS[3]}</w:t></w:r></w:p></w:tc></w:tr>
+  </w:tbl>
+  <w:p><w:r><w:drawing/></w:r></w:p>
+</w:body></w:document>`;
+
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') }
+  ]);
+}
+
+/**
+ * "Zip bomb" real: 8 MB de ceros comprimidos con deflate (que reduce a un
+ * puñado de KB) en una única entrada — ejercita la defensa de ratio de
+ * compresión de `src/convert/docx/zip.ts` con datos reales, no solo tamaños
+ * declarados falseados (eso ya lo cubre `tests/unit/docx-zip.test.ts`).
+ */
+function docxHostil() {
+  const ceros = Buffer.alloc(8 * 1024 * 1024);
+  return construirZip([{ nombre: 'word/document.xml', datos: ceros, metodo: 8 }]);
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -468,7 +640,10 @@ async function main() {
     'escaneado.pdf': await pdfEscaneado(),
     'estructurado.pdf': await pdfEstructurado(),
     'rojo.png': pngSolido(16, 16, [255, 0, 0]),
-    'firma-blanca.png': pngFirma(120, 60)
+    'firma-blanca.png': pngFirma(120, 60),
+    'word-basico.docx': docxBasico(),
+    'word-tabla-imagen.docx': docxTablaImagen(),
+    'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {
     fs.writeFileSync(path.join(SALIDA, nombre), bytes);
