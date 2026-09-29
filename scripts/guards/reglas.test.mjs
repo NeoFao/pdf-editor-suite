@@ -490,6 +490,53 @@ describe('motor-lote-en-bucle', () => {
   });
 });
 
+describe('captura-pixel-sin-animations-disabled', () => {
+  const regla = detectarEn('captura-pixel-sin-animations-disabled');
+  // Mismo emparejado de paréntesis que usa la regla, reproducido sobre texto suelto.
+  function llamadasSinDisabled(contenido) {
+    const hallados = [];
+    const patron = /\.screenshot\(/g;
+    let m;
+    while ((m = patron.exec(contenido))) {
+      const aperturaIdx = m.index + m[0].length - 1;
+      let profundidad = 0;
+      let cierreIdx = aperturaIdx;
+      for (let i = aperturaIdx; i < contenido.length; i++) {
+        if (contenido[i] === '(') profundidad++;
+        else if (contenido[i] === ')') { profundidad--; if (profundidad === 0) { cierreIdx = i; break; } }
+      }
+      const llamada = contenido.slice(aperturaIdx, cierreIdx + 1);
+      if (!/animations\s*:\s*['"]disabled['"]/.test(llamada)) hallados.push(llamada);
+    }
+    return hallados;
+  }
+
+  test('detecta el patrón exacto de E-039: screenshot() sin argumentos', () => {
+    const cuerpo = 'const antes = await wrapper.screenshot();';
+    assert.equal(llamadasSinDisabled(cuerpo).length, 1);
+    assert.ok(regla.comoArreglar.includes("animations: 'disabled'"));
+  });
+
+  test('detecta screenshot() con otras opciones pero sin animations: disabled', () => {
+    const cuerpo = "const antes = await wrapper.screenshot({ type: 'png' });";
+    assert.equal(llamadasSinDisabled(cuerpo).length, 1);
+  });
+
+  test('acepta screenshot({ animations: \'disabled\' })', () => {
+    const cuerpo = "const antes = await wrapper.screenshot({ animations: 'disabled' });";
+    assert.equal(llamadasSinDisabled(cuerpo).length, 0);
+  });
+
+  test('no confunde el cierre de paréntesis con el de otra llamada en la misma línea', () => {
+    const cuerpo = "const antes = await wrapper.screenshot({ animations: 'disabled', clip: rect(0, 0) });";
+    assert.equal(llamadasSinDisabled(cuerpo).length, 0);
+  });
+
+  test('sobre el repo real no encuentra nada: las cuatro capturas de tests/e2e/next/ ya fijan animations: disabled', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega
