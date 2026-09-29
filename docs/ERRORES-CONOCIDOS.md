@@ -1494,6 +1494,62 @@ espacio", insertaba el espacio de unión SIEMPRE.
   aparte, pero sin hueco...", "wrapAtoms no reserva hueco...", "justificado:
   un hueco 'pegado' no recibe el espacio extra...".
 
+### E-042 · El lector de ZIP descomprimía la entrada ENTERA antes de comprobar su tamaño: una zip bomb con el tamaño declarado a la baja agotaba la memoria
+
+**Síntoma.** Encontrado en revisión de PR (#66), no en producción. Todas las
+defensas de `src/convert/docx/zip.ts` contra "zip bomb" (ratio de compresión,
+tamaño por entrada y total) se calculaban sobre los tamaños **DECLARADOS**
+en el directorio central — y esos campos los pone el atacante. Una entrada
+cuya cabecera mintiera con un tamaño descomprimido PEQUEÑO (p. ej. 1 KB),
+pero cuyo `deflate` real produjera algo enorme, pasaba el filtro de ratio
+(1 KB / unos pocos KB comprimidos no es un ratio sospechoso) y el de tamaño
+por entrada (1 KB < 200 MB) sin disparar nada. Solo al llamar a `leer()`,
+`inflateRaw()` descomprimía la entrada ENTERA con
+`new Response(flujo).arrayBuffer()` — que no puede comprobar nada hasta
+tener el resultado completo en memoria — y únicamente DESPUÉS comparaba la
+longitud resultante con lo declarado. Para entonces, si el `deflate` real
+producía gigabytes, la pestaña ya se había quedado sin memoria.
+
+**Causa raíz.** Dos ideas mezcladas que parecían la misma defensa pero no lo
+eran: "los tamaños declarados sirven para RECHAZAR pronto, sin leer nada" (SÍ
+vale — ver `MAX_RATIO`/`MAX_ENTRADA_BYTES` en `leerDirectorioCentral`) y "los
+tamaños declarados sirven para saber CUÁNTO voy a leer con seguridad" (NO
+vale — el atacante los controla). Los límites tienen que imponerse al LEER,
+no solo al declarar.
+
+**Cómo se detecta ahora.**
+- `inflateAcotado()` (`src/convert/docx/zip.ts`) sustituye a `inflateRaw()`:
+  lee el `ReadableStream` de salida del `DecompressionStream` con un bucle
+  `reader.read()`, cuenta los bytes entregados y, en cuanto el total supera
+  `min(descomprimidoBytes declarado, MAX_ENTRADA_BYTES, presupuesto restante
+  del documento)`, cancela el stream (`reader.cancel()`) y lanza
+  `DocxError` — nunca sigue leyendo más allá del límite.
+- El presupuesto de `MAX_TOTAL_BYTES` se impone también en streaming,
+  compartido entre TODAS las llamadas a `leer()` de un mismo `ZipArchivo`
+  (no solo dentro de una), incluidas las entradas `stored`.
+- Tras extraer, el tamaño final tiene que coincidir EXACTAMENTE con lo
+  declarado (ni más —ya cortado por `inflateAcotado`— ni menos), y además el
+  **CRC-32** declarado en la cabecera tiene que coincidir con el contenido
+  real — una entrada con el tamaño correcto pero el contenido manipulado
+  también se rechaza.
+- Una entrada `stored` (método 0) cuyo tamaño comprimido y descomprimido
+  declarados no coincidan (deberían ser el mismo número: `stored` no
+  transforma nada) se rechaza en `leerDirectorioCentral`, sin tocar ni un
+  byte de datos.
+- Regla determinista `docx-descomprimir-acotado`
+  (`scripts/guards/reglas.mjs`): ningún fichero de `src/convert/**` puede
+  leer la salida de un `DecompressionStream` con
+  `new Response(...).arrayBuffer()/.blob()/.text()` — ese es exactamente el
+  patrón que causó esto.
+- Tests `tests/unit/docx-zip.test.ts` (prefijo "E-042"): una entrada con
+  tamaño declarado pequeño (1024 B) pero un `deflate` real de 8 MB de ceros
+  se rechaza SIN leer más que lo declarado (medido con un espía que envuelve
+  `DecompressionStream` global y cuenta los bytes que realmente atraviesan
+  el stream — no se cronometra nada, AGENTS.md/E-040); un CRC-32 declarado
+  que no coincide se rechaza; una entrada `stored` con tamaños inconsistentes
+  se rechaza sin excepción de rango. Tests de la regla en
+  `scripts/guards/reglas.test.mjs` ("docx-descomprimir-acotado").
+
 ---
 
 ## Reglas de sostenimiento

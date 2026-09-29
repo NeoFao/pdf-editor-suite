@@ -123,3 +123,87 @@ test('un método de compresión distinto de stored/deflate se rechaza', () => {
   view.setUint16(offsetCentral + 10, 12, true);
   expect(() => abrirZip(zip)).toThrow(/método de compresión/);
 });
+
+// ---------------------------------------------------------------------------
+// E-042: los tamaños DECLARADOS de un ZIP son datos del atacante. El defecto
+// original (ver docs/ERRORES-CONOCIDOS.md) descomprimía la entrada ENTERA con
+// `new Response(flujo).arrayBuffer()` y solo DESPUÉS comparaba el tamaño
+// resultante con lo declarado — una entrada cuya cabecera mintiera con un
+// tamaño descomprimido PEQUEÑO, pero cuyo deflate real produjera algo enorme,
+// pasaba el filtro de ratio (que también se basa en el tamaño declarado) y
+// agotaba la memoria de la pestaña DURANTE la descompresión, antes de que la
+// comparación posterior pudiera rechazarla.
+// ---------------------------------------------------------------------------
+
+test('E-042: una entrada con el tamaño descomprimido declarado PEQUEÑO pero un deflate real enorme se rechaza SIN leerlo entero', async () => {
+  // 8 MB de ceros comprimen a un puñado de KB; la cabecera miente con un
+  // tamaño descomprimido "inocente" (1024 B) que además hace que el RATIO
+  // declarado (1024 / unos pocos KB comprimidos) NO dispare la defensa de
+  // zip bomb por ratio — el único momento en que se puede detectar el
+  // engaño es AL LEER, no al declarar.
+  const ceros = new Uint8Array(8 * 1024 * 1024);
+  const zip = construirZip([{
+    nombre: 'word/document.xml',
+    datos: ceros,
+    metodo: 8,
+    descomprimidoBytesFalso: 1024
+  }]);
+  const archivo = abrirZip(zip);
+
+  // Espía: envuelve el DecompressionStream global para contar cuántos bytes
+  // salieron REALMENTE del descompresor, sin depender de cronometrar nada
+  // (AGENTS.md/E-040: nada de medir tiempo en un test unitario) — es un
+  // contador estructural de bytes entregados por el propio stream.
+  let bytesVistos = 0;
+  const DecompressionStreamReal = globalThis.DecompressionStream;
+  class DecompressionStreamEspia {
+    readable: ReadableStream<Uint8Array>;
+    writable: WritableStream<BufferSource>;
+    constructor(formato: string) {
+      const real = new DecompressionStreamReal(formato as CompressionFormat);
+      this.writable = real.writable;
+      const contador = new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) { bytesVistos += chunk.byteLength; controller.enqueue(chunk); }
+      });
+      this.readable = real.readable.pipeThrough(contador);
+    }
+  }
+  // @ts-expect-error -- sustitución deliberada del global solo para este test.
+  globalThis.DecompressionStream = DecompressionStreamEspia;
+  try {
+    await expect(archivo.leer('word/document.xml')).rejects.toThrow(DocxError);
+  } finally {
+    globalThis.DecompressionStream = DecompressionStreamReal;
+  }
+
+  // La lectura tuvo que detenerse muy poco después de superar lo declarado
+  // (1024 B) — nunca cerca de los 8 MB reales que produciría el deflate
+  // completo. Margen holgado (un par de trozos del descompresor nativo).
+  expect(bytesVistos).toBeLessThan(1024 + 256 * 1024);
+});
+
+test('E-042: el CRC-32 declarado que no coincide con el contenido real se rechaza', async () => {
+  const zip = construirZip([{
+    nombre: 'word/document.xml',
+    datos: new TextEncoder().encode('contenido original'),
+    metodo: 0,
+    crcFalso: 0xdeadbeef
+  }]);
+  const archivo = abrirZip(zip);
+  await expect(archivo.leer('word/document.xml')).rejects.toThrow(DocxError);
+  await expect(archivo.leer('word/document.xml')).rejects.toThrow(/CRC|corrupt/i);
+});
+
+test('E-042: una entrada "stored" cuyo tamaño descomprimido declarado no coincide con el comprimido se rechaza sin excepción de rango', () => {
+  const zip = construirZip([{
+    nombre: 'word/document.xml',
+    datos: new TextEncoder().encode('doce caracteres'), // 16 bytes reales
+    metodo: 0,
+    descomprimidoBytesFalso: 999_999_999 // mentira: "stored" implica comprimido === descomprimido
+  }]);
+  // No debe lanzar un RangeError/TypeError crudo de JS: abrirZip() en sí
+  // rechaza esta entrada al recorrer el directorio central, sin tocar los
+  // datos ni el buffer subyacente.
+  expect(() => abrirZip(zip)).toThrow(DocxError);
+  expect(() => abrirZip(zip)).not.toThrow(RangeError);
+});

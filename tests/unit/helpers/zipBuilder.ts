@@ -38,6 +38,8 @@ export interface ZipEntradaBuilder {
   flag?: number;
   /** Sobrescribe el número de disco donde empieza la entrada (multi-disco). */
   discoInicio?: number;
+  /** Sobrescribe el CRC-32 DECLARADO (para simular una entrada corrupta/manipulada cuyo contenido no coincide con el CRC de su cabecera). */
+  crcFalso?: number;
 }
 
 export function construirZip(entradas: ZipEntradaBuilder[]): Uint8Array {
@@ -50,7 +52,7 @@ export function construirZip(entradas: ZipEntradaBuilder[]): Uint8Array {
     const nombreBuf = Buffer.from(e.nombre, 'utf-8');
     const original = Buffer.from(e.datos);
     const comprimido = metodo === 8 ? zlib.deflateRawSync(original) : original;
-    const crc = crc32(original);
+    const crc = e.crcFalso ?? crc32(original);
     const descomprimidoDeclarado = e.descomprimidoBytesFalso ?? original.length;
     const flag = e.flag ?? 0;
 
