@@ -30,6 +30,7 @@ import { OcrPageCmd } from '../commands/OcrPage';
 import { TesseractOcr } from '../ocr/TesseractOcr';
 import { SignaturePad } from './SignaturePad';
 import { quitarFondo } from './quitarFondo';
+import { registrarGesto } from './gesto';
 import { parseRange } from './pageRange';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
@@ -921,10 +922,12 @@ export class App {
   /**
    * Arrastrar y soltar una miniatura para reordenar páginas, al estilo
    * Acrobat. Pointer events (no la API HTML5 `draggable`), para que funcione
-   * también en táctil — mismo patrón que `TextLayer.makeDragHandle`: los
-   * listeners globales se añaden al empezar el gesto y se retiran SIEMPRE al
-   * terminar (soltar, Escape, o clic secundario nunca llega aquí), nunca se
-   * acumulan (E-014, E-020).
+   * también en táctil — registrados por `registrarGesto` (`src/ui/gesto.ts`),
+   * que también trata `pointercancel` como cancelación (E-034: un gesto
+   * táctil interrumpido por el scroll del sistema, o la pérdida de la
+   * captura del puntero, nunca entrega `pointerup` — sin esto los listeners
+   * de `window` quedaban colgados para siempre y la miniatura se quedaba
+   * atenuada con el indicador de inserción a medio poner).
    *
    * Umbral de `UMBRAL_ARRASTRE_PX` para distinguir clic (navegar) de
    * arrastre (reordenar): por debajo del umbral no pasa nada y el 'click'
@@ -936,10 +939,12 @@ export class App {
    * `pointermove` a partir del punto medio vertical de cada miniatura, nunca
    * moviendo la miniatura real: la reordenación solo se aplica al soltar.
    *
-   * Al soltar, se ejecuta UN único `MovePageCmd(from, to)` (deshacible) y
-   * `currentPage` pasa a ser la página movida en su nueva posición — vía
-   * `goToPage()` (regla `navegacion-por-gotopage`), nunca llamando a
-   * `scrollToPage` aquí directamente.
+   * Al soltar con normalidad, se ejecuta UN único `MovePageCmd(from, to)`
+   * (deshacible) y `currentPage` pasa a ser la página movida en su nueva
+   * posición — vía `goToPage()` (regla `navegacion-por-gotopage`), nunca
+   * llamando a `scrollToPage` aquí directamente. Cancelado (Escape, ya
+   * existía; o `pointercancel`, E-034): solo se deshace la vista previa
+   * (clase e indicador), nunca se ejecuta `MovePageCmd`.
    */
   private beginThumbDrag(
     canvas: HTMLCanvasElement,
@@ -963,56 +968,48 @@ export class App {
       else this.thumbsEl.insertBefore(indicator, hijas[target]!);
     };
 
-    const limpiar = (): void => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('keydown', onKeyDown);
+    const limpiarVistaPrevia = (): void => {
       canvas.classList.remove('thumb-dragging');
       indicator?.remove();
       indicator = null;
     };
 
-    const onMove = (ev: PointerEvent): void => {
-      const dx = ev.clientX - startX, dy = ev.clientY - startY;
-      if (!dragging) {
-        if (Math.hypot(dx, dy) < UMBRAL_ARRASTRE_PX) return;
-        dragging = true;
-        onDragLejos(true);
-        canvas.classList.add('thumb-dragging');
-        indicator = document.createElement('div');
-        indicator.className = 'thumb-drop-indicator';
-        this.thumbsEl.appendChild(indicator);
+    registrarGesto({
+      cancelarConEscape: true,
+      onMove: (ev) => {
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (!dragging) {
+          if (Math.hypot(dx, dy) < UMBRAL_ARRASTRE_PX) return;
+          dragging = true;
+          onDragLejos(true);
+          canvas.classList.add('thumb-dragging');
+          indicator = document.createElement('div');
+          indicator.className = 'thumb-drop-indicator';
+          this.thumbsEl.appendChild(indicator);
+        }
+        const hijas = miniaturas();
+        let nuevoTarget = hijas.length;
+        for (let i = 0; i < hijas.length; i++) {
+          const rect = hijas[i]!.getBoundingClientRect();
+          if (ev.clientY < rect.top + rect.height / 2) { nuevoTarget = i; break; }
+        }
+        if (nuevoTarget !== target) { target = nuevoTarget; posicionarIndicador(); }
+      },
+      onUp: () => {
+        const huboArrastre = dragging;
+        const destino = target;
+        limpiarVistaPrevia();
+        if (!huboArrastre || destino === null) return;
+        // Soltar justo donde ya estaba (antes o justo después de sí misma): no-op.
+        if (destino === sourceIndex || destino === sourceIndex + 1) return;
+        const to = destino > sourceIndex ? destino - 1 : destino;
+        void this.commitReorder(sourceIndex, to);
+      },
+      onCancel: () => {
+        // Escape o pointercancel (E-034): ningún MovePageCmd, solo se deshace la vista previa.
+        limpiarVistaPrevia();
       }
-      const hijas = miniaturas();
-      let nuevoTarget = hijas.length;
-      for (let i = 0; i < hijas.length; i++) {
-        const rect = hijas[i]!.getBoundingClientRect();
-        if (ev.clientY < rect.top + rect.height / 2) { nuevoTarget = i; break; }
-      }
-      if (nuevoTarget !== target) { target = nuevoTarget; posicionarIndicador(); }
-    };
-
-    const onUp = (): void => {
-      const huboArrastre = dragging;
-      const destino = target;
-      limpiar();
-      if (!huboArrastre || destino === null) return;
-      // Soltar justo donde ya estaba (antes o justo después de sí misma): no-op.
-      if (destino === sourceIndex || destino === sourceIndex + 1) return;
-      const to = destino > sourceIndex ? destino - 1 : destino;
-      void this.commitReorder(sourceIndex, to);
-    };
-
-    const onKeyDown = (ev: KeyboardEvent): void => {
-      if (ev.key !== 'Escape' || !dragging) return;
-      limpiar();
-      dragging = false;
-      target = null;
-    };
-
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('keydown', onKeyDown);
+    });
   }
 
   /** Aplica el reordenamiento (un único MovePageCmd) y sigue a la página movida. */

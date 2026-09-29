@@ -100,6 +100,72 @@ test('sello: clic selecciona con tiradores, arrastrar mueve, tirador redimension
   await expect(box).toHaveCount(1);
 });
 
+// E-034 (docs/ERRORES-CONOCIDOS.md): un pointercancel a mitad de arrastre
+// (gesto táctil interrumpido, pérdida de la captura del puntero...) debe
+// tratarse como CANCELAR, no quedarse colgado.
+test('E-034: pointercancel al arrastrar una imagen restaura la posición, libera userSelect y no sigue el cursor', async ({ page }) => {
+  const eng = await PdfiumEngine.create();
+
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(PDF);
+  await expect(page.locator('.run').first()).toBeVisible();
+
+  await page.locator('#btn-insert-image').setInputFiles(IMG);
+  await expect(page.locator('#status')).toHaveText('Imagen insertada.');
+
+  const box = page.locator('.image-box');
+  await expect(box).toHaveCount(1);
+
+  const rectAntes = await (async () => {
+    const bytes = await descargar(page, 'cancel-antes.pdf');
+    const d = await eng.open(bytes);
+    const r = eng.listImageObjects(d, 0)[0]!.rectPt;
+    eng.close(d);
+    return r;
+  })();
+
+  await box.click();
+  await expect(box).toHaveClass(/selected/);
+
+  const cajaAntes = (await box.boundingBox())!;
+  const cx = cajaAntes.x + cajaAntes.width / 2, cy = cajaAntes.y + cajaAntes.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 60, cy + 20, { steps: 6 });
+
+  // A media arrastre: userSelect ya suprimida y el marco ya se movió en el DOM.
+  expect(await page.evaluate(() => getComputedStyle(document.body).userSelect)).toBe('none');
+  const cajaDurante = (await box.boundingBox())!;
+  expect(Math.abs(cajaDurante.x - cajaAntes.x)).toBeGreaterThan(30);
+
+  // El navegador puede no entregar nunca el pointerup (E-034): simula esa interrupción.
+  await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, cancelable: true, pointerId: 1 })));
+
+  // (a) la selección de texto nativa vuelve a estar disponible.
+  expect(await page.evaluate(() => getComputedStyle(document.body).userSelect)).not.toBe('none');
+
+  // (c) un pointermove posterior YA NO mueve el marco: el listener se retiró con el cancel.
+  await page.mouse.move(cx + 150, cy + 150, { steps: 4 });
+  const cajaTrasCancel = (await box.boundingBox())!;
+  expect(Math.abs(cajaTrasCancel.x - cajaAntes.x)).toBeLessThan(2);
+  expect(Math.abs(cajaTrasCancel.y - cajaAntes.y)).toBeLessThan(2);
+
+  await page.mouse.up(); // suelta el botón; el gesto ya se dio por terminado, sin efecto
+
+  // (b) el rect en el motor no cambió: ningún SetObjectRectCmd se ejecutó.
+  const rectDespues = await (async () => {
+    const bytes = await descargar(page, 'cancel-despues.pdf');
+    const d = await eng.open(bytes);
+    const r = eng.listImageObjects(d, 0)[0]!.rectPt;
+    eng.close(d);
+    return r;
+  })();
+  expect(rectDespues.xPt).toBeCloseTo(rectAntes.xPt, 0);
+  expect(rectDespues.yPt).toBeCloseTo(rectAntes.yPt, 0);
+  expect(rectDespues.wPt).toBeCloseTo(rectAntes.wPt, 0);
+  expect(rectDespues.hPt).toBeCloseTo(rectAntes.hPt, 0);
+});
+
 // #20 de la tabla de paridad (§9): firma subiendo una imagen, quitando el fondo.
 test('firma desde imagen: quita el fondo blanco y no tapa el texto de la página que hay debajo', async ({ page }) => {
   const eng = await PdfiumEngine.create();

@@ -885,6 +885,80 @@ rompía en local para cualquier IA o humano.
 
 ---
 
+### E-034 · Un gesto de puntero solo terminaba en `pointerup`: `pointercancel` lo dejaba colgado
+
+**Síntoma.** Encontrado en revisión del PR #55 (sello interactivo), antes de
+fusionar. Todo gesto de arrastre de la app nueva (mover/redimensionar una
+imagen en `ImageLayer`, arrastrar una línea de texto en `TextLayer`, arrastrar
+una miniatura para reordenar en `App.beginThumbDrag`) armaba
+`window.addEventListener('pointermove'/'pointerup', …)` en el `pointerdown` y
+los retiraba en el `pointerup`. El navegador puede no entregar jamás ese
+`pointerup`: un gesto táctil interrumpido por el scroll del sistema, un
+cambio de pestaña o de ventana, o la pérdida de la captura del puntero
+mandan `pointercancel` en su lugar. Sin manejarlo, dos cosas se rompían a la
+vez: los `removeEventListener` de `window` nunca llegaban a ejecutarse (la
+misma familia de fuga que E-014/E-020, §2.6) y cualquier estado temporal del
+gesto se quedaba a medias hasta recargar la página — en `ImageLayer`,
+`document.body.style.userSelect` se quedaba en `'none'` (**toda la app**
+perdía la selección de texto, no solo el marco de la imagen); en el arrastre
+de miniaturas, la miniatura se quedaba atenuada (`.thumb-dragging`) con el
+indicador de inserción todavía en el DOM.
+
+**Causa raíz.** Cada gesto trataba `pointerup` como el único punto de salida
+posible, sin ningún manejador de `pointercancel` que revirtiera la vista
+previa y retirara los listeners por esa vía.
+
+**Arreglo.** `src/ui/gesto.ts` (`registrarGesto()`) es el ÚNICO sitio de la
+app que engancha `pointermove`/`pointerup`/`pointercancel` de `window` o
+`document`. Todo gesto pasa por él: `onMove`/`onUp` para el camino normal,
+`onCancel` para `pointercancel` (y Escape, si `cancelarConEscape` — ya
+existía para el arrastre de miniaturas) — `onCancel` deshace la vista previa
+(geometría del marco/bloque a su posición de reposo, indicador de
+inserción) y NUNCA dispara un comando; `onSettle` cubre la limpieza común a
+ambos caminos (restaurar `userSelect` en `ImageLayer`). Los tres sitios
+(`ImageLayer.beginMove`/`makeHandle`, `TextLayer.makeDragHandle`,
+`App.beginThumbDrag`) se reescribieron sobre este helper. De paso,
+`SignaturePad` (que usa listeners del propio `<canvas>`, no de
+`window`/`document` — sin riesgo de fuga, pero con el mismo defecto de
+estado: `drawing` se quedaba en `true`) gana un `pointercancel` que llama al
+mismo `stop()` que `pointerup`/`pointerleave`. La captura de pluma de
+`Viewer.attachPenCapture` ya trataba `pointercancel` correctamente (usa
+`setPointerCapture` sobre un elemento propio, no listeners globales) — se
+revisó y no necesitó cambios.
+
+**Cómo se detecta ahora.**
+- `tests/e2e/next/sello.spec.ts`: empieza a arrastrar la imagen seleccionada
+  (`pointerdown` + varios `pointermove`), despacha `pointercancel` sobre
+  `window` y comprueba que (a) `document.body`'s `userSelect` ya no es
+  `none`, (b) el rect de la imagen en el motor (tras guardar) no cambió, y
+  (c) un `pointermove` posterior no mueve el marco en el DOM — antes del
+  arreglo, (a) fallaba (`userSelect` se quedaba en `'none'`) y (c) fallaba
+  (el marco seguía el cursor: el listener nunca se había retirado).
+- `tests/e2e/next/mover.spec.ts`: arrastra el tirador de una línea, cancela
+  con `pointercancel`, comprueba que el bloque vuelve a su posición de
+  reposo en el DOM y que el PDF exportado no cambió — antes del arreglo el
+  bloque se quedaba desplazado (sin restaurar) y seguía el cursor tras el
+  cancel.
+- `tests/e2e/next/arrastrar-miniaturas.spec.ts`: arrastra una miniatura más
+  allá del umbral, cancela con `pointercancel`, comprueba que
+  `.thumb-dragging`/`.thumb-drop-indicator` desaparecen y que el orden de
+  páginas no cambió al guardar — antes del arreglo la miniatura quedaba
+  atenuada con el indicador colgado y un `pointermove` posterior lo seguía
+  reposicionando.
+- Regla `gesto-con-cancelacion` — ningún fichero de `src/**/*.ts` salvo el
+  propio `src/ui/gesto.ts` puede enganchar `pointermove`/`pointerup`/
+  `pointercancel` de `window`/`document` directamente. Deliberadamente más
+  estricta que "todo `pointerup` debe tener su `pointercancel`": esa versión
+  se cumple con un `pointercancel` que no hace nada útil (p. ej. uno vacío)
+  y el defecto real —vista previa sin deshacer— seguiría colando. Centralizar
+  el enganche en un único fichero pequeño y auditado a mano es la defensa
+  robusta. **Límite conocido:** no impide que alguien reimplemente el mismo
+  patrón roto DENTRO de `gesto.ts` — ese fichero sigue dependiendo de
+  revisión humana, como el propio helper de E-028
+  (`leerCadenaPdfium`)/E-032 (disciplina de `goToPage`).
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que

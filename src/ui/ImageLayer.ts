@@ -1,5 +1,6 @@
 import type { PageGeometry } from '../coords/PageGeometry';
 import type { RectPt } from '../engine/PdfEngine';
+import { registrarGesto } from './gesto';
 
 export interface ImageBoxInfo { objIndex: number; rectPt: RectPt }
 
@@ -104,7 +105,13 @@ export class ImageLayer {
     };
   }
 
-  /** Arrastrar el marco entero: mueve (mismo rect, otra posición). */
+  /**
+   * Arrastrar el marco entero: mueve (mismo rect, otra posición). Cancelado
+   * (pointercancel — gesto táctil interrumpido, pérdida de la captura del
+   * puntero — E-034): restaura la posición de reposo, sin disparar
+   * `onChangeRect` (ver `registrarGesto`, único sitio que engancha
+   * pointermove/pointerup/pointercancel de esta capa).
+   */
   private beginMove(e: PointerEvent, box: HTMLElement, img: ImageBoxInfo, restRect: CssBox): void {
     if ((e.target as HTMLElement).classList.contains('image-handle')) return; // el tirador gestiona su propio gesto
     e.preventDefault();
@@ -113,23 +120,25 @@ export class ImageLayer {
     this.suprimirSeleccionNativa();
     const startX = e.clientX, startY = e.clientY;
     let moved = false;
-    const onMove = (ev: PointerEvent): void => {
-      const dx = ev.clientX - startX, dy = ev.clientY - startY;
-      if (Math.abs(dx) > 1 || Math.abs(dy) > 1) moved = true;
-      box.style.left = `${restRect.left + dx}px`;
-      box.style.top = `${restRect.top + dy}px`;
-    };
-    const onUp = (ev: PointerEvent): void => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      this.restaurarSeleccionNativa();
-      if (!moved) { box.style.left = `${restRect.left}px`; box.style.top = `${restRect.top}px`; return; }
-      const dx = ev.clientX - startX, dy = ev.clientY - startY;
-      const newRectPt = this.cssRectToPt(restRect.left + dx, restRect.top + dy, restRect.width, restRect.height);
-      this.cb.onChangeRect(this.pageIndex, img.objIndex, newRectPt, img.rectPt);
-    };
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
+    registrarGesto({
+      onMove: (ev) => {
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (Math.abs(dx) > 1 || Math.abs(dy) > 1) moved = true;
+        box.style.left = `${restRect.left + dx}px`;
+        box.style.top = `${restRect.top + dy}px`;
+      },
+      onUp: (ev) => {
+        if (!moved) { box.style.left = `${restRect.left}px`; box.style.top = `${restRect.top}px`; return; }
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        const newRectPt = this.cssRectToPt(restRect.left + dx, restRect.top + dy, restRect.width, restRect.height);
+        this.cb.onChangeRect(this.pageIndex, img.objIndex, newRectPt, img.rectPt);
+      },
+      onCancel: () => {
+        box.style.left = `${restRect.left}px`;
+        box.style.top = `${restRect.top}px`;
+      },
+      onSettle: () => this.restaurarSeleccionNativa()
+    });
   }
 
   /**
@@ -154,35 +163,37 @@ export class ImageLayer {
       const signW = esquina === 'ne' || esquina === 'se' ? 1 : -1;
       const signH = esquina === 'sw' || esquina === 'se' ? 1 : -1;
       let actual: CssBox = { ...restRect };
-      const onMove = (ev: PointerEvent): void => {
-        const dx = ev.clientX - startX, dy = ev.clientY - startY;
-        let newW = restRect.width + signW * dx;
-        let newH = restRect.height + signH * dy;
-        if (!ev.shiftKey) {
-          // Proporción conservada (comportamiento por defecto, ver comentario de clase):
-          // domina el eje con mayor cambio relativo respecto al tamaño de reposo.
-          const scaleW = newW / restRect.width, scaleH = newH / restRect.height;
-          const scale = Math.abs(scaleW - 1) >= Math.abs(scaleH - 1) ? scaleW : scaleH;
-          newW = restRect.width * scale;
-          newH = restRect.height * scale;
-        }
-        newW = Math.max(MIN_SIZE_CSS, newW);
-        newH = Math.max(MIN_SIZE_CSS, newH);
-        let left = restRect.left, top = restRect.top;
-        if (esquina === 'nw' || esquina === 'sw') left = restRect.left + restRect.width - newW;
-        if (esquina === 'nw' || esquina === 'ne') top = restRect.top + restRect.height - newH;
-        actual = { left, top, width: newW, height: newH };
-        Object.assign(box.style, { left: `${left}px`, top: `${top}px`, width: `${newW}px`, height: `${newH}px` });
-      };
-      const onUp = (): void => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        this.restaurarSeleccionNativa();
-        const newRectPt = this.cssRectToPt(actual.left, actual.top, actual.width, actual.height);
-        this.cb.onChangeRect(this.pageIndex, img.objIndex, newRectPt, img.rectPt);
-      };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
+      registrarGesto({
+        onMove: (ev) => {
+          const dx = ev.clientX - startX, dy = ev.clientY - startY;
+          let newW = restRect.width + signW * dx;
+          let newH = restRect.height + signH * dy;
+          if (!ev.shiftKey) {
+            // Proporción conservada (comportamiento por defecto, ver comentario de clase):
+            // domina el eje con mayor cambio relativo respecto al tamaño de reposo.
+            const scaleW = newW / restRect.width, scaleH = newH / restRect.height;
+            const scale = Math.abs(scaleW - 1) >= Math.abs(scaleH - 1) ? scaleW : scaleH;
+            newW = restRect.width * scale;
+            newH = restRect.height * scale;
+          }
+          newW = Math.max(MIN_SIZE_CSS, newW);
+          newH = Math.max(MIN_SIZE_CSS, newH);
+          let left = restRect.left, top = restRect.top;
+          if (esquina === 'nw' || esquina === 'sw') left = restRect.left + restRect.width - newW;
+          if (esquina === 'nw' || esquina === 'ne') top = restRect.top + restRect.height - newH;
+          actual = { left, top, width: newW, height: newH };
+          Object.assign(box.style, { left: `${left}px`, top: `${top}px`, width: `${newW}px`, height: `${newH}px` });
+        },
+        onUp: () => {
+          const newRectPt = this.cssRectToPt(actual.left, actual.top, actual.width, actual.height);
+          this.cb.onChangeRect(this.pageIndex, img.objIndex, newRectPt, img.rectPt);
+        },
+        onCancel: () => {
+          // Cancelado (E-034): restaura EXACTAMENTE el rect de reposo, sin disparar onChangeRect.
+          Object.assign(box.style, { left: `${restRect.left}px`, top: `${restRect.top}px`, width: `${restRect.width}px`, height: `${restRect.height}px` });
+        },
+        onSettle: () => this.restaurarSeleccionNativa()
+      });
     });
     return handle;
   }

@@ -130,4 +130,42 @@ test.describe('arrastrar-miniaturas: reordenar páginas arrastrando (estilo Acro
       expect.stringContaining('PAGINA-4')
     ]);
   });
+
+  // E-034 (docs/ERRORES-CONOCIDOS.md): un pointercancel a mitad de arrastre
+  // (gesto táctil interrumpido, pérdida de la captura del puntero...) debe
+  // cancelar igual que Escape — sin él, la miniatura se quedaba atenuada con
+  // el indicador de inserción colgado para siempre.
+  test('pointercancel a mitad de arrastre cancela sin cambios (E-034)', async ({ page }) => {
+    await page.goto('/index.next.html');
+    await page.locator('#file-input').setInputFiles(PAGINAS_PEQUENAS);
+    await expect(page.locator('.run').first()).toBeVisible();
+    await expect(page.locator('#page-indicator')).toHaveText('1 / 4');
+
+    const cajaCuarta = (await page.locator('#thumbs canvas').nth(3).boundingBox())!;
+    const { x } = await empezarArrastre(page, 0);
+    await page.mouse.move(x, cajaCuarta.y + cajaCuarta.height / 2, { steps: 8 });
+    await expect(page.locator('.thumb-drop-indicator')).toHaveCount(1);
+    await expect(page.locator('#thumbs canvas').nth(0)).toHaveClass(/thumb-dragging/);
+
+    // El navegador puede no entregar nunca el pointerup (E-034): simula esa interrupción.
+    await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, cancelable: true, pointerId: 1 })));
+
+    await expect(page.locator('.thumb-drop-indicator')).toHaveCount(0);
+    await expect(page.locator('#thumbs canvas').nth(0)).not.toHaveClass(/thumb-dragging/);
+
+    // Un pointermove posterior ya no reposiciona nada: el gesto ya terminó.
+    await page.mouse.move(x, cajaCuarta.y, { steps: 4 });
+    await expect(page.locator('.thumb-drop-indicator')).toHaveCount(0);
+
+    await page.mouse.up();
+    await expect(page.locator('#page-indicator')).toHaveText('1 / 4');
+
+    const destino = await guardarYDescargar(page, 'pointercancel-cancela.pdf');
+    expect(await ordenDePaginas(destino)).toEqual([
+      expect.stringContaining('PAGINA-1'),
+      expect.stringContaining('PAGINA-2'),
+      expect.stringContaining('PAGINA-3'),
+      expect.stringContaining('PAGINA-4')
+    ]);
+  });
 });

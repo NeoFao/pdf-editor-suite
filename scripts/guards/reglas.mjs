@@ -582,6 +582,52 @@ export const conWebServerNextSinReusar = {
   }
 };
 
+/* ── E-034 · todo gesto de puntero pasa por el helper que trata pointercancel ── */
+export const conGestoConCancelacion = {
+  id: 'gesto-con-cancelacion',
+  titulo: 'ningún fichero enganche pointermove/pointerup de window o document a mano',
+  comoArreglar:
+    'Usa registrarGesto() de src/ui/gesto.ts en vez de window.addEventListener/' +
+    'document.addEventListener directos para pointermove/pointerup/pointercancel. ' +
+    'Un gesto que solo escucha pointerup se queda colgado para siempre si el ' +
+    'navegador manda pointercancel en su lugar (gesto táctil interrumpido, cambio de ' +
+    'pestaña, pérdida de la captura del puntero): ni retira sus listeners (fuga, ' +
+    '§2.6/E-014/E-020) ni deshace su vista previa (E-034). Centralizar el enganche en ' +
+    'un único fichero auditado es más robusto que exigir "si hay pointerup también ' +
+    'debe haber pointercancel" línea a línea: esa versión se puede cumplir con un ' +
+    'pointercancel que no hace nada útil y el defecto real (vista previa sin deshacer) ' +
+    'seguiría pasando el guard.',
+  ejecutar() {
+    const raizSrc = path.join(RAIZ, 'src');
+    if (!fs.existsSync(raizSrc)) return [];
+    const hallazgos = [];
+    // Único fichero permitido: es el propio helper, y es lo que se audita a mano.
+    const permitido = 'src/ui/gesto.ts';
+    const patron = /\b(window|document)\.addEventListener\(\s*['"](pointermove|pointerup|pointercancel)['"]/;
+    const recorrer = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { recorrer(full); continue; }
+        if (!e.name.endsWith('.ts')) continue;
+        const rel = path.relative(RAIZ, full).replace(/\\/g, '/');
+        if (rel === permitido) continue;
+        if (tieneDeuda(rel, this.id)) continue;
+        const contenido = leer(rel);
+        const exentas = lineasExentas(contenido, this.id);
+        contenido.split('\n').forEach((linea, i) => {
+          const n = i + 1;
+          if (exentas.has(n)) return;
+          if (patron.test(linea)) {
+            hallazgos.push(hallazgo(rel, n, `engancha pointermove/pointerup/pointercancel de window/document a mano — usa registrarGesto() de ${permitido}`));
+          }
+        });
+      }
+    };
+    recorrer(raizSrc);
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -599,5 +645,6 @@ export const TODAS = [
   conMotorEncapsulado,
   conPdfiumBufferFijo,
   conNavegacionPorGoToPage,
-  conWebServerNextSinReusar
+  conWebServerNextSinReusar,
+  conGestoConCancelacion
 ];
