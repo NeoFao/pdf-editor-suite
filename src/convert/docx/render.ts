@@ -59,21 +59,40 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
     });
   }
 
+  // Word divide un mismo "word visual" en varios `w:r` (runs) cuando cambia
+  // el formato a mitad de palabra o justo en un signo de puntuación (p. ej.
+  // "**negrita**," -> un run en negrita "negrita" y un run normal ","). Si
+  // los partimos en palabras por espacios SIN recordar si había un espacio
+  // real entre dos `parte`s consecutivas, el ajuste de línea (pensado para
+  // Markdown, donde cada palabra SIEMPRE viene separada por espacio)
+  // insertaría uno de más entre la palabra y la coma. `terminaEnEspacio`
+  // seguido entre partes consecutivas evita eso marcando el primer átomo de
+  // la parte siguiente como `pegado` cuando no hay espacio real de por medio.
+  let terminaEnEspacio = true;
   for (const parte of p.partes) {
     if (parte.tipo === 'texto') {
+      const empiezaConEspacio = parte.texto.length === 0 || /^\s/.test(parte.texto);
+      let primerPalabra = true;
       for (const palabra of parte.texto.split(/\s+/)) {
-        if (palabra !== '') bufferAtomos.push({ text: palabra, font: parte.formato.font, sizePt: parte.formato.sizePt, color: parte.formato.color });
+        if (palabra === '') continue;
+        const pegado = primerPalabra && !empiezaConEspacio && !terminaEnEspacio && bufferAtomos.length > 0;
+        bufferAtomos.push({ text: palabra, font: parte.formato.font, sizePt: parte.formato.sizePt, color: parte.formato.color, pegado });
+        primerPalabra = false;
       }
+      if (parte.texto.length > 0) terminaEnEspacio = /\s$/.test(parte.texto);
     } else if (parte.tipo === 'tab') {
       // Fase 1 sin tabulaciones reales (sin modelo de tab-stops): se
       // aproxima con un hueco de ancho fijo que participa en el ajuste de
       // línea como una palabra más (ver limitaciones de `modelo.ts`).
       bufferAtomos.push({ text: '    ', font: 'Helvetica', sizePt: p.tamanoBasePt, color: [0, 0, 0] });
+      terminaEnEspacio = true;
     } else if (parte.tipo === 'saltoLinea') {
       volcar();
+      terminaEnEspacio = true;
     } else if (parte.tipo === 'saltoPagina') {
       volcar();
       salida.push({ kind: 'pagebreak' });
+      terminaEnEspacio = true;
     }
   }
   volcar();

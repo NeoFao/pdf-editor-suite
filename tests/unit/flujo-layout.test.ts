@@ -5,6 +5,46 @@ import { wrapAtoms, lineToFlowLine, paginar, type Atom, type Medir, type FlowIte
 const medir: Medir = (_font, _sizePt, text) => text.length * 6;
 
 function atomo(text: string): Atom { return { text, font: 'Helvetica', sizePt: 11, color: [0, 0, 0] }; }
+function atomoNegrita(text: string): Atom { return { text, font: 'Helvetica-Bold', sizePt: 11, color: [0, 0, 0] }; }
+function atomoPegado(text: string): Atom { return { text, font: 'Helvetica', sizePt: 11, color: [0, 0, 0], pegado: true }; }
+
+// E-041 (docs/ERRORES-CONOCIDOS.md): un átomo "pegado" (DOCX: una palabra y
+// la coma que la sigue en dos `w:r` de formato distinto, SIN espacio real
+// entre ambos) no debe llevar un espacio de más — ni cuando cae en el mismo
+// trazo (mismo estilo) ni cuando cae en uno distinto (estilo distinto).
+test('un átomo "pegado" del MISMO estilo se fusiona en el trazo sin espacio de unión', () => {
+  const atoms = [atomo('hola'), atomoPegado(',')];
+  const linea = lineToFlowLine(atoms, 0, 300, 'left', true, 14, medir);
+  expect(linea.segs).toHaveLength(1);
+  expect(linea.segs[0]!.text).toBe('hola,');
+});
+
+test('un átomo "pegado" de OTRO estilo queda en un trazo aparte, pero sin hueco entre los dos trazos', () => {
+  const atoms = [atomoNegrita('negrita'), atomoPegado(',')];
+  const linea = lineToFlowLine(atoms, 0, 300, 'left', true, 14, medir);
+  expect(linea.segs).toHaveLength(2);
+  expect(linea.segs[0]!.text).toBe('negrita');
+  expect(linea.segs[1]!.text).toBe(',');
+  // Sin espacio entre ambos: el segundo trazo empieza justo donde termina el primero.
+  const finPrimero = linea.segs[0]!.xPt + medir(linea.segs[0]!.font, linea.segs[0]!.sizePt, linea.segs[0]!.text);
+  expect(linea.segs[1]!.xPt).toBe(finPrimero);
+});
+
+test('wrapAtoms no reserva hueco de espacio antes de un átomo "pegado"', () => {
+  const atoms = [atomo('palabra'), atomoPegado('!')];
+  // Ancho justo para "palabra!" (8 chars * 6 = 48pt) pero NO para "palabra !" (9*6=54pt con espacio).
+  const lineas = wrapAtoms(atoms, 48, medir);
+  expect(lineas).toHaveLength(1); // cabe en una sola línea porque no se reserva el espacio
+});
+
+test('justificado: un hueco "pegado" no recibe el espacio extra repartido ni cuenta como hueco', () => {
+  const atoms = [atomo('uno'), atomo('dos'), atomoPegado(',')];
+  const linea = lineToFlowLine(atoms, 0, 200, 'justify', false, 14, medir);
+  // Solo hay 1 hueco distribuible (entre "uno" y "dos"); el de antes de "," no cuenta.
+  expect(linea.segs).toHaveLength(3);
+  const finDos = linea.segs[1]!.xPt + medir('Helvetica', 11, 'dos');
+  expect(linea.segs[2]!.xPt).toBe(finDos); // la coma pegada justo tras "dos", sin espacio ni extra
+});
 
 test('alineación centrada: la línea se desplaza para quedar centrada en el ancho disponible', () => {
   const atoms = [atomo('hola')]; // ancho = 4*6 = 24pt

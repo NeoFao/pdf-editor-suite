@@ -1462,6 +1462,40 @@ la velocidad de la máquina.
 
 ---
 
+## Conversión de documentos
+
+### E-041 · El maquetador común insertaba un espacio de más entre una palabra y la puntuación pegada a ella (DOCX)
+
+**Síntoma.** Al convertir un `.docx` con formato mezclado a mitad de frase
+(p. ej. `**negrita**,`), el PDF salía con un espacio visible de más antes de
+la coma: "negrita ," en vez de "negrita,". Se descubrió mirando la captura
+de `word-basico.docx` (§2.8 de AGENTS.md: "ábrelo, pruébalo, mira el
+resultado"), no en un test — la revisión visual del lote encontró lo que los
+tests no cubrían.
+
+**Causa raíz.** `wrapAtoms`/`lineToFlowLine` (`src/convert/flujo/layout.ts`)
+vienen de generalizar el maquetador de Markdown (fila #32), donde cada
+"átomo" es siempre una PALABRA separada de la siguiente por un espacio real
+— así es como funciona un texto Markdown. Word, en cambio, parte un mismo
+"word visual" en varios `w:r` (runs) cada vez que cambia el formato a mitad
+de palabra o justo en un signo de puntuación, SIN que haya un espacio real
+entre ellos en el XML. El algoritmo, al no saber distinguir "dos átomos
+separados por espacio" de "dos átomos que vienen de runs consecutivos sin
+espacio", insertaba el espacio de unión SIEMPRE.
+
+**Cómo se detecta ahora.**
+- `Atom.pegado` (`src/convert/flujo/layout.ts`): marca opcional, `false`/
+  `undefined` en todo lo que produce Markdown (comportamiento idéntico a
+  antes — sus tests no cambiaron). `src/convert/docx/render.ts` la activa en
+  el primer átomo de una `parte` de texto cuando el texto crudo (con
+  `xml:space="preserve"`) no tenía espacio real respecto al átomo anterior.
+- Tests `tests/unit/flujo-layout.test.ts`: "un átomo 'pegado' del MISMO
+  estilo se fusiona... sin espacio", "...de OTRO estilo queda en un trazo
+  aparte, pero sin hueco...", "wrapAtoms no reserva hueco...", "justificado:
+  un hueco 'pegado' no recibe el espacio extra...".
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que

@@ -27,7 +27,20 @@ export type Medir = (fontName: string, sizePt: number, text: string) => number;
 
 export type Align = 'left' | 'center' | 'right' | 'justify';
 
-export interface Atom { text: string; font: string; sizePt: number; color: RGB }
+export interface Atom {
+  text: string; font: string; sizePt: number; color: RGB;
+  /**
+   * `true` si este átomo va PEGADO al anterior, sin espacio entre ambos —
+   * p. ej. un documento DOCX donde una palabra y la coma que la sigue vienen
+   * en dos `w:r` (runs) distintos por tener formato distinto (uno en
+   * negrita, la coma sin formato) pero SIN espacio real entre ellos en el
+   * texto original. Sin esto, el ajuste de línea (pensado para palabras de
+   * Markdown, siempre separadas por espacio) insertaría un espacio de más
+   * entre la palabra y la coma. Markdown nunca lo usa (siempre `undefined`,
+   * equivalente a `false`): mismo comportamiento de siempre.
+   */
+  pegado?: boolean;
+}
 
 export interface Trazo {
   page: number;
@@ -90,7 +103,7 @@ export function wrapAtoms(atoms: Atom[], maxWidthPt: number, medir: Medir): Atom
   let width = 0;
   for (const atom of atoms) {
     const wordWidth = medir(atom.font, atom.sizePt, atom.text);
-    const spaceWidth = current.length > 0 ? medir(atom.font, atom.sizePt, ' ') : 0;
+    const spaceWidth = current.length > 0 && !atom.pegado ? medir(atom.font, atom.sizePt, ' ') : 0;
     if (current.length > 0 && width + spaceWidth + wordWidth > maxWidthPt) {
       lines.push(current);
       current = [atom];
@@ -120,16 +133,19 @@ export function lineToFlowLine(
 
   if (efectiva === 'justify') {
     const anchos = atoms.map((a) => medir(a.font, a.sizePt, a.text));
-    const espacios = atoms.slice(0, -1).map((a) => medir(a.font, a.sizePt, ' '));
+    // Un hueco "pegado" (el átomo siguiente no lleva espacio real delante)
+    // no cuenta como hueco distribuible ni lleva el espacio normal — si no,
+    // el justificado separaría una palabra de la coma que la sigue.
+    const espacios = atoms.slice(0, -1).map((a, i) => (atoms[i + 1]!.pegado ? 0 : medir(a.font, a.sizePt, ' ')));
     const anchoNatural = anchos.reduce((s, w) => s + w, 0) + espacios.reduce((s, w) => s + w, 0);
-    const huecos = atoms.length - 1;
-    const extraPorHueco = huecos > 0 ? Math.max(0, (maxWidthPt - anchoNatural) / huecos) : 0;
+    const huecosDistribuibles = atoms.slice(1).filter((a) => !a.pegado).length;
+    const extraPorHueco = huecosDistribuibles > 0 ? Math.max(0, (maxWidthPt - anchoNatural) / huecosDistribuibles) : 0;
     const segs: Seg[] = [];
     let x = xStartPt;
     atoms.forEach((a, i) => {
       segs.push({ xPt: x, text: a.text, font: a.font, sizePt: a.sizePt, color: a.color });
       x += anchos[i]!;
-      if (i < atoms.length - 1) x += espacios[i]! + extraPorHueco;
+      if (i < atoms.length - 1) x += espacios[i]! + (atoms[i + 1]!.pegado ? 0 : extraPorHueco);
     });
     return { kind: 'line', height, segs, bars: [] };
   }
@@ -145,13 +161,19 @@ export function lineToFlowLine(
     const a = atoms[i]!;
     let text = a.text;
     let j = i + 1;
+    // La fusión por MISMO estilo sigue igual, pero un átomo "pegado" se
+    // concatena SIN el espacio de unión (sigue siendo un solo trazo porque
+    // comparte estilo con `a` — un átomo pegado de OTRO estilo, como una
+    // coma normal tras una palabra en negrita, no se fusiona aquí: rompe el
+    // bucle por estilo distinto y se resuelve más abajo, sin espacio entre
+    // ambos trazos).
     while (j < atoms.length && atoms[j]!.font === a.font && atoms[j]!.sizePt === a.sizePt && sameColor(atoms[j]!.color, a.color)) {
-      text += ' ' + atoms[j]!.text;
+      text += (atoms[j]!.pegado ? '' : ' ') + atoms[j]!.text;
       j++;
     }
     segs.push({ xPt: x, text, font: a.font, sizePt: a.sizePt, color: a.color });
     x += medir(a.font, a.sizePt, text);
-    if (j < atoms.length) x += medir(a.font, a.sizePt, ' ');
+    if (j < atoms.length && !atoms[j]!.pegado) x += medir(a.font, a.sizePt, ' ');
     i = j;
   }
   const anchoNatural = x;
