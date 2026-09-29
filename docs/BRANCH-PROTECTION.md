@@ -14,7 +14,7 @@ Settings → Branches → Add branch protection rule, para `main`:
 - [x] **Require status checks to pass before merging**
   - [x] Require branches to be up to date before merging
   - Check obligatorio: **`CI completo`**
-    (job `ci-ok`, que agrega los cinco del workflow; añadir un job nuevo no
+    (job `ci-ok`, que agrega todos los del workflow; añadir un job nuevo no
     obliga a volver a tocar esta pantalla)
 - [x] **Require conversation resolution before merging**
 - [x] **Do not allow bypassing the above settings** ← imprescindible.

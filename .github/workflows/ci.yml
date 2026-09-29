@@ -2,7 +2,7 @@ name: CI
 
 # Todo lo que impide que un defecto conocido vuelva a main.
 #
-# Los cinco jobs son independientes a propósito: un PR ve de golpe TODO lo que
+# Los seis jobs son independientes a propósito: un PR ve de golpe TODO lo que
 # está mal, no solo el primer fallo. Todos deben ser checks obligatorios en la
 # protección de rama (ver docs/BRANCH-PROTECTION.md).
 
@@ -89,7 +89,33 @@ jobs:
       - name: El CSS compilado corresponde al código
         run: npm run build:check
 
-  # ── 4. Suite E2E en Chromium real ──────────────────────────────────────
+  # ── 4. Tipos y unitarios de la app nueva ───────────────────────────────
+  # src/ (Vite+TS+PDFium): tsc y los unitarios de Vitest (motor PDFium,
+  # comandos, conversores…). npm run verify ya los corre en local; sin este
+  # job, un PR podía romper el motor o los tipos y quedar en verde si ningún
+  # E2E lo pisaba.
+  app-nueva:
+    name: Tipos y unitarios de la app nueva
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+
+      - name: Generar fixtures
+        run: npm run test:fixtures
+
+      - name: Tipos (tsc)
+        run: npm run typecheck
+
+      - name: Unitarios de src/ (Vitest)
+        run: npm run test:unit:src
+
+  # ── 5. Suite E2E en Chromium real ──────────────────────────────────────
   # El corazón del pipeline. Estos defectos son de maquetación, geometría de
   # canvas y composición de PDF: un DOM simulado los deja pasar todos.
   e2e:
@@ -121,7 +147,7 @@ jobs:
           path: playwright-report/
           retention-days: 14
 
-  # ── 5. Higiene del repositorio ─────────────────────────────────────────
+  # ── 6. Higiene del repositorio ─────────────────────────────────────────
   higiene:
     name: Higiene del repo
     runs-on: ubuntu-latest
@@ -191,12 +217,12 @@ jobs:
           echo "Espejos coherentes con el diff."
 
   # ── Puerta única para la protección de rama ────────────────────────────
-  # Un solo check obligatorio que agrega los cinco. Añadir un job nuevo no
+  # Un solo check obligatorio que agrega todos. Añadir un job nuevo no
   # obliga a reconfigurar la protección de la rama.
   ci-ok:
     name: CI completo
     if: always()
-    needs: [reglas, estatico, build, e2e, higiene]
+    needs: [reglas, estatico, build, app-nueva, e2e, higiene]
     runs-on: ubuntu-latest
     steps:
       - name: Verificar que todo pasó
