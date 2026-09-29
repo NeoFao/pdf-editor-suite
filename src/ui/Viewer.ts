@@ -6,9 +6,24 @@ import { ImageLayer } from './ImageLayer';
 import type { PtPoint } from '../coords/PageGeometry';
 import type { RectPt } from '../engine/PdfEngine';
 import { pathMasCercano, normalizeRect, type PathCandidate } from './toolGeometry';
-import { contarRenderPage } from '../diagnostico';
+import { contarRenderPage, fijarPaginasPintadas } from '../diagnostico';
+import { hayGestoEnCurso } from './gesto';
 
 const GAP = 16;
+
+/**
+ * Desalojo de páginas lejanas (E-045, docs/ERRORES-CONOCIDOS.md): el visor
+ * ya era perezoso al PINTAR (`renderVisible` solo renderiza lo visible +
+ * `RENDER_OVERSCAN`), pero `this.rendered` solo CRECÍA — recorrer un
+ * documento de 500 páginas acababa con los 500 `<canvas>` (más su
+ * `TextLayer`, notas, formularios e imágenes) vivos en memoria a la vez. Dos
+ * cotas independientes: un "colchón" de páginas alrededor de lo visible que
+ * NUNCA se desaloja (evita parpadeo en un scroll corto) y un tope duro sobre
+ * el total pintado (para que el colchón mismo no crezca sin límite en un
+ * viewport muy alto o páginas muy pequeñas).
+ */
+const EVICT_OVERSCAN = 6;
+const MAX_PAGINAS_PINTADAS = 12;
 
 /** Herramienta activa del visor: excluyentes entre sí (App.setTool es el único punto de entrada). */
 export type ToolMode = 'none' | 'insert' | 'pen' | 'note' | 'rect' | 'eraser';
@@ -639,6 +654,78 @@ export class Viewer {
       this.renderPage(i);
       this.rendered.add(i);
     }
+    this.evictFarPages();
+    fijarPaginasPintadas(this.rendered.size);
+  }
+
+  /**
+   * Desaloja (vuelve a "sin pintar") las páginas ya renderizadas que han
+   * quedado lejos del viewport — ver el comentario de `EVICT_OVERSCAN`/
+   * `MAX_PAGINAS_PINTADAS` (E-045). Nunca toca la página actual
+   * (`currentPage`) ni la fijada por una navegación explícita (`pinnedPage`,
+   * E-032): si el cálculo por overscan aun así las dejara fuera del
+   * "colchón", se añaden de vuelta a mano.
+   */
+  private evictFarPages(): void {
+    // E-034: nunca desalojar con un gesto en curso en cualquier página
+    // (arrastrar una línea de texto, mover/redimensionar una imagen,
+    // reordenar una miniatura) — destruir el DOM bajo un puntero capturado
+    // rompería el gesto a medias. `hayGestoEnCurso()` es el único punto de
+    // consulta del contador compartido de `src/ui/gesto.ts`.
+    if (hayGestoEnCurso()) return;
+
+    const heights = this.cssHeights();
+    const keep = new Set(visiblePageIndices(heights, GAP, this.root.scrollTop, this.root.clientHeight, EVICT_OVERSCAN));
+    keep.add(this.currentPage);
+    if (this.pinnedPage !== null) keep.add(this.pinnedPage);
+
+    // Tope duro: si el propio "colchón" (visible + overscan grande) ya
+    // supera el máximo — viewport muy alto, páginas muy pequeñas — recorta
+    // por lejanía a la página actual, sin tocar nunca currentPage/pinnedPage.
+    if (keep.size > MAX_PAGINAS_PINTADAS) {
+      const obligatorias = new Set<number>([this.currentPage]);
+      if (this.pinnedPage !== null) obligatorias.add(this.pinnedPage);
+      const resto = Array.from(keep)
+        .filter((i) => !obligatorias.has(i))
+        .sort((a, b) => Math.abs(a - this.currentPage) - Math.abs(b - this.currentPage));
+      const cupo = Math.max(0, MAX_PAGINAS_PINTADAS - obligatorias.size);
+      keep.clear();
+      for (const i of obligatorias) keep.add(i);
+      for (const i of resto.slice(0, cupo)) keep.add(i);
+    }
+
+    for (const i of Array.from(this.rendered)) {
+      if (keep.has(i)) continue;
+      this.evictPage(i);
+    }
+  }
+
+  /**
+   * Descarta el DOM pintado de una página (bitmap del canvas, `TextLayer`,
+   * notas, formularios, imágenes, capa de herramienta) — el wrapper
+   * conserva su `width`/`height` inline (fijados una vez en `layout()`), así
+   * que el alto de scroll del panel no cambia ni un píxel. Al volver a
+   * entrar en el viewport, `renderVisible()` la repinta desde cero, como la
+   * primera vez.
+   *
+   * Tres excepciones — nunca se desaloja una página con estado vivo que se
+   * perdería:
+   * - una `.run` en edición (`contentEditable`): el texto a medio escribir
+   *   se perdería sin pasar por `EditTextRunCmd`.
+   * - una imagen seleccionada (`selectedImage`): sus tiradores quedarían
+   *   huérfanos.
+   * - un gesto de pluma/rectángulo en curso (`attachToolCapture` no pasa
+   *   por `registrarGesto`, así que `hayGestoEnCurso()` no lo cubre — se
+   *   detecta por la vista previa que deja en el DOM mientras dibuja).
+   */
+  private evictPage(i: number): void {
+    const wrapper = this.wrappers[i];
+    if (!wrapper) return;
+    if (wrapper.querySelector('.run.editing')) return;
+    if (this.selectedImage?.pageIndex === i) return;
+    if (wrapper.querySelector('.tool-layer > canvas, .tool-layer > .rect-preview')) return;
+    wrapper.textContent = '';
+    this.rendered.delete(i);
   }
 
   private renderPage(i: number): void {

@@ -110,3 +110,106 @@ test.describe('documento grande (500 páginas): apertura y comandos perezosos', 
     await expect(page.locator('.search-hl').first()).toBeVisible();
   });
 });
+
+type Diagnostico = { renderPage: number; getPageText: number; paginasPintadas: number };
+const leerDiagnostico = () => (window as unknown as { __diagnostico: Diagnostico }).__diagnostico;
+
+/**
+ * Recorre `#viewer` de arriba abajo (o abajo a arriba) en `pasos` tramos,
+ * fijando `scrollTop` directamente (dispara el evento nativo 'scroll' del
+ * navegador en cada paso, igual que un scroll real) y dejando un respiro
+ * entre tramos para que `Viewer.renderVisible()`/`evictFarPages()`
+ * reaccionen — "saltos... esperando a que pinte cada tramo" del encargo.
+ * No usa clic en miniaturas a propósito: un clic en otra parte del
+ * documento dispara `blur` sobre cualquier `.run` en edición, lo que
+ * confundiría el test de "una edición en curso no se desaloja" de más abajo.
+ */
+async function recorrerViewer(page: import('@playwright/test').Page, pasos: number, direccion: 1 | -1 = 1): Promise<void> {
+  await page.evaluate(
+    async ({ pasos, direccion }) => {
+      const el = document.getElementById('viewer')!;
+      const max = el.scrollHeight - el.clientHeight;
+      for (let i = 1; i <= pasos; i++) {
+        const frac = direccion === 1 ? i / pasos : 1 - i / pasos;
+        el.scrollTop = Math.round(max * frac);
+        el.dispatchEvent(new Event('scroll'));
+        await new Promise((r) => setTimeout(r, 30));
+      }
+    },
+    { pasos, direccion }
+  );
+}
+
+/**
+ * E-045 (docs/ERRORES-CONOCIDOS.md): el visor ya era perezoso al PINTAR
+ * (E-043: `renderVisible()` solo renderiza lo visible), pero `Viewer.rendered`
+ * solo CRECÍA — nada desalojaba una página que salía de la vista. Recorrer
+ * un documento de 500 páginas dejaba los 500 `<canvas>` (bitmap RGBA
+ * completo) vivos en memoria a la vez.
+ */
+test.describe('documento grande: desalojo de páginas lejanas del visor (E-045)', () => {
+  test('recorrer las 500 páginas mantiene acotado el nº de páginas pintadas a la vez', async ({ page }) => {
+    await page.goto('/index.next.html?diagnostico=1');
+    await page.locator('#file-input').setInputFiles(GRANDE);
+    await expect(page.locator('.run').first()).toBeVisible();
+
+    await recorrerViewer(page, 20, 1); // de la página 1 a la 500, en 20 tramos
+    await expect(page.getByText('Pagina 500', { exact: true })).toBeVisible();
+
+    const diag = await page.evaluate(leerDiagnostico);
+    expect(diag.paginasPintadas).toBeGreaterThan(0);
+    expect(diag.paginasPintadas).toBeLessThanOrEqual(12);
+
+    // Cotejo estructural independiente del propio contador: el nº de
+    // <canvas> del visor principal (sin contar miniaturas) tiene que
+    // coincidir con ese aforo — cada página desalojada quita su <canvas> del DOM.
+    const canvasesViewer = await page.locator('#viewer canvas:not(.thumb)').count();
+    expect(canvasesViewer).toBeLessThanOrEqual(12);
+  });
+
+  test('volver a la página 1 tras recorrer el documento la repinta y su capa de texto sigue funcionando', async ({ page }) => {
+    await page.goto('/index.next.html?diagnostico=1');
+    await page.locator('#file-input').setInputFiles(GRANDE);
+    await expect(page.locator('.run').first()).toBeVisible();
+
+    await recorrerViewer(page, 20, 1);
+    await expect(page.getByText('Pagina 500', { exact: true })).toBeVisible();
+    // Mismo aforo que el test anterior: si nada desaloja, esto ya falla aquí.
+    expect((await page.evaluate(leerDiagnostico)).paginasPintadas).toBeLessThanOrEqual(12);
+    await recorrerViewer(page, 20, -1); // de vuelta a la página 1
+
+    const primeraLinea = page.getByText('Pagina 1', { exact: true });
+    await expect(primeraLinea).toBeVisible();
+    await primeraLinea.click();
+    await expect(primeraLinea).toHaveClass(/editing/);
+  });
+
+  test('una página con una edición sin terminar no se desaloja al desplazarse lejos y volver', async ({ page }) => {
+    await page.goto('/index.next.html?diagnostico=1');
+    await page.locator('#file-input').setInputFiles(GRANDE);
+    await expect(page.locator('.run').first()).toBeVisible();
+
+    const primeraLinea = page.getByText('Pagina 1', { exact: true });
+    await primeraLinea.click();
+    await expect(primeraLinea).toHaveClass(/editing/);
+    await page.keyboard.type('-SIN-GUARDAR'); // deja la edición A MEDIAS, sin blur
+
+    await recorrerViewer(page, 20, 1); // scroll lejos, SIN clic (no dispara blur)
+    await expect(page.getByText('Pagina 500', { exact: true })).toBeVisible();
+    // El resto del documento SÍ se desaloja con normalidad (el aforo se
+    // mantiene acotado); la excepción es solo la página en edición.
+    expect((await page.evaluate(leerDiagnostico)).paginasPintadas).toBeLessThanOrEqual(12);
+
+    await recorrerViewer(page, 20, -1); // scroll de vuelta
+
+    // El mismo bloque sigue en edición, con el texto a medias intacto: no se
+    // desalojó (y por tanto no se destruyó) mientras tenía foco/edición viva.
+    // (No se asume en qué posición quedó el cursor al escribir: solo que
+    // ambos fragmentos siguen ahí, no que el original se perdiera.)
+    const bloqueEnEdicion = page.locator('.run.editing');
+    await expect(bloqueEnEdicion).toHaveCount(1);
+    const texto = (await bloqueEnEdicion.textContent()) ?? '';
+    expect(texto).toContain('Pagina 1');
+    expect(texto).toContain('SIN-GUARDAR');
+  });
+});

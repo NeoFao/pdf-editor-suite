@@ -37,6 +37,24 @@ export interface OpcionesGesto {
 }
 
 /**
+ * Nº de gestos armados por `registrarGesto()` que siguen sin resolverse
+ * (ni `onUp` ni `onCancel` ni el terminador manual). Único contador
+ * compartido de "hay un arrastre en curso en algún sitio" — lo consulta
+ * `hayGestoEnCurso()` (E-045, docs/ERRORES-CONOCIDOS.md): el desalojo de
+ * páginas lejanas del visor (`Viewer.evictFarPages`) no puede destruir el
+ * DOM de una página mientras el usuario la está arrastrando (arrastrar una
+ * línea de texto, mover/redimensionar una imagen, reordenar una miniatura —
+ * los tres pasan por aquí), porque eso rompería el gesto a medias (foco/
+ * captura de puntero sobre un nodo ya desconectado). Vive en este fichero
+ * porque es el ÚNICO sitio permitido para enganchar pointermove/pointerup/
+ * pointercancel (regla `gesto-con-cancelacion`) — cualquier otro sitio que
+ * necesite "¿hay un gesto activo?" pregunta aquí, no vuelve a enganchar sus
+ * propios listeners.
+ */
+let gestosActivos = 0;
+export function hayGestoEnCurso(): boolean { return gestosActivos > 0; }
+
+/**
  * Arma un gesto y devuelve una función para darlo por terminado desde
  * fuera SIN invocar `onCancel` ni `onUp` (limpieza silenciosa; no la usa
  * ningún llamante actual, pero cierra el caso "el componente se destruye a
@@ -45,12 +63,14 @@ export interface OpcionesGesto {
 export function registrarGesto(opts: OpcionesGesto): () => void {
   const target = opts.target ?? window;
   let activo = true;
+  gestosActivos++;
 
   const quitarListeners = (): void => {
     target.removeEventListener('pointermove', onMove as EventListener);
     target.removeEventListener('pointerup', onUp as EventListener);
     target.removeEventListener('pointercancel', onCancel as EventListener);
     if (opts.cancelarConEscape) window.removeEventListener('keydown', onKeyDown);
+    gestosActivos--;
   };
 
   const onMove = (e: Event): void => {
