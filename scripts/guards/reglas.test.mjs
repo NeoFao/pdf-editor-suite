@@ -342,6 +342,34 @@ describe('webserver-next-no-reusar', () => {
   });
 });
 
+describe('gesto-con-cancelacion', () => {
+  const regla = detectarEn('gesto-con-cancelacion');
+  const patron = /\b(window|document)\.addEventListener\(\s*['"](pointermove|pointerup|pointercancel)['"]/;
+
+  test('detecta el patrón exacto de E-034: pointerup de window enganchado a mano', () => {
+    const linea = "      window.addEventListener('pointerup', onUp);";
+    assert.match(linea, patron);
+    assert.ok(regla.comoArreglar.includes('registrarGesto'));
+  });
+
+  test('detecta document.addEventListener para pointercancel igual que para window', () => {
+    assert.match("document.addEventListener('pointercancel', cancelar);", patron);
+  });
+
+  test('no señala un pointerup de un elemento normal (no window/document)', () => {
+    assert.doesNotMatch("    canvas.addEventListener('pointerup', stop);", patron);
+  });
+
+  test('no señala otros tipos de evento de window (scroll, keydown, wheel)', () => {
+    assert.doesNotMatch("window.addEventListener('keydown', onKeyDown);", patron);
+    assert.doesNotMatch("window.addEventListener('scroll', onScroll);", patron);
+  });
+
+  test('sobre el repo real no encuentra nada: todo gesto pasa por registrarGesto() salvo el propio helper', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega

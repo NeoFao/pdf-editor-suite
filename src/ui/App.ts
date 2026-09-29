@@ -15,6 +15,8 @@ import { MovePageCmd } from '../commands/MovePage';
 import { InsertPdfCmd } from '../commands/InsertPdf';
 import { DuplicatePageCmd } from '../commands/DuplicatePage';
 import { InsertImageCmd } from '../commands/InsertImage';
+import { SetObjectRectCmd } from '../commands/SetObjectRect';
+import { DeleteObjectCmd } from '../commands/DeleteObject';
 import { AddNoteCmd } from '../commands/AddNote';
 import { SetFormTextCmd } from '../commands/SetFormText';
 import { SetFormCheckedCmd } from '../commands/SetFormChecked';
@@ -27,6 +29,8 @@ import { DrawStrokeCmd } from '../commands/DrawStroke';
 import { OcrPageCmd } from '../commands/OcrPage';
 import { TesseractOcr } from '../ocr/TesseractOcr';
 import { SignaturePad } from './SignaturePad';
+import { quitarFondo } from './quitarFondo';
+import { registrarGesto } from './gesto';
 import { parseRange } from './pageRange';
 import { Viewer } from './Viewer';
 import type { EditRequest } from './TextLayer';
@@ -45,6 +49,8 @@ export class App {
   private penMode = false;
   private noteMode = false;
   private selection: { pageIndex: number; runId: number } | null = null;
+  /** Imagen seleccionada en el marco interactivo (sello/firma, #20/#21), o null. Mutuamente excluyente con `selection`. */
+  private selectedImage: { pageIndex: number; objIndex: number } | null = null;
   /**
    * Nombre de la fuente estándar aplicada explícitamente desde `#prop-font`
    * a la selección ACTUAL, o `null` si no se ha tocado (o si cambió la
@@ -101,6 +107,13 @@ export class App {
     const btnUnderline = this.button('Subrayar', 'btn-underline', () => this.underlineSelected());
     const btnStrike = this.button('Tachar', 'btn-strike', () => this.strikeSelected());
     const btnSign = this.button('Firmar', 'btn-sign', () => this.openSignature());
+    const signUpload = document.createElement('input');
+    signUpload.type = 'file'; signUpload.accept = 'image/*'; signUpload.id = 'btn-sign-upload';
+    signUpload.title = 'Firma desde imagen (quita el fondo blanco automáticamente)';
+    signUpload.addEventListener('change', () => {
+      const f = signUpload.files?.[0];
+      if (f) void this.handleSignUpload(f).finally(() => { signUpload.value = ''; });
+    });
     this.btnPen = this.button('Pluma', 'btn-pen', () => this.togglePen());
     this.btnNote = this.button('Nota', 'btn-note', () => this.toggleNote());
     this.btnOcr = this.button('OCR', 'btn-ocr', () => void this.runOcr());
@@ -181,7 +194,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, btnNew, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, this.btnPen, this.btnNote, this.btnOcr, this.propsPanel, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnFitWidth, btnExtract, this.rangeInput, btnSplit, btnSave, btnPrint, btnUndo, btnRedo, this.status);
+    bar.append(file, btnNew, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, signUpload, this.btnPen, this.btnNote, this.btnOcr, this.propsPanel, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnFitWidth, btnExtract, this.rangeInput, btnSplit, btnSave, btnPrint, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -230,6 +243,14 @@ export class App {
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); void this.bus?.undo(); }
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); void this.bus?.redo(); }
+      // Suprimir/Retroceso con una imagen seleccionada (#20/#21): solo si el
+      // foco no está en un campo editable (contenteditable de un run, un
+      // <input>/<textarea>/<select>) — si no, Backspace tendría que borrar
+      // un carácter ahí, no la imagen.
+      if ((e.key === 'Delete' || e.key === 'Backspace') && this.selectedImage && !this.isEditableTarget(e.target)) {
+        e.preventDefault();
+        void this.deleteSelectedImage();
+      }
     });
 
     // Arrastrar y soltar un fichero (PDF o imagen) sobre la ventana entera.
@@ -336,6 +357,7 @@ export class App {
     this.session = await EditSession.open(engine, bytes);
     this.bus = new CommandBus(this.session);
     this.selection = null;
+    this.selectedImage = null;
     this.reflectPropsPanel();
     this.insertMode = false; this.penMode = false; this.noteMode = false;
     this.btnInsert.style.background = ''; this.btnPen.style.background = ''; this.btnNote.style.background = '';
@@ -343,8 +365,22 @@ export class App {
     this.scale = 1;
     this.viewer = new Viewer(this.viewerEl, this.session, {
       onEdit: (req) => this.handleEdit(req),
-      onSelect: (pageIndex, runId) => { this.selection = { pageIndex, runId }; this.appliedFontLabel = null; this.reflectPropsPanel(); },
-      onBackgroundClick: (pageIndex, at) => { this.handleBackgroundClick(pageIndex, at); },
+      onSelect: (pageIndex, runId) => {
+        this.selection = { pageIndex, runId };
+        this.appliedFontLabel = null;
+        this.selectedImage = null; // selección mutuamente excluyente con una imagen
+        this.reflectPropsPanel();
+      },
+      onBackgroundClick: (pageIndex, at) => { this.selectedImage = null; this.handleBackgroundClick(pageIndex, at); },
+      onImageSelect: (pageIndex, objIndex) => {
+        this.selectedImage = { pageIndex, objIndex };
+        this.selection = null; // selección mutuamente excluyente con una línea de texto
+        this.reflectPropsPanel();
+      },
+      onImageChangeRect: (pageIndex, objIndex, newRectPt, oldRectPt) => {
+        void this.bus?.execute(new SetObjectRectCmd(pageIndex, objIndex, newRectPt, oldRectPt));
+        this.setStatus('Imagen movida/redimensionada.');
+      },
       onMove: (pageIndex, runId, dxPt, dyPt) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt)); },
       onPageChange: (i) => { this.currentPage = i; this.updateIndicator(); this.setActiveThumb(i); },
       onStroke: (pageIndex, points) => { void this.bus?.execute(new DrawStrokeCmd(pageIndex, points)); this.setStatus('Trazo dibujado.'); },
@@ -419,6 +455,17 @@ export class App {
   private reconcileSelectionAfterReload(): void {
     this.appliedFontLabel = null;
     if (this.selection && !this.selectedRun()) this.selection = null;
+    // Igual criterio para una imagen seleccionada: una operación de página
+    // puede haber renumerado páginas u objetos; si ya no existe, se limpia
+    // en vez de dejarla apuntando por casualidad a otra imagen (E-032, mismo
+    // principio que la reconciliación de `selection` de arriba).
+    if (this.selectedImage && this.session) {
+      const pageValida = this.selectedImage.pageIndex < this.session.model.pages.length;
+      const sigueExistiendo = pageValida && this.session.engine
+        .listImageObjects(this.session.doc, this.selectedImage.pageIndex)
+        .some((im) => im.objIndex === this.selectedImage!.objIndex);
+      if (!sigueExistiendo) { this.selectedImage = null; this.viewer?.deselectImage(); }
+    }
     this.reflectPropsPanel();
   }
 
@@ -481,6 +528,23 @@ export class App {
     this.reflectPropsPanel();
     await this.bus.execute(new DeleteRunCmd(pageIndex, runId));
     this.setStatus('Línea borrada del documento.');
+  }
+
+  /** true si `target` es un campo donde Backspace/Delete deben editar texto, no borrar la imagen seleccionada. */
+  private isEditableTarget(target: EventTarget | null): boolean {
+    const el = target as HTMLElement | null;
+    if (!el) return false;
+    if (el.isContentEditable) return true;
+    return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT';
+  }
+
+  private async deleteSelectedImage(): Promise<void> {
+    if (!this.bus || !this.selectedImage) return;
+    const { pageIndex, objIndex } = this.selectedImage;
+    this.selectedImage = null;
+    this.viewer?.deselectImage();
+    await this.bus.execute(new DeleteObjectCmd(pageIndex, objIndex));
+    this.setStatus('Imagen borrada.');
   }
 
   private selectedRun() {
@@ -596,6 +660,38 @@ export class App {
       void this.bus!.execute(new InsertImageCmd(this.currentPage, { rgba, imgWidth, imgHeight, xPt, yPt, wPt, hPt }));
       this.setStatus('Firma insertada.');
     });
+  }
+
+  /**
+   * `#btn-sign-upload`: firma subiendo una imagen (#20 de la tabla de
+   * paridad). Decodifica con el mismo `decodeImage` que el resto de flujos
+   * de imagen, le quita el fondo casi blanco (`quitarFondo`, umbral por
+   * defecto) para que la firma quede con transparencia real (el motor SÍ
+   * conserva el canal alfa al insertar, ver `PdfiumEngine.insertImage`) y la
+   * inserta centrada, con el mismo ancho razonable que la firma dibujada
+   * (180pt, alto proporcional). Queda seleccionada para reposicionarla.
+   */
+  private async handleSignUpload(file: File): Promise<void> {
+    const s = this.session;
+    if (!s || !this.bus) return;
+    const { rgba, width, height } = await this.decodeImage(file);
+    const limpio = quitarFondo(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength));
+    const page = s.model.pages[this.currentPage]!;
+    const wPt = Math.min(page.sizePt.widthPt * 0.4, 180);
+    const hPt = wPt * (height / width);
+    const xPt = (page.sizePt.widthPt - wPt) / 2;
+    const yPt = page.sizePt.heightPt * 0.15;
+    await this.bus.execute(new InsertImageCmd(this.currentPage, {
+      rgba: new Uint8Array(limpio.buffer, limpio.byteOffset, limpio.byteLength),
+      imgWidth: width, imgHeight: height, xPt, yPt, wPt, hPt
+    }));
+    const imagenes = s.engine.listImageObjects(s.doc, this.currentPage);
+    const insertada = imagenes.reduce((max, im) => (im.objIndex > max.objIndex ? im : max), imagenes[0]!);
+    this.selectedImage = { pageIndex: this.currentPage, objIndex: insertada.objIndex };
+    this.selection = null;
+    this.reflectPropsPanel();
+    this.viewer?.selectImage(this.currentPage, insertada.objIndex);
+    this.setStatus('Firma insertada desde imagen (fondo quitado).');
   }
 
   private highlightSelected(): void {
@@ -826,10 +922,12 @@ export class App {
   /**
    * Arrastrar y soltar una miniatura para reordenar páginas, al estilo
    * Acrobat. Pointer events (no la API HTML5 `draggable`), para que funcione
-   * también en táctil — mismo patrón que `TextLayer.makeDragHandle`: los
-   * listeners globales se añaden al empezar el gesto y se retiran SIEMPRE al
-   * terminar (soltar, Escape, o clic secundario nunca llega aquí), nunca se
-   * acumulan (E-014, E-020).
+   * también en táctil — registrados por `registrarGesto` (`src/ui/gesto.ts`),
+   * que también trata `pointercancel` como cancelación (E-034: un gesto
+   * táctil interrumpido por el scroll del sistema, o la pérdida de la
+   * captura del puntero, nunca entrega `pointerup` — sin esto los listeners
+   * de `window` quedaban colgados para siempre y la miniatura se quedaba
+   * atenuada con el indicador de inserción a medio poner).
    *
    * Umbral de `UMBRAL_ARRASTRE_PX` para distinguir clic (navegar) de
    * arrastre (reordenar): por debajo del umbral no pasa nada y el 'click'
@@ -841,10 +939,12 @@ export class App {
    * `pointermove` a partir del punto medio vertical de cada miniatura, nunca
    * moviendo la miniatura real: la reordenación solo se aplica al soltar.
    *
-   * Al soltar, se ejecuta UN único `MovePageCmd(from, to)` (deshacible) y
-   * `currentPage` pasa a ser la página movida en su nueva posición — vía
-   * `goToPage()` (regla `navegacion-por-gotopage`), nunca llamando a
-   * `scrollToPage` aquí directamente.
+   * Al soltar con normalidad, se ejecuta UN único `MovePageCmd(from, to)`
+   * (deshacible) y `currentPage` pasa a ser la página movida en su nueva
+   * posición — vía `goToPage()` (regla `navegacion-por-gotopage`), nunca
+   * llamando a `scrollToPage` aquí directamente. Cancelado (Escape, ya
+   * existía; o `pointercancel`, E-034): solo se deshace la vista previa
+   * (clase e indicador), nunca se ejecuta `MovePageCmd`.
    */
   private beginThumbDrag(
     canvas: HTMLCanvasElement,
@@ -868,56 +968,48 @@ export class App {
       else this.thumbsEl.insertBefore(indicator, hijas[target]!);
     };
 
-    const limpiar = (): void => {
-      window.removeEventListener('pointermove', onMove);
-      window.removeEventListener('pointerup', onUp);
-      window.removeEventListener('keydown', onKeyDown);
+    const limpiarVistaPrevia = (): void => {
       canvas.classList.remove('thumb-dragging');
       indicator?.remove();
       indicator = null;
     };
 
-    const onMove = (ev: PointerEvent): void => {
-      const dx = ev.clientX - startX, dy = ev.clientY - startY;
-      if (!dragging) {
-        if (Math.hypot(dx, dy) < UMBRAL_ARRASTRE_PX) return;
-        dragging = true;
-        onDragLejos(true);
-        canvas.classList.add('thumb-dragging');
-        indicator = document.createElement('div');
-        indicator.className = 'thumb-drop-indicator';
-        this.thumbsEl.appendChild(indicator);
+    registrarGesto({
+      cancelarConEscape: true,
+      onMove: (ev) => {
+        const dx = ev.clientX - startX, dy = ev.clientY - startY;
+        if (!dragging) {
+          if (Math.hypot(dx, dy) < UMBRAL_ARRASTRE_PX) return;
+          dragging = true;
+          onDragLejos(true);
+          canvas.classList.add('thumb-dragging');
+          indicator = document.createElement('div');
+          indicator.className = 'thumb-drop-indicator';
+          this.thumbsEl.appendChild(indicator);
+        }
+        const hijas = miniaturas();
+        let nuevoTarget = hijas.length;
+        for (let i = 0; i < hijas.length; i++) {
+          const rect = hijas[i]!.getBoundingClientRect();
+          if (ev.clientY < rect.top + rect.height / 2) { nuevoTarget = i; break; }
+        }
+        if (nuevoTarget !== target) { target = nuevoTarget; posicionarIndicador(); }
+      },
+      onUp: () => {
+        const huboArrastre = dragging;
+        const destino = target;
+        limpiarVistaPrevia();
+        if (!huboArrastre || destino === null) return;
+        // Soltar justo donde ya estaba (antes o justo después de sí misma): no-op.
+        if (destino === sourceIndex || destino === sourceIndex + 1) return;
+        const to = destino > sourceIndex ? destino - 1 : destino;
+        void this.commitReorder(sourceIndex, to);
+      },
+      onCancel: () => {
+        // Escape o pointercancel (E-034): ningún MovePageCmd, solo se deshace la vista previa.
+        limpiarVistaPrevia();
       }
-      const hijas = miniaturas();
-      let nuevoTarget = hijas.length;
-      for (let i = 0; i < hijas.length; i++) {
-        const rect = hijas[i]!.getBoundingClientRect();
-        if (ev.clientY < rect.top + rect.height / 2) { nuevoTarget = i; break; }
-      }
-      if (nuevoTarget !== target) { target = nuevoTarget; posicionarIndicador(); }
-    };
-
-    const onUp = (): void => {
-      const huboArrastre = dragging;
-      const destino = target;
-      limpiar();
-      if (!huboArrastre || destino === null) return;
-      // Soltar justo donde ya estaba (antes o justo después de sí misma): no-op.
-      if (destino === sourceIndex || destino === sourceIndex + 1) return;
-      const to = destino > sourceIndex ? destino - 1 : destino;
-      void this.commitReorder(sourceIndex, to);
-    };
-
-    const onKeyDown = (ev: KeyboardEvent): void => {
-      if (ev.key !== 'Escape' || !dragging) return;
-      limpiar();
-      dragging = false;
-      target = null;
-    };
-
-    window.addEventListener('pointermove', onMove);
-    window.addEventListener('pointerup', onUp);
-    window.addEventListener('keydown', onKeyDown);
+    });
   }
 
   /** Aplica el reordenamiento (un único MovePageCmd) y sigue a la página movida. */

@@ -2,6 +2,7 @@ import type { PageModel } from '../model/types';
 import type { PageGeometry } from '../coords/PageGeometry';
 import { cssFontFor } from './cssFontFor';
 import { measureFontAscent } from './measureFontAscent';
+import { registrarGesto } from './gesto';
 
 export interface EditRequest { pageIndex: number; runId: number; newText: string; oldText: string; el: HTMLElement }
 export interface TextLayerCallbacks {
@@ -158,7 +159,13 @@ export class TextLayer {
     }
   }
 
-  /** Tirador para arrastrar el bloque; dispara onMove al soltar. */
+  /**
+   * Tirador para arrastrar el bloque; dispara onMove al soltar. Cancelado
+   * (pointercancel — E-034, ver `registrarGesto`): restaura la posición de
+   * reposo del bloque en el propio DOM y no dispara `onMove` — nada que
+   * deshacer en el motor porque `onMove` es lo único que llega a ejecutar
+   * un comando.
+   */
   private makeDragHandle(block: HTMLElement, runId: number): HTMLElement {
     const handle = document.createElement('div');
     handle.className = 'run-drag';
@@ -173,18 +180,20 @@ export class TextLayer {
       const startX = e.clientX, startY = e.clientY;
       const baseLeft = parseFloat(block.style.left) || 0;
       const baseTop = parseFloat(block.style.top) || 0;
-      const onMove = (ev: PointerEvent): void => {
-        block.style.left = `${baseLeft + (ev.clientX - startX)}px`;
-        block.style.top = `${baseTop + (ev.clientY - startY)}px`;
-      };
-      const onUp = (ev: PointerEvent): void => {
-        window.removeEventListener('pointermove', onMove);
-        window.removeEventListener('pointerup', onUp);
-        const dx = ev.clientX - startX, dy = ev.clientY - startY;
-        if (dx !== 0 || dy !== 0) this.cb.onMove(this.page.index, runId, dx, dy);
-      };
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp);
+      registrarGesto({
+        onMove: (ev) => {
+          block.style.left = `${baseLeft + (ev.clientX - startX)}px`;
+          block.style.top = `${baseTop + (ev.clientY - startY)}px`;
+        },
+        onUp: (ev) => {
+          const dx = ev.clientX - startX, dy = ev.clientY - startY;
+          if (dx !== 0 || dy !== 0) this.cb.onMove(this.page.index, runId, dx, dy);
+        },
+        onCancel: () => {
+          block.style.left = `${baseLeft}px`;
+          block.style.top = `${baseTop}px`;
+        }
+      });
     });
     return handle;
   }

@@ -34,6 +34,13 @@ export class SignaturePad {
     const stop = (): void => { drawing = false; };
     canvas.addEventListener('pointerup', stop);
     canvas.addEventListener('pointerleave', stop);
+    // E-034: un pointercancel (gesto táctil interrumpido) sin esto dejaba
+    // `drawing` en true para siempre; el trazo seguiría "pegado" al cursor
+    // en el próximo pointermove que sí llegara, aunque el botón/dedo ya no
+    // estuviera realmente presionando. Los listeners de este pad son del
+    // propio <canvas> (no de window/document): viven y mueren con el modal,
+    // así que no hay fuga de listeners que limpiar, solo este estado.
+    canvas.addEventListener('pointercancel', stop);
 
     const barra = document.createElement('div');
     Object.assign(barra.style, { display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'flex-end' });

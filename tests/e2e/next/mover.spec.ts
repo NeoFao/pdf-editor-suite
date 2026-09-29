@@ -44,3 +44,47 @@ test('mover: arrastrar una línea cambia su posición en el PDF descargado', asy
   expect(Math.abs(run2.boxPt.yPt - 150)).toBeLessThan(12);
   eng.close(doc);
 });
+
+// E-034 (docs/ERRORES-CONOCIDOS.md): un pointercancel a mitad de arrastre
+// (gesto táctil interrumpido, pérdida de la captura del puntero...) debe
+// restaurar la posición de reposo del bloque y NO ejecutar MoveRunCmd.
+test('E-034: pointercancel al arrastrar el tirador de una línea restaura su posición y deja de seguir el cursor', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(FIXTURE);
+  const run = page.locator('.run', { hasText: 'ORIGINAL-TIMES' });
+  await expect(run).toBeVisible();
+
+  const handle = run.locator('.run-drag');
+  const b = (await handle.boundingBox())!;
+  const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
+  const posAntes = (await run.boundingBox())!;
+
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 80, cy, { steps: 6 });
+
+  const posDurante = (await run.boundingBox())!;
+  expect(posDurante.x - posAntes.x).toBeGreaterThan(30);
+
+  await page.evaluate(() => window.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, cancelable: true, pointerId: 1 })));
+
+  const posTrasCancel = (await run.boundingBox())!;
+  expect(Math.abs(posTrasCancel.x - posAntes.x)).toBeLessThan(2);
+
+  // Un pointermove posterior ya no mueve el bloque: el listener se retiró con el cancel.
+  await page.mouse.move(cx + 200, cy, { steps: 4 });
+  const posFinal = (await run.boundingBox())!;
+  expect(Math.abs(posFinal.x - posAntes.x)).toBeLessThan(2);
+
+  await page.mouse.up();
+
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#btn-save').click()]);
+  const destino = path.join(test.info().outputDir, 'cancel-no-mueve.pdf');
+  await download.saveAs(destino);
+  const eng = await PdfiumEngine.create();
+  const doc = await eng.open(new Uint8Array(fs.readFileSync(destino)));
+  const run2 = eng.getPageText(doc, 0).find((r) => r.text.includes('ORIGINAL-TIMES'))!;
+  // Igual que el original (x=40): ningún MoveRunCmd llegó a ejecutarse.
+  expect(Math.abs(run2.boxPt.xPt - 40)).toBeLessThan(2);
+  eng.close(doc);
+});

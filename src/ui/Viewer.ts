@@ -2,6 +2,7 @@ import { PageGeometry } from '../coords/PageGeometry';
 import type { EditSession } from '../model/EditSession';
 import { visiblePageIndices } from './layout';
 import { TextLayer, type EditRequest } from './TextLayer';
+import { ImageLayer } from './ImageLayer';
 import type { PtPoint } from '../coords/PageGeometry';
 import type { RectPt } from '../engine/PdfEngine';
 
@@ -22,6 +23,10 @@ export interface ViewerCallbacks {
   onFormChoice?: (pageIndex: number, annotIndex: number, values: string[]) => void;
   /** Widget de un grupo de radio marcado. */
   onFormRadio?: (pageIndex: number, annotIndex: number) => void;
+  /** Clic (sin arrastre) sobre el marco de una imagen: la selecciona. */
+  onImageSelect?: (pageIndex: number, objIndex: number) => void;
+  /** Fin de un gesto de mover/redimensionar una imagen: rect final en puntos PDF. */
+  onImageChangeRect?: (pageIndex: number, objIndex: number, newRectPt: RectPt, oldRectPt: RectPt) => void;
 }
 
 /** Renderiza páginas visibles (canvas del motor) con su capa de texto encima. */
@@ -61,6 +66,14 @@ export class Viewer {
   /** Respaldo de `scrollend` (no todos los navegadores lo emiten todavía) y red de seguridad para cuando el scroll programático no mueve nada. */
   private scrollEndFallback: ReturnType<typeof setTimeout> | null = null;
   private penMode = false;
+  /**
+   * Imagen actualmente seleccionada (marco con tiradores, #20/#21), o `null`.
+   * Igual que la selección de un run (ver `TextLayer`/`App.selection`), no
+   * sobrevive a un `rebuild()` completo salvo que se reafirme explícitamente
+   * con `selectImage()` — lo hace `App` tras insertar una firma desde
+   * imagen, para que quede lista para reposicionarla sin un segundo clic.
+   */
+  private selectedImage: { pageIndex: number; objIndex: number } | null = null;
 
   constructor(
     private readonly root: HTMLElement,
@@ -134,6 +147,29 @@ export class Viewer {
     this.programmaticScroll = true;
     this.armScrollEndFallback();
     this.wrappers[i]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+  }
+
+  /**
+   * Selecciona una imagen sin reconstruir la página: la página ya tiene el
+   * DOM fresco (llamar justo después de un comando que ya disparó
+   * `c.refresh()`, p. ej. insertar una firma desde imagen), así que basta
+   * alternar la clase `.selected` sobre los `.image-box` ya presentes.
+   */
+  selectImage(pageIndex: number, objIndex: number): void {
+    this.selectedImage = { pageIndex, objIndex };
+    const wrapper = this.wrappers[pageIndex];
+    if (!wrapper) return;
+    for (const el of Array.from(wrapper.querySelectorAll<HTMLElement>('.image-box'))) {
+      el.classList.toggle('selected', el.dataset.objIndex === String(objIndex));
+    }
+  }
+
+  /** Deselecciona cualquier imagen (clic fuera del marco). */
+  deselectImage(): void {
+    this.selectedImage = null;
+    for (const w of this.wrappers) {
+      w.querySelectorAll('.image-box.selected').forEach((el) => el.classList.remove('selected'));
+    }
   }
 
   /** Activa/desactiva el modo pluma (la capa de dibujo captura el puntero). */
@@ -390,6 +426,39 @@ export class Viewer {
     wrapper.appendChild(layer);
   }
 
+  /**
+   * Marcos interactivos de las imágenes de la página (sello/firma
+   * insertados, #20/#21). Se leen del motor, no del modelo (igual que
+   * `drawNotes`/`drawFormFields`: no forman parte de `DocumentModel`). El
+   * `.image-box` en reposo es invisible (sin borde, ver CSS en
+   * index.next.html) — no interfiere con la prueba de oro de píxeles de
+   * `fidelidad-reposo.spec.ts` (E-029) ni con la capa de texto.
+   */
+  private drawImages(i: number): void {
+    const wrapper = this.wrappers[i];
+    if (!wrapper) return;
+    wrapper.querySelector('.image-layer')?.remove();
+    const images = this.session.engine.listImageObjects(this.session.doc, i);
+    if (images.length === 0) return;
+    const geom = this.geoms[i]!;
+    const layer = document.createElement('div');
+    layer.className = 'image-layer';
+    Object.assign(layer.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
+    const selectedHere = this.selectedImage && this.selectedImage.pageIndex === i ? this.selectedImage.objIndex : null;
+    new ImageLayer(layer, i, images, geom, {
+      onSelect: (pageIndex, objIndex) => {
+        this.selectedImage = { pageIndex, objIndex };
+        // Selección mutuamente excluyente con la de una línea de texto (ver TextLayer).
+        wrapper.querySelectorAll('.run.selected').forEach((el) => el.classList.remove('selected'));
+        this.cb.onImageSelect?.(pageIndex, objIndex);
+      },
+      onChangeRect: (pageIndex, objIndex, newRectPt, oldRectPt) => {
+        this.cb.onImageChangeRect?.(pageIndex, objIndex, newRectPt, oldRectPt);
+      }
+    }, selectedHere);
+    wrapper.appendChild(layer);
+  }
+
   private rebuild(): void {
     this.root.textContent = '';
     this.wrappers = [];
@@ -421,9 +490,12 @@ export class Viewer {
         width: `${page.sizePt.widthPt * this.scale}px`,
         height: `${page.sizePt.heightPt * this.scale}px`
       });
-      // Clic en el fondo (no en un run) → insertar en ese punto.
+      // Clic en el fondo (no en un run ni en el marco de una imagen) → insertar en ese punto y deseleccionar la imagen activa.
       w.addEventListener('click', (e) => {
-        if ((e.target as HTMLElement).classList.contains('run')) return;
+        const target = e.target as HTMLElement;
+        if (target.classList.contains('run')) return;
+        if (target.closest('.image-box')) return;
+        this.deselectImage();
         const rect = w.getBoundingClientRect();
         const geom = this.geoms[page.index]!;
         const at = geom.cssToPt(e.clientX - rect.left, e.clientY - rect.top);
@@ -475,6 +547,7 @@ export class Viewer {
     this.drawHighlights(i); // conserva los resaltados tras un re-render
     this.drawNotes(i);
     this.drawFormFields(i);
+    this.drawImages(i);
 
     // Capa de captura de pluma (encima de todo; solo activa en modo pluma).
     const pen = document.createElement('div');

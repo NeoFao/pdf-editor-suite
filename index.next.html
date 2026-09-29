@@ -70,6 +70,42 @@
       }
 
       /*
+       * Marco interactivo del sello/firma insertados (#20/#21, ImageLayer):
+       * en reposo INVISIBLE (sin borde, misma idea que `.run` — E-029): el
+       * motor ya pintó la imagen en el canvas de abajo, este `<div>` solo
+       * aporta el hitbox para seleccionar/mover/redimensionar. Seleccionada
+       * (`.selected`), un borde índigo la enmarca y aparecen 4 tiradores en
+       * las esquinas, ocultos por CSS (opacity/pointer-events) el resto del
+       * tiempo — igual que `.run-drag` con `.run.selected`.
+       */
+      .image-box {
+        box-sizing: border-box;
+        border: 2px solid transparent;
+        cursor: move;
+      }
+      .image-box.selected {
+        border-color: #6366f1;
+      }
+      .image-handle {
+        position: absolute;
+        width: 10px;
+        height: 10px;
+        background: #6366f1;
+        border: 2px solid #fff;
+        border-radius: 2px;
+        opacity: 0;
+        pointer-events: none;
+      }
+      .image-box.selected .image-handle {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      .image-handle-nw { left: -7px; top: -7px; cursor: nwse-resize; }
+      .image-handle-ne { right: -7px; top: -7px; cursor: nesw-resize; }
+      .image-handle-sw { left: -7px; bottom: -7px; cursor: nesw-resize; }
+      .image-handle-se { right: -7px; bottom: -7px; cursor: nwse-resize; }
+
+      /*
        * Arrastrar miniaturas para reordenar páginas (App.beginThumbDrag):
        * la miniatura que se arrastra se atenúa in situ (nunca se mueve del
        * DOM hasta soltar) y una línea de inserción se coloca entre las
