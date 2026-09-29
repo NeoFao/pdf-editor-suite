@@ -46,7 +46,11 @@ const DIBUJOS: Record<string, Trazo> = {
   menu: () => [L(3, 5.5, 17, 5.5), L(3, 10, 17, 10), L(3, 14.5, 17, 14.5)],
   'mas-opciones': () => [PUNTO(4.5, 10, 1.15), PUNTO(10, 10, 1.15), PUNTO(15.5, 10, 1.15)],
   'insertar-texto': () => [L(5, 4.5, 15, 4.5), L(10, 4.5, 10, 15.5), L(7, 15.5, 13, 15.5)],
-  redactar: () => [R(3, 6, 14, 8, 1.2), L(3, 6, 17, 14), L(3, 14, 17, 6)],
+  // Revisión de PR #63: el rectángulo con las dos diagonales se leía como un
+  // sobre de correo, no como "borrar/redactar". Metáfora inequívoca: dos
+  // renglones de texto normales y, entre ellos, una barra MACIZA (relleno
+  // sólido, no un trazo más) — el tachón opaco de una redacción.
+  redactar: () => [L(4, 5.5, 16, 5.5), el('rect', { x: '4', y: '8.5', width: '12', height: '3.3', rx: '0.6', fill: 'currentColor', stroke: 'none' }), L(4, 14.5, 12, 14.5)],
   imagen: () => [R(2.5, 3.5, 15, 13, 1.4), C(7, 8, 1.6), P('M3.2 15.2 l4.6-5 3 3 2.6-3.4 3.6 4.4')],
   ocr: () => [R(3, 2.5, 14, 15, 1.4), L(6, 7, 14, 7), L(6, 10, 14, 10), L(6, 13, 11, 13), C(15.5, 14.5, 2.6), L(17.3, 16.3, 19, 18)],
   resaltar: () => [P('M11.5 3 L17 8.5 L9 16.5 H4.5 v-4.5 Z'), L(4.5, 16.5, 2, 19), L(11.5, 3, 14, 5.5)],
@@ -61,7 +65,11 @@ const DIBUJOS: Record<string, Trazo> = {
   duplicar: () => [R(3, 3, 11, 11, 1.2), P('M8 17 H16 a1 1 0 0 0 1-1 V8')],
   subir: () => [L(10, 15.5, 10, 4.5), P('M5.5 9 L10 4.5 14.5 9')],
   bajar: () => [L(10, 4.5, 10, 15.5), P('M5.5 11 L10 15.5 14.5 11')],
-  'insertar-pdf': () => [P('M5 2.5 h7 l3 3 v12 a1 1 0 0 1-1 1 H5 a1 1 0 0 1-1-1 V3.5 a1 1 0 0 1 1-1 Z'), P('M12 2.5 V6 h3'), L(7.5, 13, 12.5, 13), L(10, 10.5, 10, 15.5)],
+  // Revisión de PR #63: con el mismo "documento + signo +" que
+  // `documento-nuevo`, los dos se confundían a 20px. Metáfora distinta:
+  // una flecha entra EN una página — "insertar dentro del documento actual",
+  // no "crear uno nuevo".
+  'insertar-pdf': () => [R(9, 3, 8, 14, 1.4), L(1.5, 10, 6.5, 10), P('M4 7.5 L6.5 10 L4 12.5')],
   extraer: () => [P('M5 2.5 h7 l3 3 v6.2'), L(6, 17.5, 15, 17.5), L(9.2, 10, 9.2, 15.6), P('M6.7 13.4 L9.2 15.9 11.7 13.4')],
   dividir: () => [C(5, 5, 2), C(5, 15, 2), L(6.6, 6.3, 17, 17), L(6.6, 13.7, 17, 3), L(12, 10, 15, 10)],
   firmar: () => [P('M2.5 15 q2-1 3.3 0 t3.3 0 2.7-3 2-6.5 q-0.7 3 1 5 t3.7 0.5'), L(2.5, 17.3, 17, 17.3)],
