@@ -537,6 +537,38 @@ describe('captura-pixel-sin-animations-disabled', () => {
   });
 });
 
+describe('sin-cronometraje-en-unit', () => {
+  const regla = detectarEn('sin-cronometraje-en-unit');
+  // Mismo patrón por línea que usa la regla, reproducido sobre texto suelto
+  // (la regla en sí solo lee tests/unit/ del repo real, ver más abajo).
+  const PATRON = /\b(performance\.now|Date\.now)\s*\(/;
+
+  test('detecta performance.now() sin escape', () => {
+    assert.ok(PATRON.test('  const t0 = performance.now();'));
+  });
+
+  test('detecta Date.now() sin escape', () => {
+    assert.ok(PATRON.test('  const inicio = Date.now();'));
+  });
+
+  test('no confunde otros usos de "now" o "Date" con el patrón prohibido', () => {
+    assert.ok(!PATRON.test('  const ahora = obtenerHoraActual();'));
+    assert.ok(!PATRON.test('  const d = new Date();'));
+  });
+
+  test('un escape con razón exime la línea siguiente', () => {
+    const contenido = [
+      '// guard-disable-next-line sin-cronometraje-en-unit: anti-cuelgue muy holgado, no mide rendimiento',
+      'const t0 = Date.now();'
+    ].join('\n');
+    assert.ok(lineasExentas(contenido, 'sin-cronometraje-en-unit').has(2));
+  });
+
+  test('sobre el repo real no encuentra nada: los cuatro ficheros de E-037/E-038/markdown ya usan vi.spyOn/pasos en vez de reloj', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega

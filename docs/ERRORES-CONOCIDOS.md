@@ -1146,21 +1146,27 @@ entre la ruta "una op" y la ruta "en lote". Se usa en:
 **Medido después del arreglo:** 200 `insertText` en un solo `applyPageOps`:
 ~10-11 ms (frente a ~1300-1390 ms uno a uno). Una página OCR densa (80
 líneas) vía `OcrPageCmd`: por debajo de medio segundo con holgura amplia
-(umbral del test, `<500 ms`) frente al crecimiento cuadrático de antes.
+frente al crecimiento cuadrático de antes.
 
-**Cómo se detecta ahora.**
-- Test `E-037: 200 insertText por applyPageOps en un solo lote tardan muy
-  por debajo de hacerlos uno a uno` en
-  `tests/unit/PdfiumEngine.applyPageOps.test.ts` (motor real): umbral con
-  holgura >10× sobre lo medido, para no ser frágil en CI más lento.
+**Cómo se detecta ahora.** (Los dos tests de tiempo que medían esto en
+milisegundos se sustituyeron por aserciones sobre el nº de llamadas —
+E-040, más abajo — porque un umbral de reloj daba falsos positivos bajo
+carga sin que hubiera ninguna regresión real.)
+- Test `E-037: 200 insertText por applyPageOps en un solo lote hacen UNA
+  sola llamada a FPDFPage_GenerateContent, no 200` en
+  `tests/unit/PdfiumEngine.applyPageOps.test.ts` (motor real): espía
+  `FPDFPage_GenerateContent` del módulo WASM con `vi.spyOn` y exige
+  exactamente 1 llamada, sin importar el nº de ops del lote.
 - Test `E-037: applyPageOps en lote produce el MISMO contenido que aplicar
   cada op una a una` en el mismo fichero — compara `getPageText()` entre
   las dos rutas.
 - Tests de `applyPageOps` mezclando los cinco tipos de op en un mismo lote y
   comprobando que un op rechazado (rectángulo <3×3, trazo de un punto) no
   afecta al resto del lote ni cuenta como mutación.
-- Test `E-037: OcrPageCmd con 80 líneas reconocidas (página densa) termina
-  muy rápido` en `tests/unit/OcrPage.test.ts`.
+- Test `E-037: OcrPageCmd con 80 líneas reconocidas (página densa) hace UNA
+  sola llamada a applyPageOps, no 80` en `tests/unit/OcrPage.test.ts`: espía
+  `engine.applyPageOps` y además compara el resultado contra insertar las
+  mismas líneas una a una con `insertText`.
 - Regla `motor-lote-en-bucle` (ver más abajo): un fichero de
   `src/commands/**` o `src/convert/**` con un bucle Y una llamada de
   dibujo/texto del motor, sin usar `applyPageOps`, falla el guard.
@@ -1266,7 +1272,11 @@ después). **NO** se aplica en:
 - Test `E-038: extractPages ya es inmune a los huérfanos por construcción` —
   fija el hallazgo negativo para que no se pierda si alguien "arregla" algo
   que ya funcionaba.
-- Test `E-038: el coste extra de saveCompact frente a save() es pequeño`.
+- Test `E-038: el coste extra de saveCompact frente a save() es CONSTANTE
+  (una llamada a save/open/close), no crece con el número de ediciones` —
+  antes comparaba una razón de milisegundos (frágil bajo carga); ahora espía
+  `save`/`open`/`close` con `vi.spyOn` y exige 2/1/1 llamadas exactas pase lo
+  que pase el número de ediciones (E-040, más abajo).
 - E-005 (`tests/e2e/exportacion.spec.js`, app vieja) sigue intacto: este
   arreglo vive enteramente en `src/` (motor PDFium), no toca
   `buildFlattenedDoc()` ni el resto de la app vieja.
@@ -1356,6 +1366,99 @@ equivale a saturar solo los hilos de JS de los propios workers de Playwright.
 - Regla `captura-pixel-sin-animations-disabled` — cualquier `.screenshot(`
   nuevo dentro de `tests/e2e/next/*.spec.ts` sin `animations: 'disabled'` en
   la misma llamada falla el guard.
+
+---
+
+### E-040 · Umbrales de milisegundos en tests unitarios daban falsos positivos bajo carga · defecto del TEST, no de la app
+
+**Síntoma.** En una corrida local con la máquina cargada, el test
+`E-037: OcrPageCmd con 80 líneas reconocidas (página densa) termina muy
+rápido` (`tests/unit/OcrPage.test.ts`) dio `598 ms` contra un umbral de
+`< 500 ms` y falló, sin que hubiera ninguna regresión de verdad: la propia
+`OcrPageCmd` seguía haciendo una única llamada en lote a `applyPageOps`
+(el arreglo de E-037 seguía intacto). Los mismos cuatro ficheros
+(`tests/unit/OcrPage.test.ts`,
+`tests/unit/PdfiumEngine.applyPageOps.test.ts`,
+`tests/unit/PdfiumEngine.savecompact.test.ts` y
+`tests/unit/markdown-parse.test.ts`) tenían más aserciones de
+`performance.now()`/`Date.now()` con el mismo problema de fondo.
+
+**Causa raíz.** Los tests de E-037/E-038 (arriba) y las tres pruebas de
+"entrada hostil" de `markdown-parse.test.ts` medían tiempo de reloj real
+para verificar una propiedad que en realidad es de **trabajo realizado**
+(cuántas veces se regenera el contenido de una página, cuántas llamadas
+hace `saveCompact`, cuántos pasos consume el analizador de Markdown), no de
+velocidad del hardware. Un runner de CI compartido o una máquina de
+desarrollo con carga variable pueden hacer que la MISMA operación, sin
+cambiar una sola línea de código de producción, tarde por encima de
+cualquier umbral fijo razonable — AGENTS.md §2.1 exige ejecutar y pegar la
+salida, pero ni siquiera eso protege de una corrida puntual lenta que hace
+fallar CI sin que nadie haya roto nada. Es la contracara de E-039: allí la
+carga de máquina ensanchaba una ventana de temporización real entre dos
+capturas; aquí, directamente aserta sobre la duración de una operación de
+CPU sin ningún motivo para acoplar la garantía al reloj de pared.
+
+**Arreglo.** Cada aserción de tiempo se sustituyó por una aserción
+DETERMINISTA sobre la propiedad que el test dice proteger:
+
+| Fichero | Antes (frágil) | Después (determinista) |
+|---|---|---|
+| `PdfiumEngine.applyPageOps.test.ts` | `t1 - t0 < 200 ms` para 200 `insertText` en lote | `vi.spyOn(p, 'FPDFPage_GenerateContent')` — exactamente 1 llamada, sin importar el nº de ops |
+| `OcrPage.test.ts` | `t1 - t0 < 500 ms` para 80 líneas OCR | `vi.spyOn(engine, 'applyPageOps')` — exactamente 1 llamada con las 80 ops en un solo lote, más comparación de resultado contra insertarlas una a una |
+| `PdfiumEngine.savecompact.test.ts` | `(t2-t1) < max(50, (t1-t0)*20)` | `vi.spyOn` de `save`/`open`/`close` — exactamente 2/1/1 llamadas, constante sin importar el nº de ediciones (100 `editTextRun` en el test) |
+| `markdown-parse.test.ts` (3 tests de "entrada hostil") | `Date.now() ... < 1000 ms` | Propiedades estructurales acotadas por las cotas del parser: un run de `*` colapsa a un único bloque `hr`; el anidamiento de `>` se acota a `MAX_BLOCKQUOTE_DEPTH` (30, no al nº de `>` de la entrada); una línea gigante se analiza con el presupuesto de pasos `MAX_INLINE_STEPS` acotado (exportado desde `src/convert/markdown/parse.ts` junto con `MAX_BLOCKQUOTE_DEPTH`), sin perder texto. Se añadió además un cuarto test nuevo (`"[" sin cerrar, repetido`) que ataca directamente el patrón que SÍ es O(n²) sin presupuesto — verificado quitando temporalmente la cota: sin ella, 200 `[` cuestan ~20 100 pasos y 400 `[` (2×) cuestan ~80 200 (~4×, cuadrático); con la cota, ambos tamaños saturan en el mismo valor. |
+
+`src/convert/markdown/parse.ts` ganó un parámetro diagnóstico opcional en
+`parseInline(text, stats?)` que, si se pasa, recibe `{ steps }` con el
+presupuesto consumido — no cambia el comportamiento del análisis ni el
+contrato del resto del código, es puramente para que los tests puedan leer
+el trabajo hecho. `MAX_BLOCKQUOTE_DEPTH`, `MAX_INLINE_DEPTH` y
+`MAX_INLINE_STEPS` pasaron de constantes privadas del módulo a exportadas,
+por la misma razón.
+
+`PdfiumEngine.applyPageOps` y `PdfiumEngine.savecompact` ya no tienen
+ninguna aserción de milisegundos: las propiedades que protegían (una sola
+regeneración de contenido por lote; un coste extra constante de
+`saveCompact`) se verifican contando llamadas con `vi.spyOn`, que es
+determinista por construcción — no puede dar un falso positivo por carga
+de máquina, y si alguien reintroduce el bucle uno-a-uno o un round-trip
+extra, el conteo lo detecta con el mismo mensaje de fallo pase lo que pase
+la velocidad de la máquina.
+
+**Verificación de que cada test nuevo detecta el defecto que protege**
+(reintroducido temporalmente, revertido después de comprobar el fallo):
+- `OcrPageCmd` volviendo a un `insertText` por línea (en vez de
+  `applyPageOps` en lote): `expected "applyPageOps" to be called 1 times,
+  but got 80 times`.
+- `PdfiumEngine.applyPageOps` llamando a `FPDFPage_GenerateContent` dentro
+  del bucle de `insertText` (regenerando por op): `expected "spy" to be
+  called 1 times, but got 201 times` (y la corrida real tardó ~95 s con 200
+  ops, confirmando además el propio coste cuadrático que el arreglo evita).
+- `saveCompact` con un round-trip `open()+save()` extra innecesario:
+  `expected "save" to be called 2 times, but got 3 times`.
+- `markdown-parse`: sin `MAX_BLOCKQUOTE_DEPTH`, la entrada de 10000 `>`
+  hace `RangeError: Maximum call stack size exceeded` (desborda la pila,
+  no solo tarda más). Sin el presupuesto compartido de pasos (
+  `MAX_INLINE_STEPS` elevado a un valor grande), `'['.repeat(400)` consume
+  ~4× los pasos de `'['.repeat(200)` en vez de la misma cantidad —
+  `expected 80200 to be 20100`.
+
+**Cómo se detecta ahora.**
+- Los tests listados arriba, todos deterministas.
+- Regla `sin-cronometraje-en-unit` (`scripts/guards/reglas.mjs`): ningún
+  fichero de `tests/unit/**/*.test.ts` puede contener
+  `performance.now()`/`Date.now()` salvo con el escape estándar del
+  repositorio (`// guard-disable-next-line sin-cronometraje-en-unit: <razón
+  de ≥10 caracteres>` en la línea anterior) — por ejemplo, para una red
+  anti-cuelgue genuina contra un hang real, con un margen muy holgado (p.
+  ej. `< 10 s`) y documentada como tal, no como medida de rendimiento. Hoy
+  ninguno de los cuatro ficheros necesita esa excepción: el timeout por
+  test por defecto de Vitest (5 s) ya actúa como red anti-cuelgue del
+  propio runner ante un hang real, sin necesitar una medición manual.
+- Regla del propio `AGENTS.md` §2.1: "no bajar umbrales para poner el CI en
+  verde" — aquí no se bajó ningún umbral, se cambió QUÉ se mide, hacia una
+  garantía más fuerte y determinista de la misma propiedad.
+- Documentado en `docs/TESTING.md` § "No se aserta sobre tiempo de reloj".
 
 ---
 

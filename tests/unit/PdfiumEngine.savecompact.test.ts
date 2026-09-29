@@ -1,4 +1,4 @@
-import { test, expect } from 'vitest';
+import { test, expect, vi } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
 import { PdfiumEngine } from '../../src/engine/pdfium/PdfiumEngine';
 
@@ -90,20 +90,36 @@ test('E-038: extractPages ya es inmune a los huérfanos por construcción (no ha
   eng.close(doc);
 });
 
-test('E-038: el coste extra de saveCompact frente a save() es pequeño', async () => {
+/**
+ * La propiedad que protege el defecto no es "tarda poco" (frágil bajo carga,
+ * ver docs/TESTING.md) sino "el coste extra de saveCompact() sobre save() es
+ * CONSTANTE: exactamente un save(doc) + un open(bytes) + un save(tmp) +
+ * un close(tmp), sin importar cuántas ediciones (ni cuántos streams
+ * huérfanos) tenga el documento". Se comprueba contando llamadas con
+ * vi.spyOn en vez de cronometrando.
+ */
+test('E-038: el coste extra de saveCompact frente a save() es CONSTANTE (una llamada a save/open/close), no crece con el número de ediciones', async () => {
   const eng = await PdfiumEngine.create();
   const doc = await eng.open(await nuevoDoc());
   const runId = eng.insertText(doc, 0, { xPt: 20, yPt: 700, text: 'AAAA', sizePt: 12 });
   for (let i = 0; i < 100; i++) eng.editTextRun(doc, 0, runId, i % 2 === 0 ? 'BBBB' : 'AAAA');
 
-  const t0 = performance.now();
-  eng.save(doc);
-  const t1 = performance.now();
-  await eng.saveCompact(doc);
-  const t2 = performance.now();
+  const spySave = vi.spyOn(eng, 'save');
+  const spyOpen = vi.spyOn(eng, 'open');
+  const spyClose = vi.spyOn(eng, 'close');
 
-  // Medido en máquina de desarrollo: unas décimas de ms de diferencia.
-  // Umbral con holgura amplia para no ser frágil en CI.
-  expect(t2 - t1).toBeLessThan(Math.max(50, (t1 - t0) * 20));
+  await eng.saveCompact(doc);
+
+  // save(doc) + save(tmp): dos, no una por cada uno de los 100 editTextRun.
+  expect(spySave).toHaveBeenCalledTimes(2);
+  // open(bytes) del documento temporal: una sola vez.
+  expect(spyOpen).toHaveBeenCalledTimes(1);
+  // close(tmp): una sola vez (el doc original NO se cierra: E-038 exige que
+  // saveCompact no mute ni cierre el documento vivo).
+  expect(spyClose).toHaveBeenCalledTimes(1);
+
+  spySave.mockRestore();
+  spyOpen.mockRestore();
+  spyClose.mockRestore();
   eng.close(doc);
 });

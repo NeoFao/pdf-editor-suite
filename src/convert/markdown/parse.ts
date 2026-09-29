@@ -35,12 +35,18 @@ import type { Block, Inline, ListBlock, ListItem } from './ast';
  * `tests/unit/markdown-parse.test.ts`.
  */
 
-/** Cota de profundidad de citas anidadas (`>`). Más allá, los `>` sobrantes quedan como texto literal. */
-const MAX_BLOCKQUOTE_DEPTH = 30;
+/**
+ * Cota de profundidad de citas anidadas (`>`). Más allá, los `>` sobrantes
+ * quedan como texto literal. Exportada (junto con las otras dos cotas de
+ * abajo) para que los tests puedan asertar sobre el TRABAJO acotado que
+ * garantizan estas constantes, en vez de sobre tiempo de reloj — ver
+ * `tests/unit/markdown-parse.test.ts` y `docs/TESTING.md`.
+ */
+export const MAX_BLOCKQUOTE_DEPTH = 30;
 /** Cota de profundidad de énfasis anidado (`**a *b* c**`...). */
-const MAX_INLINE_DEPTH = 20;
+export const MAX_INLINE_DEPTH = 20;
 /** Presupuesto total de pasos del analizador inline por invocación de `parseInline` (un bloque de texto). */
-const MAX_INLINE_STEPS = 500_000;
+export const MAX_INLINE_STEPS = 500_000;
 
 export function parseMarkdown(source: string): Block[] {
   const lines = source.replace(/\r\n?/g, '\n').split('\n');
@@ -176,8 +182,18 @@ function parseListAt(lines: string[], start: number, minIndent: number, depth: n
 
 interface Budget { steps: number }
 
-export function parseInline(text: string): Inline[] {
-  return parseInlineInner(text, 0, { steps: 0 });
+/**
+ * `stats`, si se pasa, recibe el número de pasos que consumió el analizador
+ * (`budget.steps` al terminar) — puramente diagnóstico, para que los tests
+ * puedan asertar sobre el TRABAJO realizado (cuántos pasos, acotados por
+ * `MAX_INLINE_STEPS`) en vez de sobre tiempo de reloj. No cambia el
+ * comportamiento del análisis ni el contrato para el resto del código.
+ */
+export function parseInline(text: string, stats?: { steps: number }): Inline[] {
+  const budget: Budget = { steps: 0 };
+  const nodes = parseInlineInner(text, 0, budget);
+  if (stats) stats.steps = budget.steps;
+  return nodes;
 }
 
 function parseInlineInner(text: string, depth: number, budget: Budget): Inline[] {

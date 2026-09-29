@@ -829,6 +829,43 @@ export const conCapturasSinTransicionesEnCurso = {
   }
 };
 
+/* ── tests unitarios no aserta sobre tiempo de reloj ────────────────────── */
+export const sinCronometrajeEnUnit = {
+  id: 'sin-cronometraje-en-unit',
+  titulo: 'tests/unit/** no aserta sobre tiempo de reloj; aserta sobre el trabajo realizado',
+  comoArreglar:
+    'Sustituye performance.now()/Date.now() por una aserción determinista sobre el ' +
+    'TRABAJO hecho: llamadas espiadas con vi.spyOn (nº de veces que se llama a un ' +
+    'método del motor o a una función del módulo WASM), un contador de pasos expuesto ' +
+    'por el propio código bajo prueba, tamaños de salida, o comparar el trabajo de N y ' +
+    '2N en vez de en milisegundos. Un umbral en milisegundos es frágil bajo carga (dio ' +
+    'un falso positivo real en una corrida local: 598 ms contra un umbral de 500 ms, ' +
+    'sin ninguna regresión) y no prueba lo que el test dice proteger — ver docs/TESTING.md. ' +
+    'Si de verdad hace falta una red anti-cuelgue contra un hang real (no contra lentitud), ' +
+    'dale un margen muy holgado (p. ej. < 10 s), coméntala como anti-cuelgue y no como ' +
+    'medida de rendimiento, y usa el escape de esta regla con esa razón.',
+  ejecutar() {
+    const dir = 'tests/unit';
+    if (!fs.existsSync(path.join(RAIZ, dir))) return [];
+    const hallazgos = [];
+    for (const nombre of fs.readdirSync(path.join(RAIZ, dir))) {
+      if (!nombre.endsWith('.test.ts')) continue;
+      const rel = `${dir}/${nombre}`;
+      if (tieneDeuda(rel, this.id)) continue;
+      const contenido = leer(rel);
+      const exentas = lineasExentas(contenido, this.id);
+      contenido.split('\n').forEach((linea, i) => {
+        const n = i + 1;
+        if (exentas.has(n)) return;
+        if (/\b(performance\.now|Date\.now)\s*\(/.test(linea)) {
+          hallazgos.push(hallazgo(rel, n, 'performance.now()/Date.now() en un test unitario — aserta sobre trabajo realizado, no sobre tiempo de reloj'));
+        }
+      });
+    }
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -851,5 +888,6 @@ export const TODAS = [
   conHeapU8Getter,
   conAddFunctionConRemoveFunction,
   conMotorLoteEnBucle,
-  conCapturasSinTransicionesEnCurso
+  conCapturasSinTransicionesEnCurso,
+  sinCronometrajeEnUnit
 ];

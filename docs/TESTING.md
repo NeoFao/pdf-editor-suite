@@ -172,6 +172,60 @@ captura. La regla `captura-pixel-sin-animations-disabled`
 (`scripts/guards/reglas.mjs`) exige la opción en cualquier `.screenshot(`
 nuevo dentro de `tests/e2e/next/*.spec.ts`.
 
+## No se aserta sobre tiempo de reloj en tests unitarios (E-040)
+
+`tests/unit/**` corre en Node, sin motor de layout, así que aquí la
+disciplina es la contraria a la de "Capturas de píxeles" de arriba: nunca
+`performance.now()`/`Date.now()` para verificar que algo "es rápido".
+
+```js
+// Mal — frágil bajo carga: la MISMA operación, sin cambiar código de
+// producción, puede tardar más en una máquina compartida o cargada.
+const t0 = performance.now();
+engine.applyPageOps(doc, 0, ops);
+expect(performance.now() - t0).toBeLessThan(200);
+
+// Bien — aserta sobre el TRABAJO realizado, no sobre cuánto tardó.
+const spy = vi.spyOn(p, 'FPDFPage_GenerateContent');
+engine.applyPageOps(doc, 0, ops);
+expect(spy).toHaveBeenCalledTimes(1); // una sola regeneración, sin importar el nº de ops
+```
+
+Un umbral de milisegundos mide la velocidad del hardware en el instante de
+la corrida, no la propiedad que el test dice proteger — y esa propiedad
+casi siempre tiene una versión determinista:
+
+- **Nº de llamadas.** `vi.spyOn` sobre un método del motor
+  (`engine.applyPageOps`, `engine.save`/`open`/`close`) o sobre una función
+  del módulo WASM (`p.FPDFPage_GenerateContent`). Sirve para "esto se hace
+  UNA vez, no una por elemento/edición" — el patrón de E-037/E-038.
+- **Pasos expuestos por el propio código bajo prueba.** Si hay una cota
+  explícita de trabajo (un presupuesto, un contador de iteraciones), pásala
+  como parámetro diagnóstico opcional y aserta sobre el valor devuelto en
+  vez de inferirlo por el reloj — ver `parseInline(text, stats?)` en
+  `src/convert/markdown/parse.ts`.
+- **Comparar el trabajo de N y 2N.** Si de verdad no hay otra propiedad
+  disponible, compara el trabajo (pasos, llamadas) entre dos tamaños de
+  entrada y exige que NO crezca más rápido que linealmente — nunca compares
+  milisegundos entre las dos corridas.
+- **Estructura del resultado.** A veces la cota se refleja directamente en
+  la forma de la salida (p. ej. un anidamiento que no puede superar una
+  constante) y no hace falta instrumentar nada.
+
+**Excepción — red anti-cuelgue.** Si además quieres conservar una
+salvaguarda contra un CUELGUE real (no contra lentitud), dale un margen muy
+holgado (p. ej. `< 10 s`) y coméntala explícitamente como anti-cuelgue, no
+como medida de rendimiento — y ten en cuenta que el timeout por test de
+Vitest (5 s por defecto) ya cumple ese papel en la mayoría de los casos sin
+necesitar código adicional.
+
+La regla `sin-cronometraje-en-unit` (`scripts/guards/reglas.mjs`) bloquea
+cualquier `performance.now()`/`Date.now()` nuevo en `tests/unit/**/*.test.ts`
+salvo con el escape estándar del repositorio y una razón real (AGENTS.md
+§3). Ver `docs/ERRORES-CONOCIDOS.md` (E-040) para el caso real que lo
+motivó: un test con umbral `< 500 ms` que dio `598 ms` y falló en una
+corrida local cargada, sin ninguna regresión.
+
 ## Prohibido
 
 - `test.skip`, `test.only`, `test.fixme` — los bloquea ESLint y la regla
@@ -179,6 +233,8 @@ nuevo dentro de `tests/e2e/next/*.spec.ts`.
 - Reintentos locales para "ver si pasa". Si un test es inestable, es un bug:
   arréglalo o bórralo explicándolo en el PR.
 - Bajar un umbral o ampliar una exclusión para poner el CI en verde.
+- Asertar sobre tiempo de reloj en `tests/unit/**` (ver arriba, E-040) salvo
+  una red anti-cuelgue muy holgada y comentada como tal.
 
 ## Añadir un defecto nuevo al registro
 
