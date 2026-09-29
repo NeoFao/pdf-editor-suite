@@ -94,16 +94,48 @@
   color-scheme: dark;
 }
 
-html, body { height: 100%; margin: 0; }
+/*
+ * Revisión de PR #63 (captura 12-movil-cajon): sin `overflow: hidden` aquí,
+ * cualquier desajuste de unos pocos px entre el contenido de `#app` y el
+ * alto real de la ventana (p. ej. un botón que crece por `min-height` en
+ * móvil) hace que `html`/`body` abran SU PROPIA barra de scroll vertical —
+ * una tercera barra, además de las de `#viewer` y `#thumbs`, que sí deben
+ * desplazar. Esta app es un "shell" de una sola pantalla: nunca debe
+ * desplazarse ella misma, solo sus paneles internos.
+ */
+html, body { height: 100%; margin: 0; overflow: hidden; }
 
 #app {
   height: 100%;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   font-size: var(--ed-font-md);
   color: var(--ed-text);
   background: var(--ed-bg);
+}
+
+/* Estilo fino y acorde al tema para las barras de scroll LEGÍTIMAS (visor,
+   panel de páginas/marcadores, y el desplegable "⋯" en móvil) — Firefox
+   (scrollbar-width/-color) y Chromium/Safari (::-webkit-scrollbar). */
+#viewer, #thumbs, #outline-panel, #toolbar-more.open {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ed-border-strong) transparent;
+}
+#viewer::-webkit-scrollbar, #thumbs::-webkit-scrollbar,
+#outline-panel::-webkit-scrollbar, #toolbar-more.open::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+#viewer::-webkit-scrollbar-track, #thumbs::-webkit-scrollbar-track,
+#outline-panel::-webkit-scrollbar-track, #toolbar-more.open::-webkit-scrollbar-track {
+  background: transparent;
+}
+#viewer::-webkit-scrollbar-thumb, #thumbs::-webkit-scrollbar-thumb,
+#outline-panel::-webkit-scrollbar-thumb, #toolbar-more.open::-webkit-scrollbar-thumb {
+  background-color: var(--ed-border-strong);
+  border-radius: 6px;
 }
 
 #app.drop-activo { outline: 3px dashed var(--ed-accent); outline-offset: -3px; }
@@ -126,6 +158,10 @@ button { font-family: inherit; }
   border-bottom: 1px solid var(--ed-border);
   box-sizing: border-box;
 }
+/* La fila que de verdad desplaza en móvil (ver el comentario de App.ts junto
+   a `topbarScroll`) — en escritorio es una fila normal, sin overflow propio
+   (`#btn-drawer`/`#btn-more`, a los lados, están ocultos ahí de todos modos). */
+.topbar-scroll { display: flex; align-items: center; gap: var(--ed-sp-1); flex: 1; min-width: 0; }
 .topbar-group { display: flex; align-items: center; gap: 2px; }
 .topbar-spacer { flex: 1 1 auto; min-width: var(--ed-sp-2); }
 .topbar-sep { width: 1px; align-self: stretch; margin: var(--ed-sp-2) var(--ed-sp-1); background: var(--ed-border); flex: 0 0 auto; }
@@ -455,7 +491,36 @@ select, input[type="text"], input[type="search"], input[type="number"] {
 
 @media (max-width: 768px) {
   #toolbar { flex-direction: column; align-items: stretch; }
-  .topbar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; width: 100%; box-sizing: border-box; }
+  .topbar { flex-wrap: nowrap; width: 100%; box-sizing: border-box; }
+  .topbar-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    position: relative; /* ancla el degradado de ::after, ver abajo */
+    /* Desplazamiento táctil normal, sin la barra nativa (fea, con flechas
+       en algunos navegadores de escritorio) — el degradado de ::after ya
+       avisa de que hay más contenido a un lado. */
+    scrollbar-width: none;
+  }
+  .topbar-scroll::-webkit-scrollbar { display: none; }
+  /*
+   * Degradado sutil al final de `.topbar-scroll`: insinúa que la fila sigue
+   * más allá del borde visible, sin una barra de scroll nativa. Como
+   * `#btn-more` ya NO vive dentro de esta fila (ver el comentario de
+   * `topbarScroll` en App.ts — así se evita que un `sticky` en un flex que
+   * desborda tape el control de al lado, el defecto real de la revisión),
+   * este degradado no tapa ningún control: cae en el propio borde de
+   * `.topbar-scroll`, después del último botón.
+   */
+  .topbar-scroll::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: 20px;
+    background: linear-gradient(to right, transparent, var(--ed-surface));
+    pointer-events: none;
+  }
   .topbar-spacer { display: none; }
   .search-box input { width: 90px; }
   .doc-name { display: none; }
@@ -513,14 +578,14 @@ select, input[type="text"], input[type="search"], input[type="number"] {
    */
   #swatches button.swatch { min-width: 18px; min-height: 18px; }
 
-  #btn-drawer, #btn-more {
-    display: inline-flex;
-    position: sticky;
-    background: var(--ed-surface);
-    z-index: 1;
-  }
-  #btn-drawer { left: 0; }
-  #btn-more { right: 0; margin-left: auto; }
+  /*
+   * Hermanos normales de `.topbar-scroll` (ver `topbarScroll` en App.ts), no
+   * `position: sticky`: como NO están dentro de la fila que desplaza, ya
+   * quedan fijos a los lados sin necesidad de "engancharse" a nada — y sin
+   * el riesgo de un `sticky` en un flex que desborda tapando al vecino
+   * (el defecto real de la revisión de PR #63).
+   */
+  #btn-drawer, #btn-more { display: inline-flex; flex: 0 0 auto; }
 
   .topbar #file-input, .topbar #btn-open-image { display: none; }
   #btn-open-mobile { display: inline-flex; }

@@ -45,6 +45,7 @@ import { resolverAtajo, esCampoEditable, type AccionAtajo } from './atajos';
 import { AtajosPanel } from './AtajosPanel';
 import { parseRange } from './pageRange';
 import { Viewer, type ToolMode } from './Viewer';
+import { calcularEscalaAjusteAncho } from './layout';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
 import type { RectPt, OutlineItem } from '../engine/PdfEngine';
@@ -153,6 +154,8 @@ export class App {
   private limpiarImpresionAnterior: (() => void) | null = null;
   private readonly viewerEl: HTMLElement;
   private readonly thumbsEl: HTMLElement;
+  /** Ancho CSS (px) con el que se renderizaron las miniaturas la última vez — ver `buildThumbnails`/el `ResizeObserver` de `#thumbs`. */
+  private thumbsRenderedWidthCss = 0;
   private readonly outlineEl: HTMLElement;
   private readonly tabPages: HTMLButtonElement;
   private readonly tabOutline: HTMLButtonElement;
@@ -443,16 +446,29 @@ export class App {
     const grupoZoom = document.createElement('div');
     grupoZoom.className = 'topbar-group';
     grupoZoom.append(btnZoomOut, this.zoomPctEl, btnZoomIn, btnFitWidth);
-    topbar.append(
-      this.btnDrawer, this.docNameEl, this.separador('topbar-sep'),
+    // `#btn-drawer`/`#btn-more` viven FUERA de `.topbar-scroll` a propósito
+    // (revisión de PR #63): en móvil, `.topbar-scroll` es la que desplaza
+    // horizontalmente (`overflow-x: auto`) — si los botones fijos fueran
+    // `position: sticky` DENTRO de esa fila, se solapan con el contenido de
+    // al lado en vez de reservarle hueco (un `sticky` en un flex que
+    // desborda no aparta espacio en su posición fija, así que "engancha" por
+    // encima del elemento que le quede debajo, p. ej. taba el "100%" del
+    // zoom). Como hijos normales de `.topbar` (que no desplaza) a los lados
+    // de `.topbar-scroll` (`flex: 1`, la única que desplaza), quedan
+    // SIEMPRE en su sitio sin tapar nada — sin necesidad de `sticky`.
+    const topbarScroll = document.createElement('div');
+    topbarScroll.className = 'topbar-scroll';
+    topbarScroll.append(
+      this.docNameEl, this.separador('topbar-sep'),
       grupoAbrir, this.separador('topbar-sep'),
       grupoDeshacer, this.separador('topbar-sep'),
       grupoGuardar,
       Object.assign(document.createElement('div'), { className: 'topbar-spacer' }),
       grupoZoom, this.separador('topbar-sep'),
       searchBox, this.separador('topbar-sep'),
-      btnShortcuts, this.btnMore
+      btnShortcuts
     );
+    topbar.append(this.btnDrawer, topbarScroll, this.btnMore);
 
     // ── Pestañas de herramientas (role="tablist", §1): flechas izq/der
     // mueven el foco entre pestañas (patrón WAI-ARIA de pestañas).
@@ -582,6 +598,26 @@ export class App {
     area.append(sidebar, this.backdropEl, this.viewerEl);
     rootEl.appendChild(area);
     this.showSidebarTab('pages');
+
+    // Revisión de PR #63: las miniaturas se renderizaban a una resolución
+    // fija (120/90 px) y luego se estiraban con CSS (`width: 100%`) al ancho
+    // real del panel — hasta 320px en el cajón móvil — así que en cualquier
+    // pantalla con `devicePixelRatio` > 1 (la inmensa mayoría de móviles) se
+    // veían borrosas. `buildThumbnails()` ahora mide el ancho REAL en que se
+    // muestran (`anchoUtilThumbs()`) y renderiza a ese ancho × `devicePixelRatio`
+    // (con un tope). Ese ancho cambia si la ventana cambia de tamaño (o de
+    // orientación) — nunca por abrir/cerrar el cajón, que solo mueve
+    // `#sidebar` con `transform` (no toca su `width`, así que no dispara este
+    // observer) — así que un `ResizeObserver` sobre `#thumbs` vuelve a
+    // construirlas cuando el ancho cambia de verdad. Sin riesgo de bucle:
+    // `buildThumbnails()` solo cambia el CONTENIDO de `#thumbs`, nunca su
+    // ancho (fijado por el flex/grid de `#sidebar`), así que reconstruir
+    // nunca dispara este mismo observer.
+    new ResizeObserver(() => {
+      if (!this.session) return;
+      const anchoActual = this.anchoUtilThumbs();
+      if (Math.abs(anchoActual - this.thumbsRenderedWidthCss) > 4) this.buildThumbnails();
+    }).observe(this.thumbsEl);
 
     // ── Barra de estado inferior (§1): `#status` a la izquierda, indicador
     // de página + prev/next a la derecha.
@@ -1607,13 +1643,31 @@ export class App {
   }
 
   /** Miniaturas: un canvas pequeño por página; clic desplaza el visor, arrastrar reordena (ver beginThumbDrag). */
+  /** Ancho útil REAL de `#thumbs` (su `clientWidth` menos el padding CSS a los lados) — el ancho en que las miniaturas se MUESTRAN, ver `buildThumbnails`. */
+  private anchoUtilThumbs(): number {
+    const cs = getComputedStyle(this.thumbsEl);
+    const pad = parseFloat(cs.paddingLeft || '0') + parseFloat(cs.paddingRight || '0');
+    return Math.max(1, this.thumbsEl.clientWidth - pad);
+  }
+
   private buildThumbnails(): void {
     this.thumbsEl.textContent = '';
     const s = this.session;
     if (!s) return;
+    // Renderiza al ancho en que se MUESTRAN (`anchoUtilThumbs()`, nunca a un
+    // objetivo fijo en px) × `devicePixelRatio` — así una pantalla retina/
+    // móvil no estira un bitmap de baja resolución con CSS (`width: 100%`
+    // en `.thumb`, ver estilos.css) y se ve borrosa. Tope en `dpr` (3×) y en
+    // el ancho final de render (900px): un `devicePixelRatio` de 3-4 sobre
+    // un cajón de hasta 320px ya cubriría de sobra sin el tope; sin él, un
+    // documento con muchas páginas en un dispositivo de dpr alto tardaría
+    // más de lo razonable en construir el panel entero.
+    const anchoCss = this.anchoUtilThumbs();
+    this.thumbsRenderedWidthCss = anchoCss;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const anchoRenderPx = Math.min(anchoCss * dpr, 900);
     for (const page of s.model.pages) {
-      const wide = page.sizePt.widthPt >= page.sizePt.heightPt;
-      const scale = (wide ? 120 : 90) / page.sizePt.widthPt;
+      const scale = anchoRenderPx / page.sizePt.widthPt;
       const { width, height, data } = s.engine.renderPage(s.doc, page.index, scale);
       const canvas = document.createElement('canvas');
       canvas.width = width; canvas.height = height;
@@ -1647,7 +1701,10 @@ export class App {
       });
       this.thumbsEl.appendChild(canvas);
     }
-    this.setActiveThumb(0);
+    // `this.currentPage`, no un 0 fijo: reconstruir (p. ej. el
+    // `ResizeObserver` de arriba, al cambiar el ancho del panel) no debe
+    // saltar la miniatura activa de vuelta a la primera página.
+    this.setActiveThumb(this.currentPage);
   }
 
   /**
@@ -1773,14 +1830,28 @@ export class App {
 
   /**
    * `#btn-fit-width`: calcula la escala para que la página ACTUAL ocupe el
-   * ancho útil del visor (su `clientWidth` —ya sin la barra de scroll— menos
-   * el padding CSS a los lados) y la aplica. También se llama al abrir un
-   * documento (ver `openBytes`).
+   * ancho útil del visor (su `clientWidth` —ya sin la barra de scroll
+   * vertical, que `clientWidth` excluye por definición, a diferencia de
+   * `offsetWidth`— menos el padding CSS a los lados) y la aplica. También se
+   * llama al abrir un documento (ver `openBytes`).
    *
    * Unidades: `page.sizePt.widthPt` es la anchura de la página en PUNTOS PDF;
    * `disponible` es px CSS del visor. La escala que iguala ambos en px CSS es
    * `disponible / widthPt` (mismo significado que `PageGeometry.scale`, que
    * multiplica puntos PDF por esta escala para obtener px CSS).
+   *
+   * Revisión de PR #63: `Math.round` a la centésima más cercana puede
+   * redondear la escala HACIA ARRIBA, dejando la página hasta ~0,3 pt más
+   * ancha que `disponible` — en pantalla, unos px de más que bastan para que
+   * el visor (`overflow: auto`) abra una barra de scroll HORIZONTAL. Con esa
+   * barra presente, los márgenes automáticos de `.page` (`margin: 0 auto` en
+   * `Viewer.layout`) dejan de repartirse simétricos: la página queda pegada
+   * al borde derecho y el hueco gris solo se ve a la izquierda — exactamente
+   * el defecto reportado en la revisión, visible en las capturas 03/04.
+   * `Math.floor` (a la milésima, para no perder precisión de más) garantiza
+   * `cssWidth <= disponible` siempre, a costa de una holgura de como mucho
+   * ~0,1 % del ancho de página (bien por debajo de 1 px) — imperceptible, y
+   * el `%` mostrado (`zoomPctEl`) sigue redondeando al entero más cercano.
    */
   private fitWidth(): void {
     const s = this.session;
@@ -1790,7 +1861,7 @@ export class App {
     const paddingX = parseFloat(cs.paddingLeft || '0') + parseFloat(cs.paddingRight || '0');
     const disponible = this.viewerEl.clientWidth - paddingX;
     if (disponible <= 0) return;
-    this.scale = Math.min(4, Math.max(0.25, Math.round((disponible / page.sizePt.widthPt) * 100) / 100));
+    this.scale = calcularEscalaAjusteAncho(disponible, page.sizePt.widthPt);
     this.viewer.setScale(this.scale);
     this.zoomPctEl.textContent = `${Math.round(this.scale * 100)}%`;
     this.setStatus(`Ajustado al ancho (${Math.round(this.scale * 100)}%).`);

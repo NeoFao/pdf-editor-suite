@@ -14,6 +14,50 @@ async function anchoUtilViewer(page: Page): Promise<number> {
   });
 }
 
+// Revisión de PR #63: en 1440×900 (el viewport por defecto del proyecto
+// `next`) "ajustar al ancho" dejaba la página unos px MÁS ANCHA que el hueco
+// disponible — `Math.round` a la centésima más cercana puede REDONDEAR HACIA
+// ARRIBA el factor de escala, así que `cssWidth = scale * widthPt` supera
+// `disponible` en hasta medio punto porcentual (unos px en una A4). El visor
+// (`overflow: auto`) responde con una barra de scroll horizontal, y como el
+// contenido desborda, los márgenes automáticos (`margin: 0 auto` en `.page`,
+// Viewer.layout) colapsan a un reparto asimétrico en vez de centrar: la
+// página queda pegada a la derecha y el hueco gris solo se ve a la izquierda.
+test('ajustar al ancho en 1440×900: sin scroll horizontal y con el mismo margen a los dos lados', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(FIXTURE);
+  await expect(page.locator('.run').first()).toBeVisible();
+
+  // Los márgenes se miden contra la caja de CONTENIDO del visor (basada en
+  // `clientWidth`, que excluye el hueco de la barra de scroll VERTICAL —
+  // siempre a la derecha en LTR, y esperable/correcto en cualquier panel con
+  // `overflow-y: auto`), no contra `getBoundingClientRect()` a secas: esa
+  // incluiría el hueco del scroll en el lado derecho y haría parecer
+  // "asimétrico" un centrado que en realidad es correcto.
+  const medidas = async () => page.evaluate(() => {
+    const v = document.getElementById('viewer')!;
+    const p = document.querySelector('.page') as HTMLElement;
+    const vr = v.getBoundingClientRect();
+    const pr = p.getBoundingClientRect();
+    const cs = getComputedStyle(v);
+    const padL = parseFloat(cs.paddingLeft || '0');
+    const padR = parseFloat(cs.paddingRight || '0');
+    const contenidoIzq = vr.left + padL; // #viewer no tiene borde: la caja de contenido empieza en vr.left
+    const contenidoDer = vr.left + v.clientWidth - padR;
+    return {
+      scrollWidth: v.scrollWidth,
+      clientWidth: v.clientWidth,
+      margenIzq: pr.left - contenidoIzq,
+      margenDer: contenidoDer - pr.right
+    };
+  });
+
+  await expect.poll(async () => (await medidas()).scrollWidth <= (await medidas()).clientWidth).toBe(true);
+  const { margenIzq, margenDer } = await medidas();
+  expect(Math.abs(margenIzq - margenDer)).toBeLessThanOrEqual(2);
+});
+
 for (const vp of [{ width: 1000, height: 800 }, { width: 390, height: 800 }]) {
   test(`ajuste al ancho (viewport ${vp.width}px): la página ocupa el ancho útil del visor al abrir`, async ({ page }) => {
     await page.setViewportSize(vp);
