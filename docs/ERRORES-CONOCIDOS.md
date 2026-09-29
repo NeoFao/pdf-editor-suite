@@ -1001,6 +1001,93 @@ capturado), así que siempre ven la vista vigente.
 
 ---
 
+### E-036 · `save()` fugaba un slot de la tabla de funciones de WASM en cada llamada
+
+**Síntoma.** No llegó a producirse un fallo visible en esta sesión (ver
+"Investigación" más abajo), pero es una fuga de memoria de crecimiento
+ilimitado: en una sesión de edición larga, cada acción con deshacer hace un
+`c.engine.save(c.doc)` por snapshot, además de los guardados de exportar e
+imprimir. Sin arreglar, la tabla de funciones indirectas de WASM crece un
+slot por cada uno de esos guardados y no se libera nunca hasta recargar la
+página.
+
+**Causa raíz.** `save()` (`src/engine/pdfium/PdfiumEngine.ts`) registraba el
+callback `WriteBlock` de `FPDF_FILEWRITE` con
+`this.mem.addFunction(..., 'iiii')` en cada llamada, para que PDFium pueda
+invocar código JS por cada bloque que escribe. Ese callback ocupa una entrada
+nueva de la tabla de funciones indirectas de WebAssembly hasta que se libera
+explícitamente con `removeFunction()` — la propia tabla no tiene recolector
+de basura. `save()` llamaba a `mem.free(fw)` en el `finally` para el buffer
+del struct `FPDF_FILEWRITE`, pero nunca a `mem.removeFunction(cb)`: cada
+guardado dejaba un slot ocupado para siempre. El mismo patrón, con el mismo
+riesgo, ya se había resuelto correctamente en `replaceImageJpeg()` (PR #57),
+que sí hace `removeFunction(cb)` en su `finally` — `save()` era la única
+llamada a `addFunction()` del motor que se había quedado sin su contraparte.
+
+**Investigación: ¿`addFunction()` llega a lanzar con el build actual?** No.
+Se probó con hasta 200 000 `save()` seguidos sobre un PDF de una página en
+blanco (72×72 pt) sin que `addFunction()` lanzara ninguna excepción: el
+módulo `@embedpdf/pdfium` de este proyecto está compilado con crecimiento de
+tabla permitido (comportamiento por defecto de Emscripten moderno,
+equivalente a `ALLOW_TABLE_GROWTH`), así que la tabla simplemente sigue
+creciendo — WebAssembly no tiene un tope propio salvo el que imponga el
+motor JS/wasm del navegador. Con otro build de PDFium compilado con
+`RESERVED_FUNCTION_POINTERS` fijo y sin crecimiento, el mismo defecto sí
+lanzaría `TypeError: Table.length is out-of-bounds` (o similar) en cuanto se
+agotaran los slots reservados — por eso el arreglo es correcto
+independientemente de cómo esté compilado el módulo en cada momento: no hay
+que esperar a que reviente para que sea un defecto real.
+
+**Cómo se detecta ahora.**
+- Test `E-036: 500 save() seguidos no agotan la tabla de funciones indirectas
+  de WASM` en `tests/unit/PdfiumEngine.savetablefeak.test.ts` (motor real).
+  Mide indirectamente el tamaño de la tabla: toma una "sonda" —
+  `addFunction()` seguido de `removeFunction()` inmediato— antes y después de
+  500 `save()`, y compara los índices que devuelve `addFunction()`. Los
+  índices liberados se reciclan (el primero libre disponible), así que si
+  `save()` no libera los suyos, cada sonda nueva tiene que pedir un índice
+  más alto: la sonda de después caía exactamente 500 por encima de la de
+  antes (`expected 500 to be less than or equal to 2`) antes del arreglo, y
+  ahora la diferencia es 0.
+- `save()` libera su callback con `this.mem.removeFunction(cb)` en el mismo
+  `finally` donde ya liberaba el buffer del `FPDF_FILEWRITE`.
+- Regla `addfunction-con-removefunction` — heurística por FICHERO, no por
+  método: en cada `.ts` de `src/engine/**` (salvo el propio `mem.ts`, ver
+  abajo), el número de llamadas a `addFunction(` no puede superar al número
+  de llamadas a `removeFunction(` en ese mismo fichero. Más simple que
+  trocear el cuerpo de cada método — no hay en el repo un parser de límites
+  de método reutilizable — y suficiente hoy: los dos únicos sitios de `src/`
+  que llaman a `addFunction()` (`save()` y `replaceImageJpeg()`) viven en el
+  mismo fichero (`PdfiumEngine.ts`) y cada uno ya libera el suyo. **Límite
+  conocido:** si un fichero tuviera dos métodos con `addFunction()` y solo
+  uno liberase el suyo (dos veces), el recuento por fichero no lo
+  distinguiría de "los dos están bien" — ese caso no existe hoy y, si
+  aparece, depende de la revisión humana del PR, igual que
+  `gesto-con-cancelacion` depende de revisión humana dentro de su propio
+  `gesto.ts`. `mem.ts` —donde vive el wrapper
+  `addFunction: (fn, sig) => m.addFunction(fn, sig)`— queda excluido a
+  propósito: ese wrapper no reserva ningún slot por sí mismo, solo delega la
+  llamada de quien sí lo hace.
+
+**Opción descartada: un callback cacheado por instancia del motor.** Se
+valoró crear el callback `WriteBlock` una sola vez en `PdfiumEngine.create()`
+y reutilizarlo en cada `save()`, con el array de trozos de salida en un campo
+mutable en vez de una variable de closure por llamada — evitaría reservar y
+liberar un slot en cada guardado. Se descartó porque el `finally` con
+`removeFunction()` ya dejó la fuga en cero sin coste medible (500 `save()` de
+un PDF de una página tardan un puñado de milisegundos, ver el test de
+arriba) y con menos superficie: no hay que razonar sobre reentrancia (¿qué
+pasa si algo dispara un `save()` mientras el campo mutable del callback
+cacheado ya tiene datos de un `save()` anterior sin terminar? hoy no ocurre,
+porque JS es de un solo hilo y `save()` es síncrono de principio a fin, pero
+un campo compartido es una invitación a que un cambio futuro lo rompa) ni
+sobre cuándo se libera ese slot cacheado al cerrar el documento o el motor.
+`replaceImageJpeg()` ya establece el mismo patrón de "reservar y liberar por
+llamada" para su propio callback — mantener `save()` igual es la opción más
+simple y más consistente con el resto del fichero.
+
+---
+
 ## Reglas de sostenimiento
 
 Estas no vienen de un defecto de producto, sino de mantener vivo el sistema que
