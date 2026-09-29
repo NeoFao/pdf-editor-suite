@@ -33,6 +33,9 @@ import { FiltrarPaginaCmd, type TipoFiltro } from '../commands/FiltrarPagina';
 import { ComprimirDocumentoCmd } from '../commands/ComprimirDocumento';
 import { SignaturePad } from './SignaturePad';
 import { CompressPanel } from './CompressPanel';
+import { TextPanel } from './TextPanel';
+import { agruparLineas, aTextoPlano, aMarkdown, type Linea } from '../texto/estructura';
+import { descargarArchivo } from './descargarArchivo';
 import { quitarFondo } from './quitarFondo';
 import { formatoBytes } from './formatoBytes';
 import { registrarGesto } from './gesto';
@@ -173,6 +176,16 @@ export class App {
     this.btnRect = this.button('Rectángulo', 'btn-rect', () => this.setTool(this.tool === 'rect' ? 'none' : 'rect'));
     this.btnEraser = this.button('Borrador', 'btn-eraser', () => this.setTool(this.tool === 'eraser' ? 'none' : 'eraser'));
     this.btnOcr = this.button('OCR', 'btn-ocr', () => void this.runOcr());
+    // Texto plano de todo el documento (#27 de la tabla de paridad, §9): abre
+    // el diálogo de copiar/descargar .txt (TextPanel), mismo espíritu que el
+    // modal de OCR de la app vieja. También sirve para leer el texto que un
+    // OCR acaba de reconocer, sin que el diálogo se abra solo (ver el estado
+    // que deja `runOcr`).
+    const btnExtractText = this.button('Texto…', 'btn-extract-text', () => this.openTextPanel());
+    // Exportar Markdown estructurado de todo el documento (#31 de la tabla de
+    // paridad, §9): descarga directa, sin diálogo previo — como
+    // `exportPDFToMarkdown` en la app vieja.
+    const btnExportMd = this.button('Exportar Markdown', 'btn-export-md', () => this.exportMarkdown());
 
     // Filtros de imagen (#25 de la tabla de paridad, §9): a diferencia de la
     // app vieja (rasteriza la página entera), actúan solo sobre los objetos
@@ -308,7 +321,7 @@ export class App {
     this.status = document.createElement('span');
     this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
 
-    bar.append(file, btnNew, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, signUpload, this.btnPen, this.btnRect, this.btnEraser, this.btnNote, this.btnOcr, this.filterSelect, this.btnFilter, this.btnCompress, swatchesEl, this.propsPanel, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnFitWidth, btnExtract, this.rangeInput, btnSplit, btnSave, btnPrint, btnUndo, btnRedo, this.status);
+    bar.append(file, btnNew, openImg, this.btnInsert, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, signUpload, this.btnPen, this.btnRect, this.btnEraser, this.btnNote, this.btnOcr, btnExtractText, btnExportMd, this.filterSelect, this.btnFilter, this.btnCompress, swatchesEl, this.propsPanel, this.searchInput, btnPrev, this.pageIndicator, btnNext, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown, insertPdf, insertImage, btnZoomOut, btnZoomIn, btnFitWidth, btnExtract, this.rangeInput, btnSplit, btnSave, btnPrint, btnUndo, btnRedo, this.status);
     rootEl.appendChild(bar);
 
     // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
@@ -880,7 +893,9 @@ export class App {
     try {
       const cmd = new OcrPageCmd(this.currentPage, new TesseractOcr());
       await this.bus.execute(cmd);
-      this.setStatus(`${cmd.recognized} línea(s) reconocida(s).`);
+      // No se abre el diálogo de texto solo (ver TextPanel): se ofrece el
+      // camino en el propio estado, un clic más que un modal no pedido.
+      this.setStatus(`${cmd.recognized} línea(s) reconocida(s). Pulsa «Texto…» para copiarlas.`);
     } catch {
       this.setStatus('Error de OCR.');
     } finally {
@@ -1399,13 +1414,30 @@ export class App {
     this.setStatus(`Página ${this.currentPage + 1} extraída.`);
   }
 
-  private download(bytes: Uint8Array<ArrayBuffer>, filename: string): void {
-    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a); a.click(); a.remove();
-    URL.revokeObjectURL(url);
+  private download(data: BlobPart, filename: string, mimeType = 'application/pdf'): void {
+    descargarArchivo(data, filename, mimeType);
+  }
+
+  /** Runs de texto de TODAS las páginas, agrupados en líneas de lectura (`estructura.ts`), en orden de página. */
+  private allPagesLineas(): Linea[][] {
+    const s = this.session;
+    if (!s) return [];
+    return s.model.pages.map((page) => agruparLineas(s.engine.getPageText(s.doc, page.index)));
+  }
+
+  /** `#btn-extract-text`: abre el diálogo de texto plano de todo el documento (#27 de la tabla de paridad, §9). */
+  private openTextPanel(): void {
+    if (!this.session) { this.setStatus('Abre un documento antes de extraer texto.'); return; }
+    const texto = aTextoPlano(this.allPagesLineas());
+    TextPanel.open(texto, this.docName.replace(/\.pdf$/i, ''));
+  }
+
+  /** `#btn-export-md`: descarga el Markdown estructurado de todo el documento (#31 de la tabla de paridad, §9). */
+  private exportMarkdown(): void {
+    if (!this.session) { this.setStatus('Abre un documento antes de exportar Markdown.'); return; }
+    const md = aMarkdown(this.allPagesLineas());
+    this.download(md, `${this.docName.replace(/\.pdf$/i, '')}.md`, 'text/markdown;charset=utf-8');
+    this.setStatus('Markdown exportado.');
   }
 
   private setStatus(msg: string): void { this.status.textContent = msg; }

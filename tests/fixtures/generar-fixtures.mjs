@@ -419,6 +419,39 @@ async function pdfEscaneado() {
   return doc.save();
 }
 
+/**
+ * PDF con estructura variada para el lote F (§9 #27/#31: "Texto…" y
+ * "Exportar Markdown"): un título grande en negrita, un párrafo de cuerpo de
+ * dos líneas, una línea con viñeta y una línea con caracteres que Markdown
+ * interpretaría como marcado (para el test de escape). Segunda página con
+ * una sola línea, para comprobar el separador entre páginas.
+ */
+export const TITULO_ESTRUCTURADO = 'Informe anual';
+export const LINEAS_CUERPO_ESTRUCTURADO = [
+  'Este parrafo tiene dos lineas de cuerpo normal',
+  'para poner a prueba el agrupamiento en parrafos.'
+];
+export const LINEA_VINETA_ESTRUCTURADO = 'punto uno';
+export const LINEA_ESCAPE_ESTRUCTURADO = 'precio *especial*_2';
+export const PAGINA_DOS_ESTRUCTURADO = 'Página dos';
+
+async function pdfEstructurado() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+
+  const p1 = doc.addPage([595.28, 841.89]);
+  p1.drawText(TITULO_ESTRUCTURADO, { x: 60, y: 760, size: 24, font: bold });
+  LINEAS_CUERPO_ESTRUCTURADO.forEach((l, i) => p1.drawText(l, { x: 60, y: 710 - i * 16, size: 11, font }));
+  p1.drawText(`• ${LINEA_VINETA_ESTRUCTURADO}`, { x: 60, y: 660, size: 11, font });
+  p1.drawText(LINEA_ESCAPE_ESTRUCTURADO, { x: 60, y: 640, size: 11, font });
+
+  const p2 = doc.addPage([595.28, 841.89]);
+  p2.drawText(PAGINA_DOS_ESTRUCTURADO, { x: 60, y: 760, size: 11, font });
+
+  return doc.save();
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -433,6 +466,7 @@ async function main() {
     'paginas-pequenas.pdf': await pdfPaginasPequenas(),
     'paginas-pequenas-marcadores.pdf': await pdfPaginasPequenasMarcadores(),
     'escaneado.pdf': await pdfEscaneado(),
+    'estructurado.pdf': await pdfEstructurado(),
     'rojo.png': pngSolido(16, 16, [255, 0, 0]),
     'firma-blanca.png': pngFirma(120, 60)
   };
