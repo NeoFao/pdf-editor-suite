@@ -43,6 +43,9 @@ export default defineConfig({
   ],
   webServer: [
     {
+      // `node server.js` sirve los ficheros del disco en vivo (sin build, sin
+      // caché en memoria de una versión anterior): reutilizar un proceso ya
+      // arrancado nunca sirve código viejo, así que reusar aquí es seguro.
       command: 'node server.js',
       port: 3100,
       env: { PORT: '3100' },
@@ -50,10 +53,19 @@ export default defineConfig({
       timeout: 30_000
     },
     {
-      // Construye la app nueva y la sirve estática para los tests del proyecto `next`.
+      // Construye la app nueva y la sirve estática (dist/) para los tests del
+      // proyecto `next`. reuseExistingServer es SIEMPRE false aquí, incluso en
+      // local: a diferencia de server.js, este comando sirve un `dist/`
+      // congelado en el momento del build. Si queda vivo un `vite preview`
+      // de una sesión anterior en :4173, reutilizarlo se saltaría por
+      // completo el `npm run build:next` y los tests de tests/e2e/next/
+      // correrían contra código que ya no existe — E-033, npm run verify
+      // dando un resultado falso sobre `dist` rancio (visto en el PR #52).
+      // Fallar alto con "puerto ya en uso" es preferible: ver
+      // scripts/liberar-puertos.mjs (`npm run e2e:liberar`) y docs/TESTING.md.
       command: 'npm run build:next && npm run preview:next',
       port: 4173,
-      reuseExistingServer: !process.env.CI,
+      reuseExistingServer: false,
       timeout: 120_000
     }
   ]
