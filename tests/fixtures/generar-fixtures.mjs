@@ -72,6 +72,41 @@ function pngFirma(w, h) {
   return Buffer.concat([sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', zlib.deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
 }
 
+/**
+ * PNG RGBA que imita una página escaneada: degradado suave (luz de escáner
+ * desigual) + ruido pseudoaleatorio determinista (mulberry32 con semilla
+ * fija, para que el fixture sea reproducible — no `Math.random()`). Sirve
+ * para el E2E de filtros/compresión (lote E, §9 #25 y #29): una imagen
+ * fotográfica de verdad, no un color sólido (que Flate comprimiría casi a
+ * nada y no serviría para medir una reducción de peso real).
+ */
+function pngEscaneado(w, h) {
+  const sig = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0); ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8; ihdr[9] = 6; // 8 bits, color tipo 6 (RGBA)
+  const raw = Buffer.alloc(h * (1 + w * 4));
+  let seed = 0x9e3779b9;
+  const siguiente = () => {
+    seed |= 0; seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  for (let y = 0; y < h; y++) {
+    const off = y * (1 + w * 4); raw[off] = 0; // filtro none
+    const filaBase = Math.round((y / (h - 1)) * 60);
+    for (let x = 0; x < w; x++) {
+      const p = off + 1 + x * 4;
+      const columnaBase = Math.round((x / (w - 1)) * 40);
+      const ruido = Math.round((siguiente() - 0.5) * 20);
+      const v = Math.max(0, Math.min(255, 180 + filaBase - columnaBase + ruido));
+      raw[p] = v; raw[p + 1] = v; raw[p + 2] = v; raw[p + 3] = 255;
+    }
+  }
+  return Buffer.concat([sig, pngChunk('IHDR', ihdr), pngChunk('IDAT', zlib.deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))]);
+}
+
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const SALIDA = path.join(AQUI, 'generados');
 
@@ -360,6 +395,30 @@ async function pdfOutlineCiclo() {
   return doc.save();
 }
 
+/** Texto de la línea vectorial de `escaneado.pdf`. El E2E de filtros/comprimir la usa para comprobar que el texto queda intacto (no forma parte de la imagen). */
+export const LINEA_ESCANEADO = 'Linea vectorial de referencia';
+
+/**
+ * Página con una imagen fotográfica grande (~2000×2800 px, ~300 dpi) más una
+ * línea de texto vectorial encima. Para el E2E de filtros/compresión (lote
+ * E, §9 #25 y #29): la app nueva actúa solo sobre el objeto imagen —
+ * `LINEA_ESCANEADO` debe seguir en la capa de texto, intacta, después de
+ * filtrar o comprimir, y la zona de la imagen debe reflejar el filtro
+ * aplicado.
+ */
+async function pdfEscaneado() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const anchoPx = 2000, altoPx = 2800, dpi = 300;
+  const anchoPt = (anchoPx / dpi) * 72;
+  const altoPt = (altoPx / dpi) * 72;
+  const p = doc.addPage([anchoPt, altoPt]);
+  const png = await doc.embedPng(pngEscaneado(anchoPx, altoPx));
+  p.drawImage(png, { x: 0, y: 0, width: anchoPt, height: altoPt });
+  p.drawText(LINEA_ESCANEADO, { x: 40, y: altoPt - 40, size: 14, font, color: rgb(0, 0, 0) });
+  return doc.save();
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -373,6 +432,7 @@ async function main() {
     'outline-ciclo.pdf': await pdfOutlineCiclo(),
     'paginas-pequenas.pdf': await pdfPaginasPequenas(),
     'paginas-pequenas-marcadores.pdf': await pdfPaginasPequenasMarcadores(),
+    'escaneado.pdf': await pdfEscaneado(),
     'rojo.png': pngSolido(16, 16, [255, 0, 0]),
     'firma-blanca.png': pngFirma(120, 60)
   };
