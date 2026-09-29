@@ -45,11 +45,42 @@ import { resolverAtajo, esCampoEditable, type AccionAtajo } from './atajos';
 import { AtajosPanel } from './AtajosPanel';
 import { parseRange } from './pageRange';
 import { Viewer, type ToolMode } from './Viewer';
+import { calcularEscalaAjusteAncho } from './layout';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
 import type { RectPt, OutlineItem } from '../engine/PdfEngine';
 import { STANDARD_FONTS } from '../engine/standardFontFor';
 import { stripSubsetPrefix } from '../engine/fontClassify';
+import { crearIcono, type NombreIcono } from './iconos';
+
+/**
+ * Pestañas de herramientas (rediseño de interfaz, §1 del encargo): agrupan
+ * los controles de edición al estilo Acrobat, en vez de una única barra larga
+ * de botones de texto. Cada pestaña tiene su `.context-bar` (§3), y solo la
+ * de la pestaña activa se muestra en escritorio — en móvil todas se apilan
+ * bajo el menú "⋯" heredado del PR #62 (ver el CSS, `estilos.css`).
+ */
+type PestanaId = 'editar' | 'comentar' | 'organizar' | 'firmar' | 'convertir';
+const PESTANAS: { id: PestanaId; etiqueta: string }[] = [
+  { id: 'editar', etiqueta: 'Editar' },
+  { id: 'comentar', etiqueta: 'Comentar' },
+  { id: 'organizar', etiqueta: 'Organizar' },
+  { id: 'firmar', etiqueta: 'Rellenar y firmar' },
+  { id: 'convertir', etiqueta: 'Convertir' }
+];
+/** Recuerda la pestaña activa entre sesiones (§1, "envuelto en try/catch": un origen con `localStorage` bloqueado no debe romper la app). */
+const CLAVE_PESTANA_ACTIVA = 'pdf-editor:pestana-activa';
+function leerPestanaGuardada(): PestanaId | null {
+  try {
+    const v = window.localStorage.getItem(CLAVE_PESTANA_ACTIVA);
+    return PESTANAS.some((p) => p.id === v) ? (v as PestanaId) : null;
+  } catch {
+    return null;
+  }
+}
+function guardarPestanaActiva(id: PestanaId): void {
+  try { window.localStorage.setItem(CLAVE_PESTANA_ACTIVA, id); } catch { /* almacenamiento no disponible: no-op */ }
+}
 
 /** Paleta de #swatches (#18 de la tabla de paridad): 8 colores fijos + el selector personalizado `#tool-color`. */
 const PALETTE: { color: string; label: string }[] = [
@@ -123,6 +154,8 @@ export class App {
   private limpiarImpresionAnterior: (() => void) | null = null;
   private readonly viewerEl: HTMLElement;
   private readonly thumbsEl: HTMLElement;
+  /** Ancho CSS (px) con el que se renderizaron las miniaturas la última vez — ver `buildThumbnails`/el `ResizeObserver` de `#thumbs`. */
+  private thumbsRenderedWidthCss = 0;
   private readonly outlineEl: HTMLElement;
   private readonly tabPages: HTMLButtonElement;
   private readonly tabOutline: HTMLButtonElement;
@@ -171,53 +204,59 @@ export class App {
   private moreOpen = false;
   private readonly toolbarMoreEl: HTMLElement;
   private readonly btnMore: HTMLButtonElement;
+  /** Pestaña de herramientas activa (§1 del rediseño de interfaz) — único punto de verdad, ver `activarPestana`. */
+  private tabActiva: PestanaId = 'editar';
+  private readonly tabButtons: Record<PestanaId, HTMLButtonElement> = {} as Record<PestanaId, HTMLButtonElement>;
+  private readonly contextBars: Record<PestanaId, HTMLElement> = {} as Record<PestanaId, HTMLElement>;
+  private readonly tablistEl: HTMLElement;
+  private readonly docNameEl: HTMLElement;
+  private readonly zoomPctEl: HTMLElement;
 
   constructor(rootEl: HTMLElement) {
     rootEl.textContent = '';
-    const bar = document.createElement('div');
-    bar.id = 'toolbar';
-    bar.className = 'toolbar';
-    Object.assign(bar.style, { display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', padding: '8px', borderBottom: '1px solid #ccc', font: '14px sans-serif', flex: '0 0 auto' });
 
     const file = document.createElement('input');
     file.type = 'file'; file.accept = 'application/pdf,.md,.markdown,text/markdown'; file.id = 'file-input';
     file.addEventListener('change', () => { const f = file.files?.[0]; if (f) void this.openFile(f); });
+    file.style.display = 'none';
     this.fileInput = file;
 
-    const btnNew = this.button('Nuevo', 'btn-new', () => void this.newBlank());
+    const btnNew = this.iconBoton('documento-nuevo', 'Nuevo', 'btn-new', () => void this.newBlank());
 
     const openImg = document.createElement('input');
-    openImg.type = 'file'; openImg.accept = 'image/*'; openImg.id = 'btn-open-image'; openImg.title = 'Abrir una imagen como PDF';
+    openImg.type = 'file'; openImg.accept = 'image/*'; openImg.id = 'btn-open-image';
     openImg.addEventListener('change', () => { const f = openImg.files?.[0]; if (f) void this.openImage(f).finally(() => { openImg.value = ''; }); });
+    const btnOpenImg = this.campoArchivo(openImg, 'imagen', 'Abrir una imagen como PDF', 'btn-open-image-trigger');
 
-    this.btnInsert = this.button('Insertar texto', 'btn-insert', () => this.setTool(this.tool === 'insert' ? 'none' : 'insert'));
-    const btnDelete = this.button('Borrar', 'btn-delete', () => this.deleteSelected());
-    const btnHighlight = this.button('Resaltar', 'btn-highlight', () => this.highlightSelected());
-    const btnUnderline = this.button('Subrayar', 'btn-underline', () => this.underlineSelected());
-    const btnStrike = this.button('Tachar', 'btn-strike', () => this.strikeSelected());
-    const btnSign = this.button('Firmar', 'btn-sign', () => this.openSignature());
+    this.btnInsert = this.iconBoton('insertar-texto', 'Insertar texto', 'btn-insert', () => this.setTool(this.tool === 'insert' ? 'none' : 'insert'), { mostrarEtiqueta: true });
+    const btnDelete = this.iconBoton('redactar', 'Borrar', 'btn-delete', () => this.deleteSelected(), { mostrarEtiqueta: true });
+    const btnHighlight = this.iconBoton('resaltar', 'Resaltar', 'btn-highlight', () => this.highlightSelected(), { mostrarEtiqueta: true });
+    const btnUnderline = this.iconBoton('subrayar', 'Subrayar', 'btn-underline', () => this.underlineSelected(), { mostrarEtiqueta: true });
+    const btnStrike = this.iconBoton('tachar', 'Tachar', 'btn-strike', () => this.strikeSelected(), { mostrarEtiqueta: true });
+    const btnSign = this.iconBoton('firmar', 'Firmar', 'btn-sign', () => this.openSignature(), { mostrarEtiqueta: true });
     const signUpload = document.createElement('input');
     signUpload.type = 'file'; signUpload.accept = 'image/*'; signUpload.id = 'btn-sign-upload';
-    signUpload.title = 'Firma desde imagen (quita el fondo blanco automáticamente)';
     signUpload.addEventListener('change', () => {
       const f = signUpload.files?.[0];
       if (f) void this.handleSignUpload(f).finally(() => { signUpload.value = ''; });
     });
-    this.btnPen = this.button('Pluma', 'btn-pen', () => this.setTool(this.tool === 'pen' ? 'none' : 'pen'));
-    this.btnNote = this.button('Nota', 'btn-note', () => this.setTool(this.tool === 'note' ? 'none' : 'note'));
-    this.btnRect = this.button('Rectángulo', 'btn-rect', () => this.setTool(this.tool === 'rect' ? 'none' : 'rect'));
-    this.btnEraser = this.button('Borrador', 'btn-eraser', () => this.setTool(this.tool === 'eraser' ? 'none' : 'eraser'));
-    this.btnOcr = this.button('OCR', 'btn-ocr', () => void this.runOcr());
+    const btnSignUpload = this.campoArchivo(signUpload, 'firma-imagen', 'Firma desde imagen', 'btn-sign-upload-trigger', { mostrarEtiqueta: true });
+    btnSignUpload.title = 'Firma desde imagen (quita el fondo blanco automáticamente)';
+    this.btnPen = this.iconBoton('pluma', 'Pluma', 'btn-pen', () => this.setTool(this.tool === 'pen' ? 'none' : 'pen'), { mostrarEtiqueta: true });
+    this.btnNote = this.iconBoton('nota', 'Nota', 'btn-note', () => this.setTool(this.tool === 'note' ? 'none' : 'note'), { mostrarEtiqueta: true });
+    this.btnRect = this.iconBoton('rectangulo', 'Rectángulo', 'btn-rect', () => this.setTool(this.tool === 'rect' ? 'none' : 'rect'), { mostrarEtiqueta: true });
+    this.btnEraser = this.iconBoton('borrador', 'Borrador', 'btn-eraser', () => this.setTool(this.tool === 'eraser' ? 'none' : 'eraser'), { mostrarEtiqueta: true });
+    this.btnOcr = this.iconBoton('ocr', 'OCR', 'btn-ocr', () => void this.runOcr(), { mostrarEtiqueta: true });
     // Texto plano de todo el documento (#27 de la tabla de paridad, §9): abre
     // el diálogo de copiar/descargar .txt (TextPanel), mismo espíritu que el
     // modal de OCR de la app vieja. También sirve para leer el texto que un
     // OCR acaba de reconocer, sin que el diálogo se abra solo (ver el estado
     // que deja `runOcr`).
-    const btnExtractText = this.button('Texto…', 'btn-extract-text', () => this.openTextPanel());
+    const btnExtractText = this.iconBoton('texto-panel', 'Texto…', 'btn-extract-text', () => this.openTextPanel(), { mostrarEtiqueta: true });
     // Exportar Markdown estructurado de todo el documento (#31 de la tabla de
     // paridad, §9): descarga directa, sin diálogo previo — como
     // `exportPDFToMarkdown` en la app vieja.
-    const btnExportMd = this.button('Exportar Markdown', 'btn-export-md', () => this.exportMarkdown());
+    const btnExportMd = this.iconBoton('exportar-md', 'Exportar Markdown', 'btn-export-md', () => this.exportMarkdown(), { mostrarEtiqueta: true });
 
     // Filtros de imagen (#25 de la tabla de paridad, §9): a diferencia de la
     // app vieja (rasteriza la página entera), actúan solo sobre los objetos
@@ -236,12 +275,12 @@ export class App {
       opt.value = value; opt.textContent = label;
       this.filterSelect.appendChild(opt);
     }
-    this.btnFilter = this.button('Aplicar filtro', 'btn-filter', () => void this.applyImageFilter());
+    this.btnFilter = this.iconBoton('filtro', 'Aplicar filtro', 'btn-filter', () => void this.applyImageFilter(), { mostrarEtiqueta: true });
 
     // Comprimir documento (#26 → #29 de la tabla de paridad, §9): abre un
     // panel pequeño (calidad + dpi máximo) y comprime solo los objetos
     // imagen de TODAS las páginas.
-    this.btnCompress = this.button('Comprimir', 'btn-compress', () => this.openCompressPanel());
+    this.btnCompress = this.iconBoton('comprimir', 'Comprimir', 'btn-compress', () => this.openCompressPanel(), { mostrarEtiqueta: true });
 
     this.colorInput = document.createElement('input');
     this.colorInput.type = 'color'; this.colorInput.id = 'btn-color'; this.colorInput.title = 'Color del texto (de la línea seleccionada)';
@@ -289,14 +328,9 @@ export class App {
     // (`reflectPropsPanel`, llamado desde `onSelect`).
     this.propsPanel = document.createElement('div');
     this.propsPanel.id = 'props-panel';
-    Object.assign(this.propsPanel.style, {
-      display: 'none', alignItems: 'center', gap: '6px',
-      padding: '2px 8px', border: '1px solid #ccc', borderRadius: '4px'
-    });
 
     const fontLabel = document.createElement('label');
-    fontLabel.textContent = 'Fuente:';
-    fontLabel.style.fontSize = '12px';
+    fontLabel.append('Fuente:');
     this.propFont = document.createElement('select');
     this.propFont.id = 'prop-font';
     this.propFont.title = 'Fuente de la línea seleccionada';
@@ -304,8 +338,7 @@ export class App {
     fontLabel.appendChild(this.propFont);
 
     const sizeLabel = document.createElement('label');
-    sizeLabel.textContent = 'Tamaño:';
-    sizeLabel.style.fontSize = '12px';
+    sizeLabel.append('Tamaño:');
     this.propSize = document.createElement('input');
     this.propSize.type = 'number'; this.propSize.id = 'prop-size';
     this.propSize.min = '1'; this.propSize.max = '400'; this.propSize.step = '0.5';
@@ -319,119 +352,196 @@ export class App {
     this.searchInput = document.createElement('input');
     this.searchInput.type = 'search'; this.searchInput.id = 'btn-search'; this.searchInput.placeholder = 'Buscar…';
     this.searchInput.addEventListener('input', () => this.search());
+    const searchBox = document.createElement('div');
+    searchBox.className = 'search-box';
+    searchBox.appendChild(crearIcono('buscar'));
+    searchBox.appendChild(this.searchInput);
 
-    const btnPrev = this.button('‹', 'btn-prev', () => this.goToPage(this.currentPage - 1));
-    const btnNext = this.button('›', 'btn-next', () => this.goToPage(this.currentPage + 1));
-    const btnRotate = this.button('Rotar ⟳', 'btn-rotate', () => { if (this.bus) void this.bus.execute(new RotatePageCmd(this.currentPage, 90)); });
-    const btnDeletePage = this.button('Eliminar pág', 'btn-delete-page', () => this.deleteCurrentPage());
-    const btnDuplicate = this.button('Duplicar', 'btn-duplicate', () => { if (this.bus) void this.bus.execute(new DuplicatePageCmd(this.currentPage)); });
-    const btnPageUp = this.button('Subir', 'btn-page-up', () => this.moveCurrentPage(-1));
-    const btnPageDown = this.button('Bajar', 'btn-page-down', () => this.moveCurrentPage(1));
+    const btnPrev = this.iconBoton('flecha-izq', 'Página anterior', 'btn-prev', () => this.goToPage(this.currentPage - 1));
+    const btnNext = this.iconBoton('flecha-der', 'Página siguiente', 'btn-next', () => this.goToPage(this.currentPage + 1));
+    const btnRotate = this.iconBoton('rotar', 'Rotar', 'btn-rotate', () => { if (this.bus) void this.bus.execute(new RotatePageCmd(this.currentPage, 90)); }, { mostrarEtiqueta: true });
+    const btnDeletePage = this.iconBoton('eliminar-pagina', 'Eliminar página', 'btn-delete-page', () => this.deleteCurrentPage(), { mostrarEtiqueta: true });
+    const btnDuplicate = this.iconBoton('duplicar', 'Duplicar', 'btn-duplicate', () => { if (this.bus) void this.bus.execute(new DuplicatePageCmd(this.currentPage)); }, { mostrarEtiqueta: true });
+    const btnPageUp = this.iconBoton('subir', 'Subir', 'btn-page-up', () => this.moveCurrentPage(-1), { mostrarEtiqueta: true });
+    const btnPageDown = this.iconBoton('bajar', 'Bajar', 'btn-page-down', () => this.moveCurrentPage(1), { mostrarEtiqueta: true });
 
     const insertPdf = document.createElement('input');
-    insertPdf.type = 'file'; insertPdf.accept = 'application/pdf'; insertPdf.id = 'btn-insert-pdf'; insertPdf.title = 'Insertar otro PDF tras la página actual';
+    insertPdf.type = 'file'; insertPdf.accept = 'application/pdf'; insertPdf.id = 'btn-insert-pdf';
     insertPdf.addEventListener('change', () => { const f = insertPdf.files?.[0]; if (f) void this.handleInsertPdf(f).finally(() => { insertPdf.value = ''; }); });
+    const btnInsertPdf = this.campoArchivo(insertPdf, 'insertar-pdf', 'Insertar PDF', 'btn-insert-pdf-trigger', { mostrarEtiqueta: true });
+    btnInsertPdf.title = 'Insertar otro PDF tras la página actual';
 
     const insertImage = document.createElement('input');
-    insertImage.type = 'file'; insertImage.accept = 'image/*'; insertImage.id = 'btn-insert-image'; insertImage.title = 'Insertar una imagen en la página actual';
+    insertImage.type = 'file'; insertImage.accept = 'image/*'; insertImage.id = 'btn-insert-image';
     insertImage.addEventListener('change', () => { const f = insertImage.files?.[0]; if (f) void this.handleInsertImage(f).finally(() => { insertImage.value = ''; }); });
-    this.pageIndicator = document.createElement('span');
-    this.pageIndicator.id = 'page-indicator'; this.pageIndicator.style.font = '13px sans-serif'; this.pageIndicator.textContent = '– / –';
+    const btnInsertImage = this.campoArchivo(insertImage, 'imagen', 'Insertar imagen', 'btn-insert-image-trigger', { mostrarEtiqueta: true });
+    btnInsertImage.title = 'Insertar una imagen en la página actual';
 
-    const btnZoomOut = this.button('−', 'btn-zoom-out', () => this.zoom(1 / 1.25));
-    const btnZoomIn = this.button('+', 'btn-zoom-in', () => this.zoom(1.25));
-    const btnFitWidth = this.button('Ajustar ancho', 'btn-fit-width', () => this.fitWidth());
-    const btnExtract = this.button('Extraer pág.', 'btn-extract', () => this.extractCurrent());
+    this.pageIndicator = document.createElement('span');
+    this.pageIndicator.id = 'page-indicator'; this.pageIndicator.textContent = '– / –';
+
+    this.zoomPctEl = document.createElement('span');
+    this.zoomPctEl.id = 'zoom-pct'; this.zoomPctEl.className = 'zoom-pct'; this.zoomPctEl.textContent = '100%';
+    const btnZoomOut = this.iconBoton('menos', 'Alejar', 'btn-zoom-out', () => this.zoom(1 / 1.25));
+    const btnZoomIn = this.iconBoton('mas', 'Acercar', 'btn-zoom-in', () => this.zoom(1.25));
+    const btnFitWidth = this.iconBoton('ajustar-ancho', 'Ajustar al ancho', 'btn-fit-width', () => this.fitWidth());
+    const btnExtract = this.iconBoton('extraer', 'Extraer', 'btn-extract', () => this.extractCurrent(), { mostrarEtiqueta: true });
     this.rangeInput = document.createElement('input');
     this.rangeInput.type = 'text'; this.rangeInput.id = 'btn-range'; this.rangeInput.placeholder = '1-3,5'; this.rangeInput.size = 6;
-    const btnSplit = this.button('Dividir', 'btn-split', () => this.splitByRange());
-    const btnSave = this.button('Guardar', 'btn-save', () => { void this.save(); });
-    const btnPrint = this.button('Imprimir', 'btn-print', () => { void this.print(); });
-    const btnUndo = this.button('Deshacer', 'btn-undo', () => { void this.bus?.undo(); });
-    const btnRedo = this.button('Rehacer', 'btn-redo', () => { void this.bus?.redo(); });
+    this.rangeInput.title = 'Rango de páginas a dividir (ej.: 1-3,5)';
+    const btnSplit = this.iconBoton('dividir', 'Dividir', 'btn-split', () => this.splitByRange(), { mostrarEtiqueta: true });
+    const btnSave = this.iconBoton('guardar', 'Guardar', 'btn-save', () => { void this.save(); });
+    const btnPrint = this.iconBoton('imprimir', 'Imprimir', 'btn-print', () => { void this.print(); });
+    const btnUndo = this.iconBoton('deshacer', 'Deshacer', 'btn-undo', () => { void this.bus?.undo(); });
+    const btnRedo = this.iconBoton('rehacer', 'Rehacer', 'btn-redo', () => { void this.bus?.redo(); });
 
     this.status = document.createElement('span');
-    this.status.id = 'status'; this.status.style.marginLeft = 'auto'; this.status.style.color = '#555';
+    this.status.id = 'status';
 
-    const btnShortcuts = this.button('?', 'btn-shortcuts', () => AtajosPanel.open());
+    const btnShortcuts = document.createElement('button');
+    btnShortcuts.type = 'button'; btnShortcuts.id = 'btn-shortcuts'; btnShortcuts.className = 'icon-btn';
+    btnShortcuts.textContent = '?';
     btnShortcuts.title = 'Atajos de teclado';
     btnShortcuts.setAttribute('aria-label', 'Mostrar los atajos de teclado');
+    btnShortcuts.addEventListener('click', () => AtajosPanel.open());
 
     // Cajón móvil (§9 #35): abre/cierra `#sidebar` en ≤768px. Oculto por
     // completo en escritorio (CSS), donde el panel lateral ya es siempre
     // visible y este botón no tendría nada que hacer.
-    this.btnDrawer = this.button('☰', 'btn-drawer', () => this.toggleDrawer());
-    this.btnDrawer.title = 'Páginas y marcadores';
-    this.btnDrawer.setAttribute('aria-label', 'Mostrar páginas y marcadores');
+    this.btnDrawer = this.iconBoton('menu', 'Páginas y marcadores', 'btn-drawer', () => this.toggleDrawer());
     this.btnDrawer.setAttribute('aria-controls', 'sidebar');
     this.btnDrawer.setAttribute('aria-expanded', 'false');
 
-    // Menú "⋯" móvil (§9 #35): revela `#toolbar-more`. Oculto en escritorio,
-    // donde `#toolbar-more` es `display: contents` y ya se ve todo entero.
-    this.btnMore = this.button('⋯', 'btn-more', () => this.toggleMore());
-    this.btnMore.title = 'Más herramientas';
-    this.btnMore.setAttribute('aria-label', 'Más herramientas');
+    // Menú "⋯" móvil (§9 #35, reutilizado en el rediseño para agrupar TODAS
+    // las barras contextuales en móvil, ver estilos.css): revela
+    // `#toolbar-more`. Oculto en escritorio, donde las pestañas ya cumplen
+    // ese papel.
+    this.btnMore = this.iconBoton('mas-opciones', 'Más herramientas', 'btn-more', () => this.toggleMore());
     this.btnMore.setAttribute('aria-controls', 'toolbar-more');
     this.btnMore.setAttribute('aria-expanded', 'false');
 
-    // Barra principal (§9 #35): en escritorio, `#toolbar-primary` es
-    // `display: contents` — sus hijos quedan como hijos directos de
-    // `#toolbar`, IDÉNTICO al flujo de antes de este PR. En ≤768px pasa a
-    // ser una fila con scroll horizontal propio (nunca el de la página, ver
-    // el `<style>` de index.next.html) con las acciones más usadas: abrir,
-    // deshacer/rehacer, guardar, las herramientas de edición y zoom — el
-    // resto (filtros, comprimir, insertar PDF/imagen, dividir, buscar,
-    // marcar/subrayar/tachar, firma, OCR, exportar…) vive en `#toolbar-more`,
-    // porque son controles de uso ocasional (varios son un `<select>` +
-    // botón o un rango + botón, que no caben bien como icono suelto en una
-    // fila). Se prefiere el scroll horizontal (una de las dos opciones que
-    // pedía el encargo) para las acciones frecuentes en vez de esconderlas
-    // también tras "⋯": menos toques para lo que el usuario hace todo el
-    // rato, a costa de que la fila entera se deba recorrer con el dedo en
-    // vez de crecer en alto — con los 15 controles de este grupo no supera
-    // nunca 1 fila (el requisito es ≤2), y `#btn-drawer`/`#btn-more` quedan
-    // fijos (`position: sticky`) en los extremos para no perderse al hacer
-    // scroll dentro de la fila.
-    // El `<input type="file">` nativo muestra "Elegir archivo" + el nombre
-    // del último fichero abierto — de ancho impredecible (crece con el
-    // nombre) y se comía casi toda la fila principal en 390px, dejando fuera
-    // de la vista inicial justo lo más usado (deshacer/rehacer/guardar). En
-    // móvil se oculta (el input real sigue ahí, sigue siendo el único sitio
-    // que abre archivos) y este botón compacto lo dispara con `.click()`; en
-    // escritorio se mantiene oculto y el input de siempre sigue visible,
-    // exactamente igual que antes de este PR.
-    const btnOpenMobile = this.button('📂', 'btn-open-mobile', () => this.fileInput.click());
-    btnOpenMobile.title = 'Abrir un archivo';
-    btnOpenMobile.setAttribute('aria-label', 'Abrir un archivo');
+    // Disparador compacto de `#file-input` (oculto siempre, §5 del encargo):
+    // el mismo botón sirve en escritorio y en móvil — antes de este PR solo
+    // existía la versión móvil (el input nativo se veía en escritorio).
+    const btnOpenMobile = this.iconBoton('carpeta-abrir', 'Abrir un archivo', 'btn-open-mobile', () => this.fileInput.click());
 
-    const primaryEl = document.createElement('div');
-    primaryEl.id = 'toolbar-primary';
-    primaryEl.append(
-      this.btnDrawer, file, btnOpenMobile, btnNew, btnUndo, btnRedo, btnSave,
-      this.btnInsert, this.btnPen, this.btnRect, this.btnEraser, this.btnNote,
-      btnZoomOut, btnZoomIn, btnFitWidth,
-      this.btnMore
+    // ── Barra superior (§1 del rediseño): nombre del documento, abrir/
+    // nuevo/guardar/imprimir/deshacer/rehacer, zoom, búsqueda y ayuda. Se ve
+    // siempre, sin importar la pestaña de herramientas activa.
+    this.docNameEl = document.createElement('span');
+    this.docNameEl.className = 'doc-name';
+    this.docNameEl.textContent = 'Sin documento';
+
+    const topbar = document.createElement('div');
+    topbar.className = 'topbar';
+    const grupoAbrir = document.createElement('div');
+    grupoAbrir.className = 'topbar-group';
+    grupoAbrir.append(file, btnOpenMobile, btnOpenImg, openImg, btnNew);
+    const grupoDeshacer = document.createElement('div');
+    grupoDeshacer.className = 'topbar-group';
+    grupoDeshacer.append(btnUndo, btnRedo);
+    const grupoGuardar = document.createElement('div');
+    grupoGuardar.className = 'topbar-group';
+    grupoGuardar.append(btnSave, btnPrint);
+    const grupoZoom = document.createElement('div');
+    grupoZoom.className = 'topbar-group';
+    grupoZoom.append(btnZoomOut, this.zoomPctEl, btnZoomIn, btnFitWidth);
+    // `#btn-drawer`/`#btn-more` viven FUERA de `.topbar-scroll` a propósito
+    // (revisión de PR #63): en móvil, `.topbar-scroll` es la que desplaza
+    // horizontalmente (`overflow-x: auto`) — si los botones fijos fueran
+    // `position: sticky` DENTRO de esa fila, se solapan con el contenido de
+    // al lado en vez de reservarle hueco (un `sticky` en un flex que
+    // desborda no aparta espacio en su posición fija, así que "engancha" por
+    // encima del elemento que le quede debajo, p. ej. taba el "100%" del
+    // zoom). Como hijos normales de `.topbar` (que no desplaza) a los lados
+    // de `.topbar-scroll` (`flex: 1`, la única que desplaza), quedan
+    // SIEMPRE en su sitio sin tapar nada — sin necesidad de `sticky`.
+    const topbarScroll = document.createElement('div');
+    topbarScroll.className = 'topbar-scroll';
+    topbarScroll.append(
+      this.docNameEl, this.separador('topbar-sep'),
+      grupoAbrir, this.separador('topbar-sep'),
+      grupoDeshacer, this.separador('topbar-sep'),
+      grupoGuardar,
+      Object.assign(document.createElement('div'), { className: 'topbar-spacer' }),
+      grupoZoom, this.separador('topbar-sep'),
+      searchBox, this.separador('topbar-sep'),
+      btnShortcuts
     );
+    topbar.append(this.btnDrawer, topbarScroll, this.btnMore);
 
-    // Barra secundaria (§9 #35): controles de uso ocasional, ver el
-    // comentario de arriba. En escritorio se ve exactamente igual que hoy
-    // (mismo `display: contents`); en móvil solo aparece con `#btn-more`
-    // abierto.
+    // ── Pestañas de herramientas (role="tablist", §1): flechas izq/der
+    // mueven el foco entre pestañas (patrón WAI-ARIA de pestañas).
+    this.tablistEl = document.createElement('div');
+    this.tablistEl.className = 'tablist';
+    this.tablistEl.setAttribute('role', 'tablist');
+    this.tablistEl.setAttribute('aria-label', 'Herramientas');
+    for (const p of PESTANAS) {
+      const tab = document.createElement('button');
+      tab.type = 'button';
+      tab.id = `tab-${p.id}`;
+      tab.className = 'tab';
+      tab.textContent = p.etiqueta;
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', 'false');
+      tab.setAttribute('aria-controls', `panel-${p.id}`);
+      tab.addEventListener('click', () => this.activarPestana(p.id));
+      this.tabButtons[p.id] = tab;
+      this.tablistEl.appendChild(tab);
+    }
+    this.tablistEl.addEventListener('keydown', (e) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      e.preventDefault();
+      const i = PESTANAS.findIndex((p) => p.id === this.tabActiva);
+      const siguiente = e.key === 'ArrowRight' ? (i + 1) % PESTANAS.length : (i - 1 + PESTANAS.length) % PESTANAS.length;
+      const destino = PESTANAS[siguiente]!.id;
+      this.activarPestana(destino);
+      this.tabButtons[destino].focus();
+    });
+
+    const crearBarraContextual = (id: PestanaId, hijos: (HTMLElement | undefined)[]): HTMLElement => {
+      const bar = document.createElement('div');
+      bar.className = 'context-bar';
+      bar.id = `panel-${id}`;
+      bar.dataset.tab = id;
+      bar.setAttribute('role', 'tabpanel');
+      bar.setAttribute('aria-labelledby', `tab-${id}`);
+      bar.append(...hijos.filter((h): h is HTMLElement => !!h));
+      this.contextBars[id] = bar;
+      return bar;
+    };
+
+    const barraEditar = crearBarraContextual('editar', [
+      this.btnInsert, btnDelete, insertImage, btnInsertImage, this.btnOcr,
+      this.separador(), this.propsPanel
+    ]);
+    const barraComentar = crearBarraContextual('comentar', [
+      btnHighlight, btnUnderline, btnStrike, this.btnNote, this.btnPen, this.btnRect, this.btnEraser,
+      this.separador(), swatchesEl
+    ]);
+    const barraOrganizar = crearBarraContextual('organizar', [
+      btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown,
+      insertPdf, btnInsertPdf, btnExtract,
+      this.separador(), this.rangeInput, btnSplit
+    ]);
+    const barraFirmar = crearBarraContextual('firmar', [btnSign, signUpload, btnSignUpload]);
+    const barraConvertir = crearBarraContextual('convertir', [
+      btnExtractText, btnExportMd, this.separador(), this.filterSelect, this.btnFilter, this.btnCompress
+    ]);
+
+    // `#toolbar-more` agrupa pestañas + barras contextuales (ver el
+    // comentario junto a `.tablist`/`#toolbar-more` en estilos.css: en móvil
+    // es el mismo contenedor que revela `#btn-more`).
     this.toolbarMoreEl = document.createElement('div');
     this.toolbarMoreEl.id = 'toolbar-more';
-    this.toolbarMoreEl.append(
-      openImg, btnDelete, btnHighlight, btnUnderline, btnStrike, btnSign, signUpload,
-      this.btnOcr, btnExtractText, btnExportMd,
-      this.filterSelect, this.btnFilter, this.btnCompress,
-      this.colorInput, swatchesEl, this.propsPanel,
-      this.searchInput, btnPrev, this.pageIndicator, btnNext,
-      btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown,
-      insertPdf, insertImage, btnExtract, this.rangeInput, btnSplit,
-      btnPrint, btnShortcuts
-    );
+    this.toolbarMoreEl.append(this.tablistEl, barraEditar, barraComentar, barraOrganizar, barraFirmar, barraConvertir);
 
-    bar.append(primaryEl, this.toolbarMoreEl, this.status);
-    rootEl.appendChild(bar);
+    const toolbarWrap = document.createElement('div');
+    toolbarWrap.id = 'toolbar';
+    toolbarWrap.append(topbar, this.toolbarMoreEl);
+    rootEl.appendChild(toolbarWrap);
+
+    this.activarPestana(leerPestanaGuardada() ?? 'editar');
 
     // Telón de fondo del cajón móvil (§9 #35): clic cierra el cajón.
     // Colocado DENTRO de `area` (más abajo), no de `rootEl` — como `area`
@@ -444,25 +554,14 @@ export class App {
     this.backdropEl.id = 'drawer-backdrop';
     this.backdropEl.addEventListener('click', () => this.closeDrawer());
 
-    // Área inferior: miniaturas (izquierda) + visor (derecha). Flex para que
-    // siempre quede bajo la barra aunque esta ocupe varias filas.
+    // Área inferior: panel lateral (izquierda) + visor (derecha).
     const area = document.createElement('div');
-    // `position: relative` (§9 #35): ancla `#sidebar`/`#drawer-backdrop` en
-    // móvil (`position: absolute`, ver el CSS) a partir de AQUÍ, que ya
-    // empieza debajo de `#toolbar` — nunca a la ventana entera. Sin efecto en
-    // escritorio (sidebar/backdrop siguen en el flujo normal ahí).
-    Object.assign(area.style, { flex: '1', minHeight: '0', display: 'flex', position: 'relative' });
+    area.className = 'workarea';
 
     // Panel lateral: dos pestañas ("Páginas"/"Marcadores") que alternan entre
     // las miniaturas y el árbol de marcadores dentro del mismo hueco.
     const sidebar = document.createElement('div');
     sidebar.id = 'sidebar';
-    // `width`/`flex` (150px en escritorio) viven en el CSS de
-    // index.next.html, no inline: en móvil el mismo selector `#sidebar` pasa
-    // a `position: fixed` con otro ancho (cajón, §9 #35) — un valor inline
-    // aquí ganaría siempre a esa regla de medios y el cajón no podría
-    // cambiar de tamaño ni anclarse a la izquierda.
-    Object.assign(sidebar.style, { display: 'flex', flexDirection: 'column', overflow: 'hidden', background: '#3f4145', boxSizing: 'border-box' });
     // Atrapa el Tab dentro del cajón mientras está abierto (foco "razonable",
     // no exhaustivo): con el cajón cerrado el elemento ni siquiera es
     // alcanzable por tabulación normal en móvil salvo por script.
@@ -470,20 +569,20 @@ export class App {
     this.sidebarEl = sidebar;
 
     const tabs = document.createElement('div');
-    Object.assign(tabs.style, { display: 'flex', flex: '0 0 auto', borderBottom: '1px solid #2a2c2f' });
+    tabs.className = 'sidebar-tabs';
+    tabs.setAttribute('role', 'tablist');
     this.tabPages = this.button('Páginas', 'tab-pages', () => this.showSidebarTab('pages'));
     this.tabOutline = this.button('Marcadores', 'tab-outline', () => this.showSidebarTab('outline'));
-    Object.assign(this.tabPages.style, { flex: '1', padding: '6px 4px' });
-    Object.assign(this.tabOutline.style, { flex: '1', padding: '6px 4px' });
+    this.tabPages.className = 'tab';
+    this.tabOutline.className = 'tab';
     tabs.append(this.tabPages, this.tabOutline);
 
     this.thumbsEl = document.createElement('div');
     this.thumbsEl.id = 'thumbs';
-    Object.assign(this.thumbsEl.style, { flex: '1', overflow: 'auto', padding: '8px', boxSizing: 'border-box' });
 
     this.outlineEl = document.createElement('div');
     this.outlineEl.id = 'outline-panel';
-    Object.assign(this.outlineEl.style, { flex: '1', overflow: 'auto', padding: '8px', boxSizing: 'border-box', display: 'none', color: '#eee', font: '13px sans-serif' });
+    this.outlineEl.style.display = 'none';
 
     sidebar.append(tabs, this.thumbsEl, this.outlineEl);
 
@@ -495,11 +594,40 @@ export class App {
     // scroll por teclado a un contenedor desplazable con foco (E-032, ver
     // Viewer.programmaticScroll).
     this.viewerEl.tabIndex = -1;
-    Object.assign(this.viewerEl.style, { flex: '1', overflow: 'auto', background: '#525659', padding: '16px' });
 
     area.append(sidebar, this.backdropEl, this.viewerEl);
     rootEl.appendChild(area);
     this.showSidebarTab('pages');
+
+    // Revisión de PR #63: las miniaturas se renderizaban a una resolución
+    // fija (120/90 px) y luego se estiraban con CSS (`width: 100%`) al ancho
+    // real del panel — hasta 320px en el cajón móvil — así que en cualquier
+    // pantalla con `devicePixelRatio` > 1 (la inmensa mayoría de móviles) se
+    // veían borrosas. `buildThumbnails()` ahora mide el ancho REAL en que se
+    // muestran (`anchoUtilThumbs()`) y renderiza a ese ancho × `devicePixelRatio`
+    // (con un tope). Ese ancho cambia si la ventana cambia de tamaño (o de
+    // orientación) — nunca por abrir/cerrar el cajón, que solo mueve
+    // `#sidebar` con `transform` (no toca su `width`, así que no dispara este
+    // observer) — así que un `ResizeObserver` sobre `#thumbs` vuelve a
+    // construirlas cuando el ancho cambia de verdad. Sin riesgo de bucle:
+    // `buildThumbnails()` solo cambia el CONTENIDO de `#thumbs`, nunca su
+    // ancho (fijado por el flex/grid de `#sidebar`), así que reconstruir
+    // nunca dispara este mismo observer.
+    new ResizeObserver(() => {
+      if (!this.session) return;
+      const anchoActual = this.anchoUtilThumbs();
+      if (Math.abs(anchoActual - this.thumbsRenderedWidthCss) > 4) this.buildThumbnails();
+    }).observe(this.thumbsEl);
+
+    // ── Barra de estado inferior (§1): `#status` a la izquierda, indicador
+    // de página + prev/next a la derecha.
+    const statusbar = document.createElement('div');
+    statusbar.className = 'statusbar';
+    const pageNav = document.createElement('div');
+    pageNav.className = 'page-nav';
+    pageNav.append(btnPrev, this.pageIndicator, btnNext);
+    statusbar.append(this.status, pageNav);
+    rootEl.appendChild(statusbar);
 
     // Atajos de teclado (§9 #34): la tabla declarativa y la regla de oro del
     // foco editable viven en `atajos.ts` (testeadas en Node, sin DOM); aquí
@@ -525,7 +653,7 @@ export class App {
     // Arrastrar y soltar un fichero (PDF o imagen) sobre la ventana entera.
     // `dragover` necesita `preventDefault()` para que el navegador permita el
     // `drop` (si no, su acción por defecto es navegar al fichero); la clase
-    // `drop-activo` (ver CSS en index.next.html) es la única indicación
+    // `drop-activo` (ver src/ui/estilos.css) es la única indicación
     // visual, discreta, de que soltar aquí va a abrir el fichero.
     rootEl.addEventListener('dragover', (e) => {
       e.preventDefault();
@@ -565,6 +693,67 @@ export class App {
     const b = document.createElement('button');
     b.textContent = label; b.id = id; b.addEventListener('click', onClick);
     return b;
+  }
+
+  /**
+   * Botón de icono (rediseño de interfaz, §3/§4 del encargo): icono SVG
+   * propio (`iconos.ts`) + `title`/`aria-label` siempre, etiqueta visible
+   * opcional (la barra contextual la muestra debajo del icono, al estilo
+   * Acrobat; la barra superior solo el icono, con el mismo texto en
+   * `title`/`aria-label` para lectores de pantalla y el tooltip nativo).
+   */
+  private iconBoton(icono: NombreIcono, etiqueta: string, id: string, onClick: () => void, opts?: { mostrarEtiqueta?: boolean }): HTMLButtonElement {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.id = id;
+    b.className = 'icon-btn';
+    b.title = etiqueta;
+    b.setAttribute('aria-label', etiqueta);
+    b.appendChild(crearIcono(icono));
+    if (opts?.mostrarEtiqueta) {
+      const span = document.createElement('span');
+      span.className = 'etiqueta';
+      span.textContent = etiqueta;
+      b.appendChild(span);
+    }
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  /**
+   * Un `<input type="file">` oculto (id conservado — varios tests lo llenan
+   * directamente con `setInputFiles`, que funciona con el input oculto: no
+   * necesita visibilidad, a diferencia de `.click()`) más el botón de icono
+   * que lo dispara (§5 del encargo: "ningún input nativo visible").
+   */
+  private campoArchivo(input: HTMLInputElement, icono: NombreIcono, etiqueta: string, idBoton: string, opts?: { mostrarEtiqueta?: boolean }): HTMLButtonElement {
+    input.style.display = 'none';
+    return this.iconBoton(icono, etiqueta, idBoton, () => input.click(), opts);
+  }
+
+  private separador(clase: 'topbar-sep' | 'context-sep' = 'context-sep'): HTMLElement {
+    const s = document.createElement('div');
+    s.className = clase;
+    return s;
+  }
+
+  /**
+   * Único punto de entrada para cambiar la pestaña de herramientas activa
+   * (§1 del rediseño de interfaz): actualiza `aria-selected`/clase de las
+   * pestañas, muestra solo la `.context-bar` correspondiente (en escritorio;
+   * en móvil el CSS las apila todas bajo "⋯", ver `estilos.css`) y persiste
+   * la elección en `localStorage` (envuelto en try/catch, `guardarPestanaActiva`).
+   */
+  private activarPestana(id: PestanaId): void {
+    this.tabActiva = id;
+    for (const p of PESTANAS) {
+      const activa = p.id === id;
+      const tab = this.tabButtons[p.id];
+      tab.setAttribute('aria-selected', String(activa));
+      tab.tabIndex = activa ? 0 : -1;
+      this.contextBars[p.id].classList.toggle('activa', activa);
+    }
+    guardarPestanaActiva(id);
   }
 
   /**
@@ -693,6 +882,7 @@ export class App {
     const engine = await this.ensureEngine();
     if (this.session) engine.close(this.session.doc);
     this.docName = name;
+    this.docNameEl.textContent = name;
     this.session = await EditSession.open(engine, bytes);
     this.bus = new CommandBus(this.session);
     this.selection = null;
@@ -948,6 +1138,41 @@ export class App {
       case 'ayuda':
         e.preventDefault();
         AtajosPanel.open();
+        break;
+      // Atajos de una letra (§6 del rediseño de interfaz, paridad con E-017
+      // de la app vieja: V/T/P/R/E/N). Todos pasan por `setTool()` (único
+      // punto de verdad, §1) — botón y cursor se sincronizan solos. Si la
+      // herramienta vive en una pestaña distinta de la activa, el atajo
+      // activa también esa pestaña (`activarPestana`), para que el botón
+      // recién resaltado sea visible sin un clic adicional.
+      case 'tool-none':
+        e.preventDefault();
+        this.setTool('none');
+        break;
+      case 'tool-insert':
+        e.preventDefault();
+        this.setTool(this.tool === 'insert' ? 'none' : 'insert');
+        this.activarPestana('editar');
+        break;
+      case 'tool-pen':
+        e.preventDefault();
+        this.setTool(this.tool === 'pen' ? 'none' : 'pen');
+        this.activarPestana('comentar');
+        break;
+      case 'tool-rect':
+        e.preventDefault();
+        this.setTool(this.tool === 'rect' ? 'none' : 'rect');
+        this.activarPestana('comentar');
+        break;
+      case 'tool-eraser':
+        e.preventDefault();
+        this.setTool(this.tool === 'eraser' ? 'none' : 'eraser');
+        this.activarPestana('comentar');
+        break;
+      case 'tool-note':
+        e.preventDefault();
+        this.setTool(this.tool === 'note' ? 'none' : 'note');
+        this.activarPestana('comentar');
         break;
     }
   }
@@ -1344,8 +1569,8 @@ export class App {
   private showSidebarTab(which: 'pages' | 'outline'): void {
     this.thumbsEl.style.display = which === 'pages' ? 'block' : 'none';
     this.outlineEl.style.display = which === 'outline' ? 'block' : 'none';
-    this.tabPages.style.background = which === 'pages' ? '#c7d2fe' : '';
-    this.tabOutline.style.background = which === 'outline' ? '#c7d2fe' : '';
+    this.tabPages.setAttribute('aria-selected', String(which === 'pages'));
+    this.tabOutline.setAttribute('aria-selected', String(which === 'outline'));
   }
 
   /** Árbol de marcadores del documento. Se reconstruye al abrir otro documento y tras cualquier `onReload` (borrar/mover página cambia los índices). */
@@ -1418,13 +1643,31 @@ export class App {
   }
 
   /** Miniaturas: un canvas pequeño por página; clic desplaza el visor, arrastrar reordena (ver beginThumbDrag). */
+  /** Ancho útil REAL de `#thumbs` (su `clientWidth` menos el padding CSS a los lados) — el ancho en que las miniaturas se MUESTRAN, ver `buildThumbnails`. */
+  private anchoUtilThumbs(): number {
+    const cs = getComputedStyle(this.thumbsEl);
+    const pad = parseFloat(cs.paddingLeft || '0') + parseFloat(cs.paddingRight || '0');
+    return Math.max(1, this.thumbsEl.clientWidth - pad);
+  }
+
   private buildThumbnails(): void {
     this.thumbsEl.textContent = '';
     const s = this.session;
     if (!s) return;
+    // Renderiza al ancho en que se MUESTRAN (`anchoUtilThumbs()`, nunca a un
+    // objetivo fijo en px) × `devicePixelRatio` — así una pantalla retina/
+    // móvil no estira un bitmap de baja resolución con CSS (`width: 100%`
+    // en `.thumb`, ver estilos.css) y se ve borrosa. Tope en `dpr` (3×) y en
+    // el ancho final de render (900px): un `devicePixelRatio` de 3-4 sobre
+    // un cajón de hasta 320px ya cubriría de sobra sin el tope; sin él, un
+    // documento con muchas páginas en un dispositivo de dpr alto tardaría
+    // más de lo razonable en construir el panel entero.
+    const anchoCss = this.anchoUtilThumbs();
+    this.thumbsRenderedWidthCss = anchoCss;
+    const dpr = Math.min(window.devicePixelRatio || 1, 3);
+    const anchoRenderPx = Math.min(anchoCss * dpr, 900);
     for (const page of s.model.pages) {
-      const wide = page.sizePt.widthPt >= page.sizePt.heightPt;
-      const scale = (wide ? 120 : 90) / page.sizePt.widthPt;
+      const scale = anchoRenderPx / page.sizePt.widthPt;
       const { width, height, data } = s.engine.renderPage(s.doc, page.index, scale);
       const canvas = document.createElement('canvas');
       canvas.width = width; canvas.height = height;
@@ -1458,7 +1701,10 @@ export class App {
       });
       this.thumbsEl.appendChild(canvas);
     }
-    this.setActiveThumb(0);
+    // `this.currentPage`, no un 0 fijo: reconstruir (p. ej. el
+    // `ResizeObserver` de arriba, al cambiar el ancho del panel) no debe
+    // saltar la miniatura activa de vuelta a la primera página.
+    this.setActiveThumb(this.currentPage);
   }
 
   /**
@@ -1578,19 +1824,34 @@ export class App {
   private zoom(factor: number): void {
     this.scale = Math.min(4, Math.max(0.25, Math.round(this.scale * factor * 100) / 100));
     this.viewer?.setScale(this.scale);
+    this.zoomPctEl.textContent = `${Math.round(this.scale * 100)}%`;
     this.setStatus(`Zoom ${Math.round(this.scale * 100)}%`);
   }
 
   /**
    * `#btn-fit-width`: calcula la escala para que la página ACTUAL ocupe el
-   * ancho útil del visor (su `clientWidth` —ya sin la barra de scroll— menos
-   * el padding CSS a los lados) y la aplica. También se llama al abrir un
-   * documento (ver `openBytes`).
+   * ancho útil del visor (su `clientWidth` —ya sin la barra de scroll
+   * vertical, que `clientWidth` excluye por definición, a diferencia de
+   * `offsetWidth`— menos el padding CSS a los lados) y la aplica. También se
+   * llama al abrir un documento (ver `openBytes`).
    *
    * Unidades: `page.sizePt.widthPt` es la anchura de la página en PUNTOS PDF;
    * `disponible` es px CSS del visor. La escala que iguala ambos en px CSS es
    * `disponible / widthPt` (mismo significado que `PageGeometry.scale`, que
    * multiplica puntos PDF por esta escala para obtener px CSS).
+   *
+   * Revisión de PR #63: `Math.round` a la centésima más cercana puede
+   * redondear la escala HACIA ARRIBA, dejando la página hasta ~0,3 pt más
+   * ancha que `disponible` — en pantalla, unos px de más que bastan para que
+   * el visor (`overflow: auto`) abra una barra de scroll HORIZONTAL. Con esa
+   * barra presente, los márgenes automáticos de `.page` (`margin: 0 auto` en
+   * `Viewer.layout`) dejan de repartirse simétricos: la página queda pegada
+   * al borde derecho y el hueco gris solo se ve a la izquierda — exactamente
+   * el defecto reportado en la revisión, visible en las capturas 03/04.
+   * `Math.floor` (a la milésima, para no perder precisión de más) garantiza
+   * `cssWidth <= disponible` siempre, a costa de una holgura de como mucho
+   * ~0,1 % del ancho de página (bien por debajo de 1 px) — imperceptible, y
+   * el `%` mostrado (`zoomPctEl`) sigue redondeando al entero más cercano.
    */
   private fitWidth(): void {
     const s = this.session;
@@ -1600,8 +1861,9 @@ export class App {
     const paddingX = parseFloat(cs.paddingLeft || '0') + parseFloat(cs.paddingRight || '0');
     const disponible = this.viewerEl.clientWidth - paddingX;
     if (disponible <= 0) return;
-    this.scale = Math.min(4, Math.max(0.25, Math.round((disponible / page.sizePt.widthPt) * 100) / 100));
+    this.scale = calcularEscalaAjusteAncho(disponible, page.sizePt.widthPt);
     this.viewer.setScale(this.scale);
+    this.zoomPctEl.textContent = `${Math.round(this.scale * 100)}%`;
     this.setStatus(`Ajustado al ancho (${Math.round(this.scale * 100)}%).`);
   }
 

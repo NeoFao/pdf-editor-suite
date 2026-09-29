@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
+import { abrirPestana } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(AQUI, '../../fixtures/generados/nativo.pdf');
@@ -23,6 +24,7 @@ test('muestras de color: con la pluma activa, clic en la azul la marca aria-pres
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'comentar');
   await page.locator('#btn-pen').click();
   await expect(page.locator('#btn-pen')).toHaveAttribute('aria-pressed', 'true');
 
@@ -66,6 +68,7 @@ test('colores por herramienta: elegir un color con la pluma activa no cambia el 
   const run = page.locator('.run').first();
   await expect(run).toBeVisible();
 
+  await abrirPestana(page, 'comentar');
   await page.locator('#btn-pen').click();
   await page.locator('.swatch[data-color="#2563eb"]').click();
   await expect(page.locator('.swatch[data-color="#2563eb"]')).toHaveAttribute('aria-pressed', 'true');
@@ -121,6 +124,7 @@ test('rectángulo: arrastrar dibuja uno con el color de herramienta; Deshacer lo
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'comentar');
   await page.locator('#btn-rect').click();
   await expect(page.locator('#btn-rect')).toHaveAttribute('aria-pressed', 'true');
 
@@ -164,6 +168,7 @@ test('borrador: clic en el borde de un rectángulo lo borra; clic en su centro n
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'comentar');
   await page.locator('#btn-rect').click();
   const pagina = page.locator('.page').first();
   const b = (await pagina.boundingBox())!;
@@ -220,6 +225,7 @@ test('los modos de herramienta son excluyentes entre sí; Escape sale del modo a
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'comentar');
   await page.locator('#btn-pen').click();
   await expect(page.locator('#btn-pen')).toHaveAttribute('aria-pressed', 'true');
 
@@ -231,10 +237,12 @@ test('los modos de herramienta son excluyentes entre sí; Escape sale del modo a
   await expect(page.locator('#btn-eraser')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#btn-rect')).toHaveAttribute('aria-pressed', 'false');
 
+  await abrirPestana(page, 'editar');
   await page.locator('#btn-insert').click();
   await expect(page.locator('#btn-insert')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#btn-eraser')).toHaveAttribute('aria-pressed', 'false');
 
+  await abrirPestana(page, 'comentar');
   await page.locator('#btn-note').click();
   await expect(page.locator('#btn-note')).toHaveAttribute('aria-pressed', 'true');
   await expect(page.locator('#btn-insert')).toHaveAttribute('aria-pressed', 'false');

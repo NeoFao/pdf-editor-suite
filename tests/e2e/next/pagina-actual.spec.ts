@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { abrirPestana } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const PAGINAS_PEQUENAS = path.resolve(AQUI, '../../fixtures/generados/paginas-pequenas.pdf');
@@ -26,6 +27,7 @@ test.describe('E-032: la "página actual" sigue la selección explícita del usu
     await expect(page.locator('#page-indicator')).toHaveText('3 / 4');
     await expect(page.locator('#thumbs canvas').nth(2)).toHaveClass(/active/);
 
+    await abrirPestana(page, 'organizar');
     await page.locator('#btn-delete-page').click();
 
     await expect(page.locator('#thumbs canvas')).toHaveCount(3);

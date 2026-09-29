@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { abrirPestana } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const FUENTES = path.resolve(AQUI, '../../fixtures/generados/fuentes.pdf');
@@ -142,6 +143,7 @@ test('regla de oro: escribir en un campo de formulario no dispara AvPág, Inicio
   await page.keyboard.press('PageDown');
   await expect(page.locator('#page-indicator')).toHaveText('2 / 4');
 
+  await abrirPestana(page, 'organizar');
   const campo = page.locator('#btn-range'); // <input type="text">, siempre presente
   await campo.focus();
   await page.keyboard.press('PageDown');
@@ -182,6 +184,7 @@ test('regla de oro: Ctrl+Z con el foco en un campo de formulario deja actuar al 
   // #btn-range es un <input type="text">: Ctrl+Z ahí es "deshacer texto
   // escrito en el input" (comportamiento nativo del navegador), nunca debe
   // deshacer la edición del documento.
+  await abrirPestana(page, 'organizar');
   await page.locator('#btn-range').fill('1-2');
   await page.keyboard.press('Control+z');
   await expect(page.locator('.run', { hasText: 'CAMBIADO' })).toBeVisible();
