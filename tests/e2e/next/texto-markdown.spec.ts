@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { abrirPestana } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(AQUI, '../../fixtures/generados/estructurado.pdf');
@@ -12,6 +13,7 @@ test('Texto…: el textarea trae el documento entero en orden de lectura y Desca
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'convertir');
   await page.locator('#btn-extract-text').click();
   const textarea = page.locator('#text-output');
   await expect(textarea).toBeVisible();
@@ -43,6 +45,7 @@ test('Copiar: el portapapeles recibe exactamente el texto del textarea', async (
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'convertir');
   await page.locator('#btn-extract-text').click();
   const textarea = page.locator('#text-output');
   await expect(textarea).toBeVisible();
@@ -62,6 +65,7 @@ test('Exportar Markdown: encabezado, viñeta, escape de Markdown y separador ent
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'convertir');
   const [download] = await Promise.all([
     page.waitForEvent('download'),
     page.locator('#btn-export-md').click()
@@ -81,6 +85,7 @@ test('Texto…: un documento con texto nativo (sin pasar por OCR) también se ex
   await page.locator('#file-input').setInputFiles(FIXTURE_FUENTES);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'convertir');
   await page.locator('#btn-extract-text').click();
   const texto = await page.locator('#text-output').inputValue();
   expect(texto).toContain('ORIGINAL-TIMES');

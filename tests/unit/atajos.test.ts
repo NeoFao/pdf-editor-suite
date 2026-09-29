@@ -164,3 +164,47 @@ test('esCampoEditable: un <button> no es editable', () => {
 test('esCampoEditable: null no es editable', () => {
   expect(esCampoEditable(null)).toBe(false);
 });
+
+/**
+ * Atajos de una letra (§6 del rediseño de interfaz — paridad con E-017 de la
+ * app vieja, ver js/app.js: V/P/T/E/R; N es nuevo aquí). Bloqueados en campos
+ * editables, igual que Home/Fin/RePág/AvPág/Supr/Escape/"?" — un solo
+ * carácter no debe robarle la tecla a un formulario.
+ */
+test('V (sin campo editable) resuelve a tool-none (herramienta Seleccionar)', () => {
+  expect(resolverAtajo(ev({ key: 'v' }))?.accion).toBe('tool-none');
+  expect(resolverAtajo(ev({ key: 'V' }))?.accion).toBe('tool-none');
+});
+
+test('T (sin campo editable) resuelve a tool-insert (Insertar texto)', () => {
+  expect(resolverAtajo(ev({ key: 't' }))?.accion).toBe('tool-insert');
+});
+
+test('P (sin campo editable) resuelve a tool-pen (Pluma)', () => {
+  expect(resolverAtajo(ev({ key: 'p' }))?.accion).toBe('tool-pen');
+});
+
+test('R (sin campo editable) resuelve a tool-rect (Rectángulo)', () => {
+  expect(resolverAtajo(ev({ key: 'r' }))?.accion).toBe('tool-rect');
+});
+
+test('E (sin campo editable) resuelve a tool-eraser (Borrador)', () => {
+  expect(resolverAtajo(ev({ key: 'e' }))?.accion).toBe('tool-eraser');
+});
+
+test('N (sin campo editable) resuelve a tool-note (Nota)', () => {
+  expect(resolverAtajo(ev({ key: 'n' }))?.accion).toBe('tool-note');
+});
+
+test('regla de oro: escribir "t"/"p"/"v" en un campo editable no cambia de herramienta', () => {
+  expect(resolverAtajo(ev({ key: 't', editable: true }))).toBeNull();
+  expect(resolverAtajo(ev({ key: 'p', editable: true }))).toBeNull();
+  expect(resolverAtajo(ev({ key: 'v', editable: true }))).toBeNull();
+  expect(resolverAtajo(ev({ key: 'r', editable: true }))).toBeNull();
+  expect(resolverAtajo(ev({ key: 'e', editable: true }))).toBeNull();
+  expect(resolverAtajo(ev({ key: 'n', editable: true }))).toBeNull();
+});
+
+test('Ctrl+P sigue resolviendo a imprimir, no a la herramienta Pluma (P sin modificador)', () => {
+  expect(resolverAtajo(ev({ key: 'p', ctrl: true }))?.accion).toBe('imprimir');
+});

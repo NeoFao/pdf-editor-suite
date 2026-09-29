@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
+import { abrirPestana } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(AQUI, '../../fixtures/generados/fuentes.pdf');
@@ -13,6 +14,7 @@ test('resaltar: el marcador amarillo llega al PDF descargado', async ({ page }) 
   const run = page.locator('.run', { hasText: 'ORIGINAL-TIMES' });
   await expect(run).toBeVisible();
   await run.click(); // selecciona
+  await abrirPestana(page, 'comentar');
   await page.locator('#btn-highlight').click();
   await expect(page.locator('#status')).toHaveText('Resaltado.');
 

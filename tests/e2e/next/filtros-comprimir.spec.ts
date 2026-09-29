@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
+import { abrirPestana } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const PDF = path.resolve(AQUI, '../../fixtures/generados/escaneado.pdf');
@@ -32,6 +33,7 @@ test('escala de grises: la imagen sale R≈G≈B y el texto vectorial sigue inta
   // competir con su propio setStatus final.
   await expect(page.locator('#status')).toHaveText('1 página(s)', { timeout: 60_000 });
 
+  await abrirPestana(page, 'convertir');
   await page.locator('#filter-select').selectOption('grises');
   await page.locator('#btn-filter').click();
   await expect(page.locator('#status')).toContainText('Filtro aplicado a 1 imagen');
@@ -67,6 +69,7 @@ test('una página sin imágenes avisa en el estado y no aplica nada', async ({ p
   await page.locator('#btn-new').click();
   await expect(page.locator('#status')).toHaveText('Documento en blanco creado.');
 
+  await abrirPestana(page, 'convertir');
   await page.locator('#filter-select').selectOption('bn');
   await page.locator('#btn-filter').click();
   await expect(page.locator('#status')).toHaveText(
@@ -89,6 +92,7 @@ test('comprimir con calidad 50 y 150 dpi reduce el peso al menos un 40%, conserv
   await expect(page.locator('.run').first()).toBeVisible();
   await expect(page.locator('#status')).toHaveText('1 página(s)', { timeout: 60_000 });
 
+  await abrirPestana(page, 'convertir');
   await page.locator('#btn-compress').click();
   await page.locator('#compress-quality').evaluate((el: HTMLInputElement) => {
     el.value = '50';

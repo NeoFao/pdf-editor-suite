@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
+import { abrirPestana } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(AQUI, '../../fixtures/generados/nativo.pdf');
@@ -12,6 +13,7 @@ test('firmar: dibujar en el pad e insertar lleva la firma al PDF descargado', as
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'firmar');
   await page.locator('#btn-sign').click();
   const canvas = page.locator('#sig-canvas');
   await expect(canvas).toBeVisible();

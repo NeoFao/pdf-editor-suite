@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
+import { abrirPestana } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(AQUI, '../../fixtures/generados/nativo.pdf'); // 2 páginas
@@ -12,6 +13,7 @@ test('extraer: descarga la página actual como un PDF de una sola página', asyn
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'organizar');
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#btn-extract').click()]);
   const destino = path.join(test.info().outputDir, 'extraida.pdf');
   await download.saveAs(destino);

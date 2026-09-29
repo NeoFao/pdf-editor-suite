@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
+import { abrirPestana } from './_ayudas';
 
 /**
  * §9 fila #32: abrir un `.md` desde `#file-input` lo convierte a un PDF con
@@ -38,6 +39,7 @@ test('Markdown -> PDF -> Exportar Markdown: el .md de vuelta trae "# " y el tít
   await page.locator('#file-input').setInputFiles(EJEMPLO_MD);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'convertir');
   const [download] = await Promise.all([
     page.waitForEvent('download'),
     page.locator('#btn-export-md').click()

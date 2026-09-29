@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
+import { abrirPestana } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(AQUI, '../../fixtures/generados/nativo.pdf');
@@ -12,6 +13,7 @@ test('pluma: dibujar a mano alzada llega al PDF descargado', async ({ page }) =>
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'comentar');
   await page.locator('#btn-pen').click(); // activa pluma
   const pagina = page.locator('.page').first();
   const b = (await pagina.boundingBox())!;

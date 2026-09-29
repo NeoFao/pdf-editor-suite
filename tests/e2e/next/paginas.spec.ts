@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
+import { abrirPestana } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(AQUI, '../../fixtures/generados/nativo.pdf'); // 2 páginas
@@ -12,6 +13,7 @@ test('rotar página: la rotación llega al PDF descargado', async ({ page }) => 
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  await abrirPestana(page, 'organizar');
   await page.locator('#btn-rotate').click();
   const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#btn-save').click()]);
   const destino = path.join(test.info().outputDir, 'rotada.pdf');
@@ -26,6 +28,7 @@ test('eliminar página: baja el conteo de miniaturas y el indicador', async ({ p
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('#thumbs canvas')).toHaveCount(2);
+  await abrirPestana(page, 'organizar');
   await page.locator('#btn-delete-page').click();
   await expect(page.locator('#thumbs canvas')).toHaveCount(1);
   await expect(page.locator('#page-indicator')).toHaveText('1 / 1');
