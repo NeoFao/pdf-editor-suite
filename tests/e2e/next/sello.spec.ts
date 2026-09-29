@@ -137,6 +137,16 @@ test('firma desde imagen: quita el fondo blanco y no tapa el texto de la página
   await page.locator('#file-input').setInputFiles(PDF);
   await expect(page.locator('.run').first()).toBeVisible();
 
+  // Aleja el zoom para que la página quepa ENTERA en el viewport: la firma
+  // se coloca cerca del borde inferior (15% de alto) y hay que arrastrarla
+  // cerca del borde superior (línea de referencia); si la página excede el
+  // viewport (con "ajustar ancho" al abrir, la altura puede superarlo de
+  // sobra), origen y destino del arrastre no son visibles a la vez y
+  // `page.mouse` cae fuera de la ventana real — el gesto no llega a
+  // `.image-box` y el navegador hace una selección de texto nativa en su
+  // lugar (detectado a mano, ver §2.8 del informe de este PR).
+  for (let i = 0; i < 5; i++) await page.locator('#btn-zoom-out').click();
+
   await page.locator('#btn-sign-upload').setInputFiles(FIRMA);
   await expect(page.locator('#status')).toHaveText('Firma insertada desde imagen (fondo quitado).');
 

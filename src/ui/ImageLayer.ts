@@ -65,6 +65,27 @@ export class ImageLayer {
     }
   }
 
+  /**
+   * Suprime la selección de texto nativa del navegador durante un gesto de
+   * arrastre. Sin esto, arrastrar el marco por encima de líneas de texto
+   * (los `.run` de `TextLayer`, que sí contienen texto real aunque
+   * transparente) dispara la selección nativa del navegador a lo largo del
+   * recorrido del ratón — visible como una franja azul — aunque el gesto
+   * empiece y termine sobre el propio marco. `preventDefault()`/
+   * `stopPropagation()` en el `pointerdown` no bastan: la selección nativa
+   * se arma por el recorrido del cursor sobre el documento, no por qué
+   * elemento recibió el evento. Se restaura siempre al soltar.
+   */
+  private previousUserSelect: string | null = null;
+  private suprimirSeleccionNativa(): void {
+    this.previousUserSelect = document.body.style.userSelect;
+    document.body.style.userSelect = 'none';
+  }
+  private restaurarSeleccionNativa(): void {
+    document.body.style.userSelect = this.previousUserSelect ?? '';
+    this.previousUserSelect = null;
+  }
+
   private selectAndNotify(box: HTMLElement, objIndex: number): void {
     for (const el of Array.from(this.host.querySelectorAll<HTMLElement>('.image-box'))) el.classList.remove('selected');
     box.classList.add('selected');
@@ -89,6 +110,7 @@ export class ImageLayer {
     e.preventDefault();
     e.stopPropagation();
     this.selectAndNotify(box, img.objIndex);
+    this.suprimirSeleccionNativa();
     const startX = e.clientX, startY = e.clientY;
     let moved = false;
     const onMove = (ev: PointerEvent): void => {
@@ -100,6 +122,7 @@ export class ImageLayer {
     const onUp = (ev: PointerEvent): void => {
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      this.restaurarSeleccionNativa();
       if (!moved) { box.style.left = `${restRect.left}px`; box.style.top = `${restRect.top}px`; return; }
       const dx = ev.clientX - startX, dy = ev.clientY - startY;
       const newRectPt = this.cssRectToPt(restRect.left + dx, restRect.top + dy, restRect.width, restRect.height);
@@ -124,6 +147,7 @@ export class ImageLayer {
       e.preventDefault();
       e.stopPropagation();
       this.selectAndNotify(box, img.objIndex);
+      this.suprimirSeleccionNativa();
       const startX = e.clientX, startY = e.clientY;
       // Signo de cada delta según la esquina: cuánto crecen ancho/alto al
       // mover el ratón hacia afuera de la caja desde ESA esquina.
@@ -153,6 +177,7 @@ export class ImageLayer {
       const onUp = (): void => {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
+        this.restaurarSeleccionNativa();
         const newRectPt = this.cssRectToPt(actual.left, actual.top, actual.width, actual.height);
         this.cb.onChangeRect(this.pageIndex, img.objIndex, newRectPt, img.rectPt);
       };
