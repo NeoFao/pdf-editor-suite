@@ -56,6 +56,23 @@ export class PdfiumEngine implements PdfEngine {
   // relacionadas con campos. 0 si el motor de este build no trae el extra o
   // si la inicialización falló: entonces listFormFields devuelve siempre [].
   private readonly formEnv = new Map<DocHandle, { info: number; form: number }>();
+  // Soporte de measureText(): un documento efímero propio del motor (nunca
+  // expuesto como DocHandle a quien llama) que aloja las fuentes estándar
+  // cargadas con FPDFText_LoadStandardFont, cacheadas por nombre — como
+  // mucho 14 entradas (una por cada STANDARD_FONTS), nunca crecen sin límite
+  // sin importar cuántas veces se llame a measureText. A diferencia de
+  // FPDFPageObj_NewTextObj (que crea y posee su propia fuente internamente,
+  // sin que el llamante deba liberarla), FPDFText_LoadStandardFont SÍ
+  // transfiere la propiedad del FPDF_FONT devuelto: exige FPDFFont_Close
+  // (§2.6). Se crean de forma perezosa (measureText puede no llamarse nunca
+  // en una sesión que no convierte Markdown) y se liberan en
+  // closeMeasureFonts() — no hay un punto de "cierre de sesión" natural en
+  // esta app de una sola pestaña (el motor vive mientras vive la pestaña),
+  // así que closeMeasureFonts() es higiene explícita para quien la necesite
+  // (tests, o una futura recarga de motor sin recargar la página) más que
+  // un requisito de fuga real: el máximo posible son 14 fuentes.
+  private measureFontDoc: DocHandle | null = null;
+  private readonly measureFontCache = new Map<string, number>();
 
   private constructor(private readonly p: Pdfium, private readonly mem: Mem) {}
 
@@ -1620,5 +1637,44 @@ export class PdfiumEngine implements PdfEngine {
     this.p.FPDF_CloseDocument(doc);
     const ptr = this.srcPtr.get(doc);
     if (ptr !== undefined) { this.mem.free(ptr); this.srcPtr.delete(doc); }
+  }
+
+  measureText(fontName: string, sizePt: number, text: string): number {
+    if (text.length === 0) return 0;
+    if (this.measureFontDoc === null) this.measureFontDoc = this.p.FPDF_CreateNewDocument();
+    let font = this.measureFontCache.get(fontName);
+    if (font === undefined) {
+      font = this.p.FPDFText_LoadStandardFont(this.measureFontDoc, fontName);
+      this.measureFontCache.set(fontName, font);
+    }
+    const outPtr = this.mem.malloc(4); // float*
+    try {
+      let total = 0;
+      // Recorre por punto de código (no por unidad UTF-16): un carácter fuera
+      // del BMP no debe partirse en dos "glifos" de medio par subrogado.
+      for (const ch of text) {
+        const code = ch.codePointAt(0)!;
+        this.mem.setValue(outPtr, 0, 'float');
+        const ok = this.p.FPDFFont_GetGlyphWidth(font, code, sizePt, outPtr);
+        if (ok) total += this.mem.getValue(outPtr, 'float');
+      }
+      return total;
+    } finally {
+      this.mem.free(outPtr);
+    }
+  }
+
+  /**
+   * Libera las fuentes estándar cacheadas por `measureText` y el documento
+   * efímero que las aloja (`FPDFFont_Close` + `FPDF_CloseDocument`, §2.6).
+   * No es parte del contrato `PdfEngine` (no hay un punto de "cierre de
+   * sesión" del motor en la app: vive mientras vive la pestaña) — existe
+   * para tests e higiene explícita. Segura de llamar aunque `measureText`
+   * nunca se haya usado (no crea nada).
+   */
+  closeMeasureFonts(): void {
+    for (const font of this.measureFontCache.values()) this.p.FPDFFont_Close(font);
+    this.measureFontCache.clear();
+    if (this.measureFontDoc !== null) { this.p.FPDF_CloseDocument(this.measureFontDoc); this.measureFontDoc = null; }
   }
 }

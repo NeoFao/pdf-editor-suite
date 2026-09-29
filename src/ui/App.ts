@@ -35,6 +35,8 @@ import { SignaturePad } from './SignaturePad';
 import { CompressPanel } from './CompressPanel';
 import { TextPanel } from './TextPanel';
 import { agruparLineas, aTextoPlano, aMarkdown, type Linea } from '../texto/estructura';
+import { conversorPara, registrarConversor } from '../convert/ConversorDocumento';
+import { ConversorMarkdownNavegador } from '../convert/ConversorMarkdownNavegador';
 import { descargarArchivo } from './descargarArchivo';
 import { quitarFondo } from './quitarFondo';
 import { formatoBytes } from './formatoBytes';
@@ -149,7 +151,7 @@ export class App {
     Object.assign(bar.style, { display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center', padding: '8px', borderBottom: '1px solid #ccc', font: '14px sans-serif', flex: '0 0 auto' });
 
     const file = document.createElement('input');
-    file.type = 'file'; file.accept = 'application/pdf'; file.id = 'file-input';
+    file.type = 'file'; file.accept = 'application/pdf,.md,.markdown,text/markdown'; file.id = 'file-input';
     file.addEventListener('change', () => { const f = file.files?.[0]; if (f) void this.openFile(f); });
 
     const btnNew = this.button('Nuevo', 'btn-new', () => void this.newBlank());
@@ -403,10 +405,12 @@ export class App {
     });
   }
 
-  /** Un PDF abre normal; una imagen se convierte a PDF de una página (mismo flujo que `#btn-open-image`). Otro tipo: aviso en `#status`, sin romper nada. */
+  /** Un PDF abre normal; un Markdown se convierte a PDF (vía `openFile`); una imagen se convierte a PDF de una página (mismo flujo que `#btn-open-image`). Otro tipo: aviso en `#status`, sin romper nada. */
   private async handleDroppedFile(file: File): Promise<void> {
     const esPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
     if (esPdf) { await this.openFile(file); return; }
+    const ext = (file.name.split('.').pop() ?? '').toLowerCase();
+    if (conversorPara(ext)) { await this.openFile(file); return; }
     const esImagen = file.type.startsWith('image/') || /\.(png|jpe?g|jpeg|gif|webp)$/i.test(file.name);
     if (esImagen) { await this.openImage(file); return; }
     this.setStatus('Tipo de archivo no admitido para soltar aquí (usa un PDF o una imagen).');
@@ -493,11 +497,40 @@ export class App {
   }
 
   private async ensureEngine(): Promise<PdfiumEngine> {
-    if (!this.engine) this.engine = await PdfiumEngine.create();
+    if (!this.engine) {
+      this.engine = await PdfiumEngine.create();
+      // Registro del puerto de conversión (§9 fila #32): un único conversor
+      // hoy (Markdown, puro navegador). Se registra aquí, no en main.ts,
+      // porque necesita el motor YA CREADO (measureText/insertText/etc.) —
+      // una futura implementación de escritorio (LibreOffice/Word para
+      // .docx) se registraría igual, sin que este método cambie de forma.
+      registrarConversor(new ConversorMarkdownNavegador(this.engine));
+    }
     return this.engine;
   }
 
+  /**
+   * Punto de entrada único para abrir un fichero desde `#file-input` o
+   * soltarlo en la ventana (`handleDroppedFile`). Un PDF se abre tal cual;
+   * si la extensión la acepta algún conversor registrado (hoy, `.md`/
+   * `.markdown`), se convierte primero y se abre el PDF resultante como
+   * documento normal — el nombre sugerido para guardar pasa a ser
+   * `<nombre>.pdf`.
+   */
   async openFile(file: File): Promise<void> {
+    const engine = await this.ensureEngine();
+    const ext = (file.name.split('.').pop() ?? '').toLowerCase();
+    const conversor = conversorPara(ext);
+    if (conversor) {
+      this.setStatus('Convirtiendo…');
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      const pdfBytes = await conversor.convertir(file.name, bytes);
+      const pdfName = file.name.replace(/\.[^./\\]+$/, '') + '.pdf';
+      await this.openBytes(pdfBytes, pdfName);
+      const n = this.session ? engine.pageCount(this.session.doc) : 0;
+      this.setStatus(`Convertido desde Markdown (${n} páginas).`);
+      return;
+    }
     await this.openBytes(new Uint8Array(await file.arrayBuffer()), file.name || 'documento.pdf');
   }
 

@@ -367,4 +367,14 @@ export interface PdfEngine {
   duplicatePage(doc: DocHandle, pageIndex: number): boolean;
   save(doc: DocHandle): Uint8Array<ArrayBuffer>;
   close(doc: DocHandle): void;
+  /**
+   * Ancho en puntos PDF de `text` si se pintara con la fuente estándar
+   * `fontName` (una de las 14 de `STANDARD_FONTS`) al tamaño `sizePt`. No
+   * necesita un documento abierto por el llamante: el motor gestiona su
+   * propia fuente interna, cacheada por nombre. Base del ajuste de línea del
+   * maquetador Markdown → PDF (§9 fila #32): mide el ancho real de cada
+   * palabra antes de decidir dónde cortar la línea, en vez de aproximar por
+   * número de caracteres.
+   */
+  measureText(fontName: string, sizePt: number, text: string): number;
 }
