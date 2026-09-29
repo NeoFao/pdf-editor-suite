@@ -788,7 +788,7 @@ export class App {
     return ul;
   }
 
-  /** Miniaturas: un canvas pequeño por página; clic desplaza el visor. */
+  /** Miniaturas: un canvas pequeño por página; clic desplaza el visor, arrastrar reordena (ver beginThumbDrag). */
   private buildThumbnails(): void {
     this.thumbsEl.textContent = '';
     const s = this.session;
@@ -800,14 +800,132 @@ export class App {
       const canvas = document.createElement('canvas');
       canvas.width = width; canvas.height = height;
       canvas.dataset.page = String(page.index);
+      canvas.className = 'thumb';
       Object.assign(canvas.style, { display: 'block', width: '100%', height: 'auto', marginBottom: '8px', cursor: 'pointer', background: '#fff', boxSizing: 'border-box' });
       const img = new ImageData(width, height);
       img.data.set(data);
       canvas.getContext('2d')!.putImageData(img, 0, 0);
-      canvas.addEventListener('click', () => this.goToPage(page.index));
+
+      // Un clic SIN arrastre navega (comportamiento de siempre); un arrastre
+      // que supere el umbral reordena y no debe además disparar el 'click'
+      // nativo que el navegador emite al soltar sobre el mismo elemento.
+      let suprimirClick = false;
+      canvas.addEventListener('click', () => {
+        if (suprimirClick) { suprimirClick = false; return; }
+        this.goToPage(page.index);
+      });
+      canvas.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0) return; // solo botón primario / toque simple
+        this.beginThumbDrag(canvas, page.index, e, (huboArrastre) => { suprimirClick = huboArrastre; });
+      });
       this.thumbsEl.appendChild(canvas);
     }
     this.setActiveThumb(0);
+  }
+
+  /**
+   * Arrastrar y soltar una miniatura para reordenar páginas, al estilo
+   * Acrobat. Pointer events (no la API HTML5 `draggable`), para que funcione
+   * también en táctil — mismo patrón que `TextLayer.makeDragHandle`: los
+   * listeners globales se añaden al empezar el gesto y se retiran SIEMPRE al
+   * terminar (soltar, Escape, o clic secundario nunca llega aquí), nunca se
+   * acumulan (E-014, E-020).
+   *
+   * Umbral de `UMBRAL_ARRASTRE_PX` para distinguir clic (navegar) de
+   * arrastre (reordenar): por debajo del umbral no pasa nada y el 'click'
+   * nativo del navegador sigue disparando `goToPage` con normalidad.
+   *
+   * Mientras se arrastra, un indicador de inserción (`.thumb-drop-indicator`,
+   * una línea entre miniaturas) se inserta en el DOM en el punto exacto
+   * donde caería la miniatura si se soltara ahí — recalculado en cada
+   * `pointermove` a partir del punto medio vertical de cada miniatura, nunca
+   * moviendo la miniatura real: la reordenación solo se aplica al soltar.
+   *
+   * Al soltar, se ejecuta UN único `MovePageCmd(from, to)` (deshacible) y
+   * `currentPage` pasa a ser la página movida en su nueva posición — vía
+   * `goToPage()` (regla `navegacion-por-gotopage`), nunca llamando a
+   * `scrollToPage` aquí directamente.
+   */
+  private beginThumbDrag(
+    canvas: HTMLCanvasElement,
+    sourceIndex: number,
+    inicio: PointerEvent,
+    onDragLejos: (huboArrastre: boolean) => void
+  ): void {
+    const UMBRAL_ARRASTRE_PX = 5;
+    const startX = inicio.clientX, startY = inicio.clientY;
+    let dragging = false;
+    let target: number | null = null; // índice (en el orden ANTES de arrastrar) donde se insertaría
+    let indicator: HTMLElement | null = null;
+
+    const miniaturas = (): HTMLCanvasElement[] =>
+      Array.from(this.thumbsEl.querySelectorAll<HTMLCanvasElement>('canvas.thumb'));
+
+    const posicionarIndicador = (): void => {
+      if (!indicator) return;
+      const hijas = miniaturas();
+      if (target === null || target >= hijas.length) this.thumbsEl.appendChild(indicator);
+      else this.thumbsEl.insertBefore(indicator, hijas[target]!);
+    };
+
+    const limpiar = (): void => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('keydown', onKeyDown);
+      canvas.classList.remove('thumb-dragging');
+      indicator?.remove();
+      indicator = null;
+    };
+
+    const onMove = (ev: PointerEvent): void => {
+      const dx = ev.clientX - startX, dy = ev.clientY - startY;
+      if (!dragging) {
+        if (Math.hypot(dx, dy) < UMBRAL_ARRASTRE_PX) return;
+        dragging = true;
+        onDragLejos(true);
+        canvas.classList.add('thumb-dragging');
+        indicator = document.createElement('div');
+        indicator.className = 'thumb-drop-indicator';
+        this.thumbsEl.appendChild(indicator);
+      }
+      const hijas = miniaturas();
+      let nuevoTarget = hijas.length;
+      for (let i = 0; i < hijas.length; i++) {
+        const rect = hijas[i]!.getBoundingClientRect();
+        if (ev.clientY < rect.top + rect.height / 2) { nuevoTarget = i; break; }
+      }
+      if (nuevoTarget !== target) { target = nuevoTarget; posicionarIndicador(); }
+    };
+
+    const onUp = (): void => {
+      const huboArrastre = dragging;
+      const destino = target;
+      limpiar();
+      if (!huboArrastre || destino === null) return;
+      // Soltar justo donde ya estaba (antes o justo después de sí misma): no-op.
+      if (destino === sourceIndex || destino === sourceIndex + 1) return;
+      const to = destino > sourceIndex ? destino - 1 : destino;
+      void this.commitReorder(sourceIndex, to);
+    };
+
+    const onKeyDown = (ev: KeyboardEvent): void => {
+      if (ev.key !== 'Escape' || !dragging) return;
+      limpiar();
+      dragging = false;
+      target = null;
+    };
+
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('keydown', onKeyDown);
+  }
+
+  /** Aplica el reordenamiento (un único MovePageCmd) y sigue a la página movida. */
+  private async commitReorder(fromIndex: number, toIndex: number): Promise<void> {
+    if (!this.bus) return;
+    await this.bus.execute(new MovePageCmd(fromIndex, toIndex));
+    this.goToPage(toIndex);
+    this.setStatus('Página reordenada.');
   }
 
   private search(): void {
