@@ -228,6 +228,23 @@ salvo con el escape estándar del repositorio y una razón real (AGENTS.md
 motivó: un test con umbral `< 500 ms` que dio `598 ms` y falló en una
 corrida local cargada, sin ninguna regresión.
 
+## Nada de navegadores dentro de `tests/unit/` (E-049)
+
+`tests/unit/**` corre en Node bajo Vitest con varios workers en paralelo.
+Importar `chromium` de `@playwright/test` y lanzarlo en un `beforeAll` hace
+que el arranque de varios navegadores a la vez supere el timeout del hook
+(10 s) y la suite falle al azar. Reglas:
+
+- Si el test solo necesita **bytes de ejemplo** (un JPEG, un PNG), usa
+  constantes base64 fijas, como `tests/unit/_jpegsFijos.ts`.
+- Si el comportamiento **necesita** un navegador (canvas, `createImageBitmap`,
+  maquetación), el test va a `tests/e2e/next/` con Playwright.
+- No se sube el timeout, ni se activan reintentos, ni se serializa la suite
+  como parche.
+
+La regla `sin-playwright-en-unit` (`scripts/guards/reglas.mjs`) prohíbe
+importar `@playwright/test`/`playwright` en cualquier fichero de `tests/unit/`.
+
 ## Prohibido
 
 - `test.skip`, `test.only`, `test.fixme` — los bloquea ESLint y la regla

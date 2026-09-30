@@ -1,7 +1,7 @@
-import { test, expect, beforeAll, afterAll } from 'vitest';
+import { test, expect } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
-import { chromium, type Browser } from '@playwright/test';
 import { PdfiumEngine } from '../../src/engine/pdfium/PdfiumEngine';
+import { JPEG_4X4_GRIS as JPEG } from './_jpegsFijos';
 
 /**
  * E-035 (docs/ERRORES-CONOCIDOS.md): `Mem.HEAPU8` capturado como valor en
@@ -10,29 +10,9 @@ import { PdfiumEngine } from '../../src/engine/pdfium/PdfiumEngine';
  * del motor tocan pocos KB, así que el heap rara vez necesita crecer y el
  * defecto llevaba invisible desde que `mem.ts` existe; una imagen de varios
  * megapíxeles (RGBA sin comprimir) sí lo dispara con facilidad. Necesita un
- * JPEG REAL (`replaceImageJpeg` lo decodifica de verdad), generado con un
- * `<canvas>` en Chromium vía Playwright — igual razón que en
- * `PdfiumEngine.imagepixels.test.ts`.
+ * JPEG REAL (`replaceImageJpeg` lo decodifica de verdad): bytes fijos en
+ * `_jpegsFijos.ts`, sin lanzar navegador dentro de Vitest (E-049).
  */
-let browser: Browser;
-let JPEG: Uint8Array;
-
-beforeAll(async () => {
-  browser = await chromium.launch();
-  const page = await browser.newPage();
-  const dataUrl = await page.evaluate(() => {
-    const c = document.createElement('canvas');
-    c.width = 4; c.height = 4;
-    const ctx = c.getContext('2d')!;
-    ctx.fillStyle = 'rgb(10,10,10)';
-    ctx.fillRect(0, 0, 4, 4);
-    return c.toDataURL('image/jpeg', 0.5);
-  });
-  await page.close();
-  JPEG = new Uint8Array(Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'));
-}, 30000);
-
-afterAll(async () => { await browser.close(); });
 
 test('E-035: replaceImageJpeg con una imagen grande (2000×2000) no falla por buffer WASM desconectado', async () => {
   const d = await PDFDocument.create();
