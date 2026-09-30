@@ -660,6 +660,33 @@ function docxTablaImagen() {
 }
 
 /**
+ * JPEG mínimo válido (16x16, azul sólido) generado UNA vez con
+ * `canvas.toDataURL('image/jpeg', 0.9)` en Chromium (sin dependencias) y
+ * fijado aquí en base64: el fixture es determinista en cualquier máquina.
+ */
+const JPEG_AZUL_16X16_B64 =
+  '/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAQABADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAABgn/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCe4CqYO//Z';
+
+/** Tamaño declarado (`wp:extent`) de la imagen de `word-jpeg.docx`: 914400x457200 EMU = 72x36 pt. */
+export const DOCX_JPEG_ANCHO_PT = 72;
+export const DOCX_JPEG_ALTO_PT = 36;
+
+/** .docx con UNA imagen JPEG inline (ejercita el camino de `createImageBitmap` del navegador, que Node no tiene). */
+function docxJpeg() {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:p><w:r><w:t>Documento con una imagen JPEG.</w:t></w:r></w:p>
+  <w:p><w:r>${drawingInline('rId1', 914400, 457200)}</w:r></w:p>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/_rels/document.xml.rels', datos: Buffer.from(relsXml([relacion('rId1', 'image', 'media/image1.jpg', false)]), 'utf-8') },
+    { nombre: 'word/media/image1.jpg', datos: Buffer.from(JPEG_AZUL_16X16_B64, 'base64') }
+  ]);
+}
+
+/**
  * Fixture "completo" de la fase 2a (spec, ítem 8): tabla 3×3 con encabezado,
  * una celda combinada horizontalmente (`w:gridSpan`) y sombreada (`w:shd`),
  * una imagen PNG inline (reutiliza el mismo rojo sólido que `rojo.png`), un
@@ -750,6 +777,7 @@ async function main() {
     'word-basico.docx': docxBasico(),
     'word-tabla-imagen.docx': docxTablaImagen(),
     'word-completo.docx': docxCompleto(),
+    'word-jpeg.docx': docxJpeg(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {

@@ -1998,3 +1998,27 @@ tipo de mezcla de orígenes que el resto de E-0xx de geometría). Arreglo:
 `relYPt = y + alto * (1 - fracción)`. Test:
 `la línea base del texto de una celda cae ~13,6pt bajo el borde superior…`
 (`tests/unit/ConversorDocxNavegador.test.ts`), rojo antes (8,36 pt).
+
+---
+
+### E-048 · La fase 2a descartaba contenido de Word sin avisar · encontrado al auditar la fase 2a
+
+**Síntoma.** Una celda `vMerge` "continue" se pintaba en blanco sin sombreado;
+una fila más alta que una página se salía de ella (contenido perdido bajo el
+margen); un `w:hyperlink` con `w:anchor`, un `w:sdt` o `w:fldSimple` dentro de
+un párrafo, una ecuación, un `w:sym`, una tabla anidada o una imagen dentro de
+una celda desaparecían o se aplanaban SIN ninguna advertencia. En Markdown, un
+enlace `javascript:` se pintaba azul como si funcionara.
+
+**Causa raíz.** Los `default: break`/`continue` de `modelo.ts` y `render.ts`
+descartaban nodos por ser "ruido", sin distinguir el ruido real (marcadores,
+`w:proofErr`) de contenido con texto. La regla del proyecto es que lo no
+soportado puede degradarse pero nunca en silencio (§3 del spec de la fila #4).
+
+**Cómo se detecta ahora.** `modelo.ts` cuenta cada descarte con `anotar()` y lo
+convierte en aviso (`MENSAJES_PERDIDAS`); cualquier elemento no reconocido que
+contenga `w:t` avisa como `desconocido`. Tests en `tests/unit/docx-modelo.test.ts`
+(bloque "T1b"), `tests/unit/docx-tabla-render.test.ts` (vMerge, cruce de página,
+fila partida, rejilla ampliada, escala) y `tests/unit/markdown-layout.test.ts`.
+Regla determinista: no se añade; "descartar sin avisar" no tiene firma
+sintáctica única (la defensa es el test de cada categoría al añadir una nueva).

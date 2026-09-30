@@ -134,3 +134,14 @@ test('la línea base del texto de una celda cae ~13,6pt bajo el borde superior d
   // sizePt 10 -> altura de línea 12; baseline a 5 + 12*0.72 = 13,64pt bajo el tope.
   expect(topeFila - trazos[0]!.yPt).toBeCloseTo(13.64, 1);
 });
+
+test('word-jpeg.docx en Node (sin createImageBitmap): la imagen NO se pierde en silencio, se avisa', async () => {
+  const engine = await PdfiumEngine.create();
+  const conversor = new ConversorDocxNavegador(engine);
+  const { pdf, advertencias } = await conversor.convertir('word-jpeg.docx', leerFixture('word-jpeg.docx'));
+  expect(advertencias.join(' | ')).toMatch(/imagen/i);
+  const doc = await engine.open(pdf);
+  expect(engine.listImageObjects(doc, 0)).toHaveLength(0);
+  expect(engine.getPageText(doc, 0).map((r) => r.text).join(' ')).toContain('JPEG');
+  engine.close(doc);
+});

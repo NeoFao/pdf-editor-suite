@@ -1,6 +1,8 @@
 import { test, expect, type Page } from '@playwright/test';
 import path from 'node:path';
+import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
 
 /**
  * §9 fila #4: abrir un `.docx` desde `#file-input` lo convierte a un PDF con
@@ -14,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const WORD_BASICO = path.resolve(AQUI, '../../fixtures/generados/word-basico.docx');
 const WORD_TABLA_IMAGEN = path.resolve(AQUI, '../../fixtures/generados/word-tabla-imagen.docx');
+const WORD_JPEG = path.resolve(AQUI, '../../fixtures/generados/word-jpeg.docx');
 const WORD_COMPLETO = path.resolve(AQUI, '../../fixtures/generados/word-completo.docx');
 
 async function dataTransferConFichero(page: Page, bytes: number[], fileName: string, mime: string) {
@@ -90,4 +93,24 @@ test('soltar un .doc (Word 97 binario) muestra el mensaje de formato antiguo, si
 
   await expect(page.locator('#status')).toContainText('.doc antiguo no soportado');
   await expect(page.locator('.page')).toHaveCount(0);
+});
+
+test('abrir word-jpeg.docx: la imagen JPEG (createImageBitmap) llega al PDF con el tamaño declarado, 72x36 pt ±1, y sin aviso', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(WORD_JPEG);
+  await expect(page.locator('.run').first()).toBeVisible();
+  await expect(page.locator('.image-box')).toHaveCount(1);
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
+
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#btn-save').click()]);
+  const destino = path.join(test.info().outputDir, 'word-jpeg.pdf');
+  await download.saveAs(destino);
+
+  const eng = await PdfiumEngine.create();
+  const doc = await eng.open(new Uint8Array(fs.readFileSync(destino)));
+  const imagenes = eng.listImageObjects(doc, 0);
+  expect(imagenes).toHaveLength(1);
+  expect(Math.abs(imagenes[0]!.rectPt.wPt - 72)).toBeLessThanOrEqual(1);
+  expect(Math.abs(imagenes[0]!.rectPt.hPt - 36)).toBeLessThanOrEqual(1);
+  eng.close(doc);
 });
