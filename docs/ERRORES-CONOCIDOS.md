@@ -1968,3 +1968,25 @@ despliega" dejarían de ser la misma política, silenciosamente.
   más un servidor HTTP real de punta a punta.
 - Regla determinista `csp-coherente` (`scripts/guards/reglas.mjs`), con test
   en `scripts/guards/reglas.test.mjs`.
+
+---
+
+### E-047 · Los enlaces salían con un recuadro visible y el subrayado nunca se dibujaba · encontrado en la revisión visual de Word fase 2a
+
+**Síntoma.** En `word-completo.docx` convertido, el hipervínculo aparecía
+encerrado en un rectángulo negro/azul, y el "subrayado" que pide el spec no
+existía: el texto solo salía azul.
+
+**Causa raíz.** Doble. (1) Una anotación `/Link` creada con
+`FPDFPage_CreateAnnot` sin `/Border` propio se pinta con el borde por defecto
+de 1 pt (el render usa `FPDF_ANNOT`); Acrobat, Chrome y Word generan siempre
+borde invisible. (2) `RunFormato.underline` se leía de `w:u` desde la fase 1
+pero ningún código lo convertía en trazo: era un dato huérfano.
+
+**Cómo se detecta ahora.** `PdfiumEngine.addLink` llama a
+`FPDFAnnot_SetBorder(annot, 0, 0, 0)`. `Atom/Seg.underline` viaja por
+`lineToFlowLine` y `paginar` traza la barra; tests
+`lineToFlowLine + paginar: un átomo con underline…` y
+`un átomo sin underline no produce ninguna barra`
+(`tests/unit/flujo-layout.test.ts`). El recuadro solo se ve a ojo: la defensa
+es la revisión visual obligatoria (AGENTS.md §2.8), no un test de píxeles.
