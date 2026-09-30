@@ -253,7 +253,7 @@ function renderBlocksFlat(blocks: Block[], indentPt: number, medir: Medir, widow
 }
 
 export function layoutMarkdown(blocks: Block[], medir: Medir): ResultadoLayout {
-  if (blocks.length === 0) return { totalPaginas: 1, trazos: [], barras: [], imagenes: [], enlaces: [] };
+  if (blocks.length === 0) return { totalPaginas: 1, trazos: [], barras: [], imagenes: [], enlaces: [], advertencias: [] };
   const items = renderBlocksFlat(blocks, 0, medir, true, BLACK);
   return paginarFlujo(items, PAGE_GEOMETRY, BASELINE_FRACTION);
 }

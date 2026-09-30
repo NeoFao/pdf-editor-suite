@@ -287,3 +287,92 @@ test('un run con color explícito DENTRO de un w:hyperlink respeta ese color ("s
   expect(parte).toMatchObject({ tipo: 'texto', url: 'https://example.com' });
   if (parte.tipo === 'texto') expect(parte.formato.color).toEqual([0, 255, 0]);
 });
+
+// ---------------------------------------------------------------------------
+// T1b: nada se descarta o se aplana en silencio
+// ---------------------------------------------------------------------------
+
+function avisos(documentXml: string, rels: string | null = null): string {
+  return construirModeloDocx(documentXml, null, null, rels).advertencias.join(' | ');
+}
+
+test('enlace interno (w:anchor) y enlace sin destino resoluble: se conserva el texto Y se avisa', () => {
+  const xml = `<w:document><w:body>
+    <w:p><w:hyperlink w:anchor="marcador"><w:r><w:t>ir al marcador</w:t></w:r></w:hyperlink></w:p>
+    <w:p><w:hyperlink r:id="rIdNoExiste"><w:r><w:t>sin destino</w:t></w:r></w:hyperlink></w:p>
+  </w:body></w:document>`;
+  const modelo = construirModeloDocx(xml, null, null, RELS_ENLACES);
+  const textos = soloParrafos(modelo).flatMap((p) => p.partes).map((x) => (x as { texto: string }).texto);
+  expect(textos).toEqual(['ir al marcador', 'sin destino']);
+  expect(modelo.advertencias.join(' | ')).toMatch(/enlaces? interno/i);
+  expect(modelo.advertencias.join(' | ')).toMatch(/sin destino/i);
+});
+
+test('contenido dentro de w:sdt en línea, w:fldSimple, w:customXml y w:moveTo NO se pierde', () => {
+  const xml = `<w:document><w:body>
+    <w:p>
+      <w:sdt><w:sdtContent><w:r><w:t>control</w:t></w:r></w:sdtContent></w:sdt>
+      <w:fldSimple w:instr="DATE"><w:r><w:t>campo</w:t></w:r></w:fldSimple>
+      <w:customXml><w:r><w:t>xml</w:t></w:r></w:customXml>
+      <w:moveTo><w:r><w:t>movido</w:t></w:r></w:moveTo>
+    </w:p>
+  </w:body></w:document>`;
+  const textos = soloParrafos(construirModeloDocx(xml, null, null)).flatMap((p) => p.partes).map((x) => (x as { texto: string }).texto);
+  expect(textos).toEqual(['control', 'campo', 'xml', 'movido']);
+});
+
+test('un elemento desconocido con texto dentro se avisa en vez de descartarse', () => {
+  const xml = `<w:document><w:body><w:p><w:elementoRaro><w:r><w:t>perdido</w:t></w:r></w:elementoRaro><w:r><w:t>ok</w:t></w:r></w:p></w:body></w:document>`;
+  expect(avisos(xml)).toMatch(/no reconocid/i);
+});
+
+test('ecuaciones, símbolos, objetos incrustados y saltos de columna se avisan', () => {
+  const xml = `<w:document><w:body>
+    <w:p><m:oMath><m:r><m:t>x=1</m:t></m:r></m:oMath></w:p>
+    <w:p><w:r><w:sym w:font="Wingdings" w:char="F04A"/></w:r></w:p>
+    <w:p><w:r><w:object/></w:r></w:p>
+    <w:p><w:r><w:br w:type="column"/></w:r></w:p>
+  </w:body></w:document>`;
+  const t = avisos(xml);
+  expect(t).toMatch(/ecuaci/i);
+  expect(t).toMatch(/símbolo/i);
+  expect(t).toMatch(/objeto/i);
+  expect(t).toMatch(/columna/i);
+});
+
+test('varias secciones y columnas de texto se avisan (solo se usa la geometría de la última sección)', () => {
+  const xml = `<w:document><w:body>
+    <w:p><w:pPr><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:pPr><w:r><w:t>a</w:t></w:r></w:p>
+    <w:sectPr><w:pgSz w:w="15840" w:h="12240"/><w:cols w:num="2"/></w:sectPr>
+  </w:body></w:document>`;
+  const t = avisos(xml);
+  expect(t).toMatch(/secciones/i);
+  expect(t).toMatch(/columnas/i);
+});
+
+test('una lista cuyo numId no está definido se avisa (el marcador se perdería)', () => {
+  const xml = `<w:document><w:body>${parrafoLista('99', 0, 'huérfano')}</w:body></w:document>`;
+  expect(avisos(xml)).toMatch(/lista|numeraci/i);
+});
+
+test('tabla anidada, imagen y salto de página dentro de una celda: el texto se conserva aplanado y se avisa', () => {
+  const xml = `<w:document><w:body><w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc>
+    <w:p><w:r><w:t>externa</w:t></w:r></w:p>
+    <w:tbl><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid>
+      <w:tr><w:tc><w:p><w:r><w:t>n1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>n2</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
+    <w:p><w:r>${drawingInline('rId1', 914400, 914400)}</w:r><w:r><w:br w:type="page"/></w:r></w:p>
+  </w:tc></w:tr></w:tbl></w:body></w:document>`;
+  const modelo = construirModeloDocx(xml, null, null, RELS_UNA_IMAGEN);
+  const tabla = modelo.bloques[0]!;
+  if (!esTabla(tabla)) throw new Error('tabla');
+  const partes = tabla.filas[0]!.celdas[0]!.partes;
+  const texto = partes.filter((p) => p.tipo === 'texto').map((p) => (p as { texto: string }).texto).join(' ');
+  expect(texto).toContain('externa');
+  expect(texto).toContain('n1');
+  expect(texto).toContain('n2');
+  expect(partes.some((p) => p.tipo === 'imagen' || p.tipo === 'saltoPagina')).toBe(false);
+  const t = modelo.advertencias.join(' | ');
+  expect(t).toMatch(/anidada/i);
+  expect(t).toMatch(/imagen.*(tabla|celda)|(tabla|celda).*imagen/i);
+  expect(t).toMatch(/salto de página.*(tabla|celda)|(tabla|celda).*salto de página/i);
+});

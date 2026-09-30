@@ -86,6 +86,8 @@ export interface ResultadoLayout {
   barras: Barra[];
   imagenes: ImagenColocada[];
   enlaces: EnlaceColocado[];
+  /** Avisos generados al paginar (p. ej. una combinación vertical de celdas que cruza un salto de página). */
+  advertencias: string[];
 }
 
 export interface Seg {
@@ -131,7 +133,13 @@ export interface RelBarra { relYPt: number; hPt: number; xPt: number; wPt: numbe
  * mientras dure la tabla (entre el `FlowTableStart` que las declara y el
  * `FlowTableEnd` correspondiente).
  */
-export interface FlowTableRow { kind: 'tableRow'; height: number; lineas: RelLinea[]; fondos: RelBarra[]; bordes: RelBarra[]; esEncabezado: boolean }
+export interface FlowTableRow {
+  kind: 'tableRow'; height: number; lineas: RelLinea[]; fondos: RelBarra[]; bordes: RelBarra[]; esEncabezado: boolean;
+  /** Ids de combinaciones verticales (`w:vMerge`) que EMPIEZAN en esta fila. */
+  mergeInicio?: number[];
+  /** Ids de combinaciones verticales que CONTINÚAN en esta fila (la celda ocupa también las filas anteriores del grupo). `paginar` avisa si la fila cae en una página distinta a la del inicio del grupo. */
+  mergeContinua?: number[];
+}
 /** Abre una tabla: `headerRows` son las filas (ya construidas como `FlowTableRow`) que `paginar` repite tras cada salto de página dentro de esta tabla. */
 export interface FlowTableStart { kind: 'tableStart'; headerRows: FlowTableRow[] }
 /** Cierra la tabla abierta por el último `FlowTableStart`: deja de repetir encabezado tras este punto. */
@@ -270,6 +278,9 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
   // dure la tabla. Como este maquetador no admite tablas anidadas, basta con
   // una sola "tabla activa" a la vez.
   let encabezadosTabla: FlowTableRow[] = [];
+  // Página en la que se colocó la última fila de cada combinación vertical; si una continuación cae en otra, esa combinación queda cortada por el salto.
+  const paginaDeMerge = new Map<number, number>();
+  const mergesPartidos = new Set<number>();
 
   function nuevaPagina(): void {
     page++;
@@ -291,6 +302,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
 
   /** Coloca una fila de tabla YA en la página/cursor actuales (no decide paginación: eso lo hace el llamador). */
   function colocarFila(row: FlowTableRow): void {
+    for (const id of row.mergeContinua ?? []) if (paginaDeMerge.get(id) !== page) mergesPartidos.add(id);
+    for (const id of [...(row.mergeInicio ?? []), ...(row.mergeContinua ?? [])]) paginaDeMerge.set(id, page);
     for (const f of row.fondos) {
       barras.push({ page, xPt: f.xPt, yPt: cursor - f.relYPt - f.hPt, wPt: f.wPt, hPt: f.hPt, color: f.color });
     }
@@ -377,5 +390,10 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     cursor = bottom;
   }
 
-  return { totalPaginas: page + 1, trazos, barras, imagenes, enlaces };
+  const advertencias: string[] = [];
+  if (mergesPartidos.size > 0) {
+    const c = mergesPartidos.size;
+    advertencias.push(`${c === 1 ? 'Una celda combinada verticalmente cruza' : `${c} celdas combinadas verticalmente cruzan`} un salto de página: la celda se muestra cortada en el salto (el texto está en la primera página de la combinación).`);
+  }
+  return { totalPaginas: page + 1, trazos, barras, imagenes, enlaces, advertencias };
 }

@@ -463,7 +463,33 @@ interface Contexto {
    * todo el árbol al final. Se combinan al construir el `ModeloDocx` final.
    */
   advertenciasExtra: string[];
+  /** Descartes/degradaciones contados por tipo (`anotar`); se convierten en avisos al final (`MENSAJES_PERDIDAS`). */
+  perdidas: Map<string, number>;
 }
+
+function anotar(ctx: Contexto, clave: string): void { ctx.perdidas.set(clave, (ctx.perdidas.get(clave) ?? 0) + 1); }
+
+function cuenta(c: number, uno: string, varios: string): string { return c === 1 ? uno : varios.replace('{n}', String(c)); }
+
+/** Texto de cada tipo de pérdida (nada se descarta o degrada en silencio, AGENTS.md §3). Orden = orden de aparición en el aviso. */
+const MENSAJES_PERDIDAS: [string, (c: number) => string][] = [
+  ['enlaceInterno', (c) => cuenta(c, 'Un enlace interno (a un marcador del documento) se dejó como texto sin enlace.', '{n} enlaces internos (a marcadores del documento) se dejaron como texto sin enlace.')],
+  ['enlaceSinDestino', (c) => cuenta(c, 'Un enlace sin destino resoluble se dejó como texto sin enlace.', '{n} enlaces sin destino resoluble se dejaron como texto sin enlace.')],
+  ['desconocido', (c) => cuenta(c, 'Se omitió el texto de un elemento no reconocido del documento.', 'Se omitió el texto de {n} elementos no reconocidos del documento.')],
+  ['ecuacion', (c) => cuenta(c, 'Se omitió una ecuación (aún no soportada).', 'Se omitieron {n} ecuaciones (aún no soportadas).')],
+  ['sym', (c) => cuenta(c, 'Se omitió un símbolo especial (w:sym).', 'Se omitieron {n} símbolos especiales (w:sym).')],
+  ['saltoColumna', (c) => cuenta(c, 'Un salto de columna se trató como salto de línea (sin columnas).', '{n} saltos de columna se trataron como saltos de línea (sin columnas).')],
+  ['listaSinDef', (c) => cuenta(c, 'Un párrafo de lista cuya numeración no está definida se maquetó sin marcador.', '{n} párrafos de lista cuya numeración no está definida se maquetaron sin marcador.')],
+  ['tablaAnidada', (c) => cuenta(c, 'Una tabla anidada dentro de otra se aplanó a texto (celdas separadas por tabulador).', '{n} tablas anidadas se aplanaron a texto (celdas separadas por tabulador).')],
+  ['imagenEnCelda', (c) => cuenta(c, 'Se omitió una imagen dentro de una celda de tabla (aún no soportado).', 'Se omitieron {n} imágenes dentro de celdas de tabla (aún no soportado).')],
+  ['saltoPaginaEnCelda', (c) => cuenta(c, 'Un salto de página dentro de una celda de tabla se trató como salto de línea.', '{n} saltos de página dentro de celdas de tabla se trataron como saltos de línea.')],
+  ['vMergeConTexto', (c) => cuenta(c, 'Una celda de continuación de una combinación vertical traía texto propio, que no se muestra (como hace Word).', '{n} celdas de continuación de combinaciones verticales traían texto propio, que no se muestra (como hace Word).')]
+];
+
+/** Hijos de un run que son ruido estructural o se cuentan aparte: no avisan por sí mismos. */
+const RUIDO_RUN = new Set(['w:rPr', 'w:lastRenderedPageBreak', 'w:softHyphen', 'w:instrText', 'w:fldChar', 'w:footnoteReference', 'w:endnoteReference', 'w:commentReference', 'w:annotationRef', 'w:footnoteRef', 'w:endnoteRef', 'w:separator', 'w:continuationSeparator', 'w:pict', 'w:object', 'w:delText', 'w:delInstrText', 'w:t', 'w:tab', 'w:br', 'w:noBreakHyphen', 'w:drawing', 'w:sym', 'w:cr', 'w:ptab', 'mc:AlternateContent']);
+/** Ídem para hijos directos de un párrafo. */
+const RUIDO_PARRAFO = new Set(['w:pPr', 'w:bookmarkStart', 'w:bookmarkEnd', 'w:proofErr', 'w:permStart', 'w:permEnd', 'w:commentRangeStart', 'w:commentRangeEnd', 'w:moveFromRangeStart', 'w:moveFromRangeEnd', 'w:moveToRangeStart', 'w:moveToRangeEnd', 'w:del', 'w:moveFrom', 'w:r', 'w:hyperlink', 'w:ins', 'w:smartTag', 'w:sdt', 'w:fldSimple', 'w:customXml', 'w:dir', 'w:bdo', 'w:moveTo', 'm:oMath', 'm:oMathPara']);
 
 /** Azul + subrayado por defecto de un hipervínculo (`w:hyperlink`) cuyo estilo no diga otra cosa — mismo tono que usa el conversor Markdown. */
 const LINK_BLUE: RGB = [37, 99, 235];
@@ -499,9 +525,22 @@ function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, parte
     if (h.tipo !== 'elemento') continue;
     if (h.nombre === 'w:t') { const t = textoDirecto(h); if (t.length > 0) partes.push({ tipo: 'texto', texto: t, formato }); }
     else if (h.nombre === 'w:tab') partes.push({ tipo: 'tab' });
-    else if (h.nombre === 'w:br') partes.push({ tipo: h.atributos['w:type'] === 'page' ? 'saltoPagina' : 'saltoLinea' });
+    else if (h.nombre === 'w:br') {
+      if (h.atributos['w:type'] === 'column') anotar(ctx, 'saltoColumna');
+      partes.push({ tipo: h.atributos['w:type'] === 'page' ? 'saltoPagina' : 'saltoLinea' });
+    }
+    else if (h.nombre === 'w:cr') partes.push({ tipo: 'saltoLinea' });
+    else if (h.nombre === 'w:ptab') partes.push({ tipo: 'tab' });
+    else if (h.nombre === 'w:sym') anotar(ctx, 'sym');
     else if (h.nombre === 'w:noBreakHyphen') partes.push({ tipo: 'texto', texto: '-', formato });
     else if (h.nombre === 'w:drawing') { const parte = resolverImagenDrawing(h, ctx); if (parte) partes.push(parte); }
+    else if (h.nombre === 'mc:AlternateContent') {
+      // Word envuelve formas/dibujos modernos aquí: la parte útil está en el primer `w:drawing` de `mc:Choice`.
+      const dibujo = buscarDescendiente(h, 'w:drawing');
+      if (dibujo) { const parte = resolverImagenDrawing(dibujo, ctx); if (parte) partes.push(parte); }
+      else if (!buscarDescendiente(h, 'w:pict')) anotar(ctx, 'desconocido');
+    }
+    else if (!RUIDO_RUN.has(h.nombre) && buscarDescendiente(h, 'w:t')) anotar(ctx, 'desconocido');
     // w:pict (VML, Word <2007), w:footnoteReference, w:commentReference,
     // w:fldChar, w:instrText, w:delText...: contenido no soportado en esta
     // fase, contado aparte en `construirAdvertencias` (no se pierde en silencio).
@@ -553,10 +592,13 @@ function recorrerContenidoParrafo(contenedor: XmlElemento, baseRuns: RPrAcum, ct
       case 'w:r': procesarRun(h, baseRuns, ctx, partes); break;
       case 'w:hyperlink': procesarHyperlink(h, baseRuns, ctx, partes); break;
       case 'w:ins': recorrerContenidoParrafo(h, baseRuns, ctx, partes); break; // inserción de control de cambios: se acepta
-      case 'w:smartTag': recorrerContenidoParrafo(h, baseRuns, ctx, partes); break;
-      case 'w:del': break; // eliminación de control de cambios: se descarta (advertencia aparte)
+      case 'w:smartTag': case 'w:fldSimple': case 'w:customXml': case 'w:dir': case 'w:bdo': case 'w:moveTo':
+        recorrerContenidoParrafo(h, baseRuns, ctx, partes); break; // envoltorios: su contenido se conserva
+      case 'w:sdt': { const c = primerHijo(h, 'w:sdtContent'); if (c) recorrerContenidoParrafo(c, baseRuns, ctx, partes); break; } // control de contenido en línea
+      case 'm:oMath': case 'm:oMathPara': anotar(ctx, 'ecuacion'); break;
+      case 'w:del': case 'w:moveFrom': break; // eliminación de control de cambios: se descarta (advertencia aparte, `cambios`)
       case 'w:pPr': break; // procesado aparte
-      default: break; // bookmarkStart/End, proofErr...: ruido estructural
+      default: if (!RUIDO_PARRAFO.has(h.nombre) && buscarDescendiente(h, 'w:t')) anotar(ctx, 'desconocido'); break; // bookmarkStart/End, proofErr...: ruido estructural sin texto
     }
   }
 }
@@ -576,8 +618,14 @@ function recorrerContenidoParrafo(contenedor: XmlElemento, baseRuns: RPrAcum, ct
 function procesarHyperlink(h: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, partes: ParteParrafo[]): void {
   const rId = h.atributos['r:id'];
   const rel = rId ? ctx.rels?.get(rId) : undefined;
+  if (!rId && h.atributos['w:anchor'] !== undefined) {
+    anotar(ctx, 'enlaceInterno'); // a un marcador del propio documento: el texto se conserva, el enlace no
+    recorrerContenidoParrafo(h, baseRuns, ctx, partes);
+    return;
+  }
   if (!rId || !rel || rel.targetMode !== 'External') {
-    recorrerContenidoParrafo(h, baseRuns, ctx, partes); // enlace interno o no resuelto: texto plano, sin aviso
+    anotar(ctx, rel && rel.targetMode === 'Internal' ? 'enlaceInterno' : 'enlaceSinDestino');
+    recorrerContenidoParrafo(h, baseRuns, ctx, partes);
     return;
   }
   const url = validarUrlEnlace(rel.target);
@@ -624,6 +672,7 @@ function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
   for (const p of partes) if (p.tipo === 'texto') { tamanoBasePt = p.formato.sizePt; break; }
 
   const lista = acc.numId ? calcularInfoLista(acc.numId, acc.ilvl, ctx) : null;
+  if (acc.numId && !lista) anotar(ctx, 'listaSinDef');
 
   return {
     tipo: 'parrafo', partes,
@@ -674,17 +723,41 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
 
   const partes: ParteParrafo[] = [];
   let alineacion: Alineacion = 'left';
-  hijosElemento(tc, 'w:p').forEach((p, i) => {
-    if (i > 0) partes.push({ tipo: 'saltoLinea' });
-    const pPr = primerHijo(p, 'w:pPr');
-    if (i === 0) {
-      const jc = pPr ? primerHijo(pPr, 'w:jc') : null;
-      if (jc?.atributos['w:val'] !== undefined) alineacion = mapAlineacion(jc.atributos['w:val']);
+  let bloquesVistos = 0;
+  // `aplanarCuerpo` también abre `w:sdt` (control de contenido a nivel de bloque): nada dentro de la celda se pierde.
+  for (const hijo of aplanarCuerpo(tc)) {
+    if (hijo.nombre === 'w:p') {
+      if (bloquesVistos > 0) partes.push({ tipo: 'saltoLinea' });
+      const pPr = primerHijo(hijo, 'w:pPr');
+      if (bloquesVistos === 0) {
+        const jc = pPr ? primerHijo(pPr, 'w:jc') : null;
+        if (jc?.atributos['w:val'] !== undefined) alineacion = mapAlineacion(jc.atributos['w:val']);
+      }
+      const baseRuns = rPrPorDefecto();
+      if (ctx.docDefaultsRPr) aplicarRPr(baseRuns, ctx.docDefaultsRPr);
+      recorrerContenidoParrafo(hijo, baseRuns, ctx, partes);
+      bloquesVistos++;
+    } else if (hijo.nombre === 'w:tbl') {
+      // Tabla anidada: fuera de alcance como rejilla; su texto se conserva aplanado (una línea por fila, celdas separadas por tabulador) y se avisa.
+      anotar(ctx, 'tablaAnidada');
+      const anidada = procesarTablaReal(hijo, ctx);
+      for (const fila of anidada.filas) {
+        if (bloquesVistos > 0) partes.push({ tipo: 'saltoLinea' });
+        fila.celdas.forEach((c, k) => { if (k > 0) partes.push({ tipo: 'tab' }); partes.push(...c.partes); });
+        bloquesVistos++;
+      }
+    } else if (!['w:tcPr', 'w:bookmarkStart', 'w:bookmarkEnd', 'w:proofErr'].includes(hijo.nombre) && buscarDescendiente(hijo, 'w:t')) {
+      anotar(ctx, 'desconocido');
     }
-    const baseRuns = rPrPorDefecto();
-    if (ctx.docDefaultsRPr) aplicarRPr(baseRuns, ctx.docDefaultsRPr);
-    recorrerContenidoParrafo(p, baseRuns, ctx, partes);
-  });
+  }
+
+  // Lo que una celda no puede pintar en esta fase se degrada CON aviso, nunca en silencio.
+  for (let k = partes.length - 1; k >= 0; k--) {
+    const parte = partes[k]!;
+    if (parte.tipo === 'imagen') { partes.splice(k, 1); anotar(ctx, 'imagenEnCelda'); }
+    else if (parte.tipo === 'saltoPagina') { partes[k] = { tipo: 'saltoLinea' }; anotar(ctx, 'saltoPaginaEnCelda'); }
+  }
+  if (vMerge === 'continue' && partes.some((x) => x.tipo === 'texto')) { anotar(ctx, 'vMergeConTexto'); partes.length = 0; }
 
   return { partes, gridSpan, vMerge, colorFondo, alineacion };
 }
@@ -748,6 +821,12 @@ function contarConAtributo(nodo: XmlElemento, nombre: string, attr: string, valo
   return c;
 }
 
+function contarColumnasMultiples(nodo: XmlElemento): number {
+  let c = nodo.nombre === 'w:cols' && Number(nodo.atributos['w:num'] ?? '1') > 1 ? 1 : 0;
+  for (const h of nodo.hijos) if (h.tipo === 'elemento') c += contarColumnasMultiples(h);
+  return c;
+}
+
 function pluralizar(n: number, singular: string, plural: string): string { return n === 1 ? singular : plural; }
 
 /**
@@ -768,10 +847,13 @@ function construirAdvertencias(docRoot: XmlElemento): string[] {
   const encabezados = contarElementos(docRoot, 'w:headerReference');
   const pies = contarElementos(docRoot, 'w:footerReference');
   const cuadros = contarElementos(docRoot, 'w:txbxContent');
-  const notas = contarElementos(docRoot, 'w:footnoteReference');
+  const notas = contarElementos(docRoot, 'w:footnoteReference') + contarElementos(docRoot, 'w:endnoteReference');
   const comentarios = contarElementos(docRoot, 'w:commentReference');
   const campos = contarConAtributo(docRoot, 'w:fldChar', 'w:fldCharType', 'begin') + contarElementos(docRoot, 'w:fldSimple');
-  const cambios = contarElementos(docRoot, 'w:ins') + contarElementos(docRoot, 'w:del');
+  const cambios = contarElementos(docRoot, 'w:ins') + contarElementos(docRoot, 'w:del') + contarElementos(docRoot, 'w:moveFrom') + contarElementos(docRoot, 'w:moveTo');
+  const secciones = contarElementos(docRoot, 'w:sectPr');
+  const conColumnas = contarColumnasMultiples(docRoot);
+  const objetos = contarElementos(docRoot, 'w:object');
 
   if (imagenesVml > 0) advertencias.push(`Se omitieron ${imagenesVml} ${pluralizar(imagenesVml, 'imagen', 'imágenes')} en formato antiguo (VML, aún no soportado).`);
   if (encabezados > 0) advertencias.push(`Se omitieron ${encabezados} ${pluralizar(encabezados, 'encabezado', 'encabezados')} de página (aún no soportados).`);
@@ -781,6 +863,10 @@ function construirAdvertencias(docRoot: XmlElemento): string[] {
   if (comentarios > 0) advertencias.push(`Se omitieron ${comentarios} ${pluralizar(comentarios, 'comentario', 'comentarios')} (aún no soportados).`);
   if (campos > 0) advertencias.push(`Se omitieron ${campos} ${pluralizar(campos, 'campo', 'campos')} (aún no soportados).`);
   if (cambios > 0) advertencias.push(`El documento tiene ${cambios} ${pluralizar(cambios, 'cambio', 'cambios')} de control de cambios sin resolver; se aceptaron las inserciones y se descartaron las eliminaciones.`);
+
+  if (objetos > 0) advertencias.push(`Se omitieron ${objetos} ${pluralizar(objetos, 'objeto incrustado', 'objetos incrustados')} (OLE; aún no soportados).`);
+  if (secciones > 1) advertencias.push(`El documento tiene ${secciones} secciones; se usa el tamaño de página y los márgenes de la última para todo el documento.`);
+  if (conColumnas > 0) advertencias.push(`Se omitió la distribución en columnas de ${conColumnas} ${pluralizar(conColumnas, 'sección', 'secciones')}; el texto se maqueta a una sola columna.`);
 
   return advertencias;
 }
@@ -806,7 +892,7 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
     : { numMap: new Map<string, string>(), abstractNums: new Map<string, AbstractNumDef>() };
   const rels = relsXml ? leerRelaciones(relsXml) : null;
 
-  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), rels, advertenciasExtra: [] };
+  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), rels, advertenciasExtra: [], perdidas: new Map() };
 
   const bloques: BloqueDocx[] = [];
   let sectPrFinal: XmlElemento | null = null;
@@ -821,11 +907,16 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
       bloques.push(procesarTablaReal(hijo, ctx));
     } else if (hijo.nombre === 'w:sectPr') {
       sectPrFinal = hijo;
+    } else if (hijo.nombre === 'm:oMathPara' || hijo.nombre === 'm:oMath') {
+      anotar(ctx, 'ecuacion');
+    } else if (!['w:bookmarkStart', 'w:bookmarkEnd', 'w:proofErr', 'w:permStart', 'w:permEnd'].includes(hijo.nombre) && buscarDescendiente(hijo, 'w:t')) {
+      anotar(ctx, 'desconocido');
     }
   }
 
   const geo = leerGeometriaPagina(sectPrFinal);
-  const advertencias = [...construirAdvertencias(docRoot), ...ctx.advertenciasExtra];
+  const perdidas = MENSAJES_PERDIDAS.filter(([clave]) => (ctx.perdidas.get(clave) ?? 0) > 0).map(([clave, msg]) => msg(ctx.perdidas.get(clave)!));
+  const advertencias = [...construirAdvertencias(docRoot), ...ctx.advertenciasExtra, ...perdidas];
 
   return {
     paginaAnchoPt: geo.anchoPt, paginaAltoPt: geo.altoPt,
