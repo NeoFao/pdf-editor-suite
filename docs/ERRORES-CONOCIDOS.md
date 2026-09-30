@@ -562,8 +562,16 @@ CVE-2024-4367 marca como explotable; el parche de fondo llegó en pdf.js 4.2.67.
 3.11.174; la rama 4.x trae el parche de raíz pero solo se distribuye como módulo
 ES, lo que choca con la arquitectura de scripts globales. Desactivar `eval` es
 la mitigación correcta y suficiente mientras tanto; actualizar el motor va con
-la reconstrucción de los cimientos. Retirar `'unsafe-eval'` de la CSP sería
-defensa en profundidad y necesita permiso explícito (AGENTS.md §5).
+la reconstrucción de los cimientos.
+
+**Actualización (2026-09-29, defensa en profundidad, E-046).** Con permiso
+explícito del dueño (paso 3 del cutover de despliegue), `'unsafe-eval'` se
+retiró de `script-src` en `vercel.json` y `server.js` (sustituido por
+`'wasm-unsafe-eval'` para que el motor PDFium siga compilando WASM). Ya no
+hace falta confiar solo en `isEvalSupported: false`: aunque algo lo pasara por
+alto, la CSP bloquea el `eval()`/`new Function()` igualmente. Verificado sin
+romper nada bajo los 161 tests E2E del repo — ver E-046 para el detalle y los
+tests que lo prueban bajo la CSP real.
 
 ---
 

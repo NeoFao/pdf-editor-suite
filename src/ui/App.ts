@@ -2109,16 +2109,18 @@ export class App {
    * `window.print()` a secas, que solo pintaría el DOM y esta app únicamente
    * pinta las páginas visibles (visor virtualizado, ver `Viewer.renderVisible`).
    *
-   * Pendiente de permiso del dueño (AGENTS.md §5, no se toca la CSP en este
-   * PR): la CSP de producción (`vercel.json`) no declara `frame-src`, que cae
-   * en `default-src 'self'` — no está confirmado si eso basta para navegar un
-   * iframe a un blob: del propio origen o si el navegador lo bloquea. Por eso
-   * hay dos redes de seguridad, ninguna de las cuales requiere tocar la CSP:
-   * el oyente de `securitypolicyviolation` (el bloqueo no lanza excepción, así
-   * que sin esto el usuario vería un iframe vacío y ningún diálogo) y el
-   * `catch` de la llamada a `print()`. Ambas caen a abrir el PDF en una
-   * pestaña nueva, desde donde el usuario imprime con el propio visor del
-   * navegador (Ctrl/Cmd+P).
+   * Desde el endurecimiento de CSP del 2026-09-29 (autorización del dueño,
+   * AGENTS.md §5, docs/ERRORES-CONOCIDOS.md E-046), `vercel.json`/`server.js`
+   * declaran `frame-src 'self' blob:`, así que este camino funciona
+   * directamente en producción. Se conservan igualmente DOS redes de
+   * seguridad, por si acaso (otro entorno con una CSP más estricta, un
+   * navegador que interprete `frame-src` de forma distinta, etc.): el oyente
+   * de `securitypolicyviolation` (el bloqueo no lanza excepción, así que sin
+   * esto el usuario vería un iframe vacío y ningún diálogo) y el `catch` de
+   * la llamada a `print()`. Ambas caen a abrir el PDF en una pestaña nueva,
+   * desde donde el usuario imprime con el propio visor del navegador
+   * (Ctrl/Cmd+P). Cubierto bajo la CSP real por
+   * `tests/e2e/deploy/csp.spec.ts`.
    *
    * Limpieza (revisión de PR #52, dos bugs corregidos):
    * - Revocar la blob: URL se retrasa un margen largo (60s) en TODOS los

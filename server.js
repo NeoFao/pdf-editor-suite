@@ -32,12 +32,13 @@ const MIME_TYPES = {
 
 const CSP_POLICY = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com blob:",
+  "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com blob:",
   "style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net",
   "font-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net data:",
   "img-src 'self' data: blob: https:",
   "connect-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://raw.githubusercontent.com blob: data:",
   "worker-src 'self' blob:",
+  "frame-src 'self' blob:",
   "object-src 'none'",
   "frame-ancestors 'self'",
   "base-uri 'self'",
