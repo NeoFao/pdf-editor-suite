@@ -149,7 +149,9 @@ export type PageOp =
   | { type: 'fillRect'; rect: RectPt; color: [number, number, number] }
   | { type: 'highlightRect'; rect: RectPt; color: [number, number, number] }
   | { type: 'drawStroke'; points: { xPt: number; yPt: number }[]; color: [number, number, number]; widthPt: number }
-  | { type: 'drawRect'; rect: RectPt; color: [number, number, number]; widthPt: number };
+  | { type: 'drawRect'; rect: RectPt; color: [number, number, number]; widthPt: number }
+  | { type: 'insertImage'; spec: InsertImageSpec }
+  | { type: 'addLink'; rect: RectPt; url: string };
 
 /** Resultado de un `PageOp`, en el mismo orden que se pasó a `applyPageOps`. */
 export type PageOpResult =
@@ -157,7 +159,9 @@ export type PageOpResult =
   | { type: 'fillRect'; ok: boolean }
   | { type: 'highlightRect'; ok: boolean }
   | { type: 'drawStroke'; ok: boolean }
-  | { type: 'drawRect'; ok: boolean };
+  | { type: 'drawRect'; ok: boolean }
+  | { type: 'insertImage'; ok: boolean }
+  | { type: 'addLink'; ok: boolean };
 
 export interface PdfEngine {
   open(bytes: Uint8Array): Promise<DocHandle>;
@@ -295,6 +299,16 @@ export interface PdfEngine {
   deleteObject(doc: DocHandle, pageIndex: number, objIndex: number): boolean;
   /** Añade un resaltado (rectángulo de color, blend Multiply) sobre la caja dada. */
   highlightRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean;
+  /**
+   * Crea una anotación `/Link` real (acción `/URI`) sobre `rectPt` (puntos
+   * PDF). Solo `http:`, `https:` y `mailto:` se aceptan
+   * (`validarUrlEnlace.ts`, PR fase 2a de Word/Markdown → PDF): cualquier
+   * otro esquema (`javascript:`, `file:`, `data:`...) no crea nada y
+   * devuelve `false` — un PDF es entrada no confiable y un enlace es
+   * contenido que el propio documento controla (mismo principio que
+   * E-003/E-027). Persiste tras `save()`+reabrir.
+   */
+  addLink(doc: DocHandle, pageIndex: number, rectPt: RectPt, url: string): boolean;
   /**
    * Crea una nota adhesiva (anotación real /Subtype /Text) de 20×20 pt cuya esquina
    * superior-izquierda es (xPt, yPt) — el punto del clic — y `Contents` = text.
