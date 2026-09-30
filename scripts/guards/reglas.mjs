@@ -403,6 +403,58 @@ export const conPdfJsSinEval = {
   }
 };
 
+/* ── E-046 · vercel.json y server.js no pueden divergir de CSP ──────────── */
+export const conCspCoherente = {
+  id: 'csp-coherente',
+  titulo: 'la CSP de vercel.json y la de server.js son idénticas',
+  comoArreglar:
+    'Copia literalmente el valor de Content-Security-Policy entre ambos ficheros. ' +
+    'server.js es lo único que la suite E2E prueba con CSP para la app vieja ' +
+    '(proyectos escritorio/movil); vercel.json es la que Vercel manda de verdad en ' +
+    'producción (y la que scripts/servir-despliegue.mjs aplica para el proyecto ' +
+    'deploy). Si divergen, lo que el CI prueba en local ya no es lo que se despliega.',
+  ejecutar() {
+    const rutaVercel = 'vercel.json';
+    const rutaServer = 'server.js';
+    if (!existe(rutaVercel) || !existe(rutaServer)) return [];
+
+    const vercel = JSON.parse(leer(rutaVercel));
+    const entradaGeneral = (vercel.headers ?? []).find((h) => h.source === '/(.*)');
+    const cspVercel = entradaGeneral?.headers?.find((h) => h.key === 'Content-Security-Policy')?.value;
+    if (!cspVercel) {
+      return [hallazgo(rutaVercel, null, 'no se encontró Content-Security-Policy en la entrada de headers "/(.*)"')];
+    }
+
+    const contenidoServer = leer(rutaServer);
+    const m = contenidoServer.match(/CSP_POLICY\s*=\s*\[([\s\S]*?)\]\.join\(['"]; ['"]\)/);
+    if (!m) {
+      return [hallazgo(rutaServer, null, 'no se encontró la constante CSP_POLICY (array .join) — ¿cambió su forma?')];
+    }
+    // El array de directivas está escrito como literales de cadena con
+    // comillas DOBLES, una por línea (las comillas simples que aparecen
+    // dentro, como 'self' o 'unsafe-eval', son parte del propio valor de la
+    // directiva CSP, no delimitadores de cadena JS — de ahí que el patrón
+    // busque solo comillas dobles, y no "cualquier tipo de comilla").
+    const cspServer = [...m[1].matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((d) => d[1]).join('; ');
+
+    /** Directivas normalizadas (espacios colapsados, trim) y ordenadas: la comparación no depende del orden. */
+    const normalizar = (csp) =>
+      csp.split(';').map((d) => d.trim().replace(/\s+/g, ' ')).filter(Boolean).sort();
+
+    const dirVercel = normalizar(cspVercel);
+    const dirServer = normalizar(cspServer);
+
+    if (JSON.stringify(dirVercel) === JSON.stringify(dirServer)) return [];
+
+    const soloVercel = dirVercel.filter((d) => !dirServer.includes(d));
+    const soloServer = dirServer.filter((d) => !dirVercel.includes(d));
+    const hallazgos = [];
+    for (const d of soloVercel) hallazgos.push(hallazgo(rutaVercel, null, `directiva ausente en server.js: "${d}"`));
+    for (const d of soloServer) hallazgos.push(hallazgo(rutaServer, null, `directiva ausente en vercel.json: "${d}"`));
+    return hallazgos;
+  }
+};
+
 /* ── Cimientos · el motor se usa solo tras su interfaz ──────────────────── */
 export const conMotorEncapsulado = {
   id: 'motor-encapsulado',
@@ -973,6 +1025,7 @@ export const TODAS = [
   conSuiteViva,
   conDeudaAcotada,
   conPdfJsSinEval,
+  conCspCoherente,
   conMotorEncapsulado,
   conPdfiumBufferFijo,
   conNavegacionPorGoToPage,

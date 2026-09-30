@@ -193,6 +193,42 @@ describe('pdfjs-sin-eval', () => {
   });
 });
 
+describe('csp-coherente', () => {
+  const regla = detectarEn('csp-coherente');
+  // Mismo normalizador que usa la regla: por directiva, espacios colapsados +
+  // trim, y el conjunto de directivas ordenado (la comparación no depende
+  // del orden en que aparezcan en el fichero).
+  function normalizar(csp) {
+    return csp.split(';').map((d) => d.trim().replace(/\s+/g, ' ')).filter(Boolean).sort();
+  }
+
+  test('dos CSP con las mismas directivas en distinto orden se consideran iguales', () => {
+    const a = "default-src 'self'; script-src 'self' blob:";
+    const b = "script-src 'self' blob:;   default-src 'self'";
+    assert.deepEqual(normalizar(a), normalizar(b));
+  });
+
+  test('detecta una directiva ausente en un lado', () => {
+    const vercel = "default-src 'self'; script-src 'self' 'unsafe-eval'";
+    const server = "default-src 'self'; script-src 'self'";
+    const dv = normalizar(vercel);
+    const ds = normalizar(server);
+    assert.notDeepEqual(dv, ds);
+    const soloVercel = dv.filter((d) => !ds.includes(d));
+    assert.deepEqual(soloVercel, ["script-src 'self' 'unsafe-eval'"]);
+  });
+
+  test('detecta un espacio doble como el mismo valor (normalización de espacios)', () => {
+    const a = "default-src  'self'";
+    const b = "default-src 'self'";
+    assert.deepEqual(normalizar(a), normalizar(b));
+  });
+
+  test('sobre el repo real no encuentra nada: vercel.json y server.js declaran la misma CSP', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('motor-encapsulado', () => {
   const regla = detectarEn('motor-encapsulado');
 

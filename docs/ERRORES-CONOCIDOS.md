@@ -1900,3 +1900,63 @@ impide los anteriores:
 
   Hoy está **vacío**, con el tope en 0: contuvo los cinco módulos de E-021
   hasta que se borraron.
+
+---
+
+### E-046 · Ningún test ejercitaba la app nueva bajo la CSP real de producción
+
+**Síntoma.** No llegó a producir un incidente real: se detectó al preparar el
+endurecimiento de la CSP (retirar `'unsafe-eval'`, spec "sec/csp-endurecida").
+El proyecto `deploy` de Playwright (`tests/e2e/deploy/`) prueba `dist-deploy/`
+— el mismo árbol que publica Vercel — pero lo sirve con `vite preview`, que
+**no manda ninguna cabecera de `vercel.json`**. Solo la app vieja, servida por
+`server.js` (proyectos `escritorio`/`movil`), se probaba con CSP real. Endurecer
+la CSP sin arreglar esto significaba que una rotura del motor WASM en
+producción (p. ej. una directiva que de verdad hiciera falta y se quitara)
+podía pasar `npm run verify` en verde y solo aparecer para los usuarios reales.
+
+**Causa raíz.** `vite preview` es un servidor estático genérico: sirve
+ficheros, no aplica las reglas de `headers` de `vercel.json`. Nadie había
+escrito un servidor que las leyera y las aplicara de verdad, así que la única
+vía para probar la app nueva bajo CSP real habría sido desplegar a Vercel en
+cada iteración.
+
+Riesgo relacionado, mismo origen: `vercel.json` (lo que Vercel aplica) y
+`server.js` (lo que la suite prueba para la app vieja) declaran la CSP por
+duplicado, a mano, en dos ficheros. Nada impedía que se editara uno sin el
+otro — momento en el que "lo que el CI prueba en local" y "lo que se
+despliega" dejarían de ser la misma política, silenciosamente.
+
+**Arreglo.**
+- `scripts/servir-despliegue.mjs`: servidor Node puro (sin dependencias) que
+  sirve `dist-deploy/` aplicando de verdad las reglas `headers`/`rewrites`/
+  `cleanUrls` de `vercel.json` — leídas del propio fichero, no reescritas a
+  mano —, con los mismos tipos MIME (`.wasm` → `application/wasm`,
+  imprescindible para `WebAssembly.instantiateStreaming`) y la misma
+  protección anti path-traversal que `server.js`. `playwright.config.js`
+  (script `preview:deploy`) lo usa en el `webServer` del proyecto `deploy` en
+  vez de `vite preview`, con `reuseExistingServer: false` (mismo motivo que
+  E-033: es un `dist-deploy/` congelado en el momento del build).
+- `tests/e2e/deploy/csp.spec.ts`, `csp-legacy.spec.ts`, `csp-ocr.spec.ts`:
+  abren la app nueva (PDF nativo + edición + guardado, `.md`, `.docx`,
+  impresión, OCR real con tesseract.js) y la app vieja (`/legacy/`, pdf.js)
+  bajo esa CSP real, con una sonda que acumula tanto el evento
+  `securitypolicyviolation` como los mensajes de consola de bloqueo, y exigen
+  cero violaciones. El caso de imprimir es el único que depende de si
+  `frame-src` permite `blob:` (ver el comentario de ese test): el propio test
+  lee la CSP real que manda el servidor para decidir qué exigir, así que
+  sigue siendo válido sin editarlo antes y después de retirar `'unsafe-eval'`.
+- Regla `csp-coherente`: compara, normalizando espacios y el orden de las
+  directivas, el valor de `Content-Security-Policy` de `vercel.json` (entrada
+  `headers` con `source: "/(.*)"`) contra la constante `CSP_POLICY` de
+  `server.js`, y falla si divergen.
+
+**Cómo se detecta ahora.**
+- `tests/e2e/deploy/csp.spec.ts`, `csp-legacy.spec.ts`, `csp-ocr.spec.ts`.
+- `scripts/servir-despliegue.test.mjs` (`node --test`): el conversor de
+  patrones `source` a RegExp, la resolución de ficheros (`cleanUrls`,
+  `rewrites`, índice de directorio) y la protección anti path-traversal
+  (`..`, `%2e%2e`, ruta absoluta, directorio hermano con el mismo prefijo),
+  más un servidor HTTP real de punta a punta.
+- Regla determinista `csp-coherente` (`scripts/guards/reglas.mjs`), con test
+  en `scripts/guards/reglas.test.mjs`.
