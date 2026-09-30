@@ -1,7 +1,15 @@
 {
   "framework": null,
-  "outputDirectory": ".",
+  "buildCommand": "npm run build:deploy",
+  "installCommand": "npm ci",
+  "outputDirectory": "dist-deploy",
   "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/legacy",
+      "destination": "/legacy/index.html"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",
@@ -43,6 +51,15 @@
     },
     {
       "source": "/(.*)\\.(wasm|woff2)",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "public, max-age=31536000, immutable"
+        }
+      ]
+    },
+    {
+      "source": "/assets/(.*)",
       "headers": [
         {
           "key": "Cache-Control",

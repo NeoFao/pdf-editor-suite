@@ -37,6 +37,8 @@ tests/
     paginas-y-estado.spec.js  ciclo de vida, zoom, liberación de recursos
     responsive.spec.js        móvil (proyecto `movil`, Pixel 7)
     cableado-ui.spec.js       que cada control haga algo
+    next/                     app nueva (proyecto `next`, src/), vite preview en :4173
+    deploy/                   smoke de dist-deploy/ (proyecto `deploy`): app nueva en /, vieja en /legacy/
 scripts/guards/
   reglas.mjs                  catálogo de reglas deterministas
   reglas.test.mjs             tests de las reglas (node --test)

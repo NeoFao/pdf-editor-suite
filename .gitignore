@@ -18,3 +18,4 @@ _*.mjs
 _*.pdf
 _*.txt
 dist-next/
+dist-deploy/

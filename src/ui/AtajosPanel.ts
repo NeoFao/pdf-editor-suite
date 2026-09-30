@@ -41,14 +41,25 @@ export class AtajosPanel {
       tabla.appendChild(fila);
     }
 
+    // Enlace discreto a la app vieja (cutover de despliegue, 2026-09-29):
+    // se sirve temporalmente en /legacy/ para quien la necesite mientras la
+    // app nueva alcanza paridad completa — ver AGENTS.md y el registro de la
+    // reconstrucción. Vive en este diálogo de ayuda, no en la barra
+    // principal: es una vía de escape, no una opción de uso habitual.
+    const enlaceLegacy = document.createElement('a');
+    enlaceLegacy.id = 'link-legacy';
+    enlaceLegacy.href = '/legacy/';
+    enlaceLegacy.textContent = 'Versión anterior';
+    enlaceLegacy.style.cssText = 'font-size:12px;color:#6366f1;align-self:center;margin-right:auto;';
+
     const barra = document.createElement('div');
-    Object.assign(barra.style, { display: 'flex', justifyContent: 'flex-end', marginTop: '12px' });
+    Object.assign(barra.style, { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', marginTop: '12px' });
     const btnCerrar = document.createElement('button');
     btnCerrar.id = 'btn-close-shortcuts-dialog';
     btnCerrar.type = 'button';
     btnCerrar.textContent = 'Cerrar';
     btnCerrar.addEventListener('click', () => dialog.close());
-    barra.appendChild(btnCerrar);
+    barra.append(enlaceLegacy, btnCerrar);
 
     dialog.append(titulo, tabla, barra);
     dialog.addEventListener('close', () => dialog.remove());
