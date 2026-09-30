@@ -53,18 +53,64 @@ test('word-basico.docx produce un PDF de 2 páginas, vectorial, con el título e
   engine.close(doc);
 });
 
-test('word-tabla-imagen.docx: la tabla se aplana y se avisa de la tabla y de la imagen omitidas', async () => {
+test('word-tabla-imagen.docx: la tabla sale como rejilla real y la imagen como objeto imagen, sin advertencias de tabla/imagen (fase 2a)', async () => {
   const engine = await PdfiumEngine.create();
   const conversor = new ConversorDocxNavegador(engine);
   const { pdf, advertencias } = await conversor.convertir('word-tabla-imagen.docx', leerFixture('word-tabla-imagen.docx'));
 
-  expect(advertencias.some((a) => /tabla/i.test(a))).toBe(true);
-  expect(advertencias.some((a) => /imagen/i.test(a))).toBe(true);
+  // Ya no se aplana: ninguna advertencia debe mencionar la tabla ni la imagen inline como omitidas.
+  expect(advertencias.some((a) => /tabla/i.test(a))).toBe(false);
+  expect(advertencias.some((a) => /imagen/i.test(a))).toBe(false);
 
   const doc = await engine.open(pdf);
-  const texto = engine.getPageText(doc, 0).map((r) => r.text).join(' ');
+  const runs = engine.getPageText(doc, 0);
+  const texto = runs.map((r) => r.text).join(' ');
   expect(texto).toContain('Producto');
   expect(texto).toContain('Manzanas');
+
+  // Rejilla real: la X de las celdas de la 2ª columna ("Precio"/"3,50") es mayor que la de la 1ª ("Producto"/"Manzanas").
+  const xProducto = runs.find((r) => r.text.includes('Producto'))!.boxPt.xPt;
+  const xPrecio = runs.find((r) => r.text.includes('Precio'))!.boxPt.xPt;
+  expect(xPrecio).toBeGreaterThan(xProducto);
+  const xManzanas = runs.find((r) => r.text.includes('Manzanas'))!.boxPt.xPt;
+  const xImporte = runs.find((r) => r.text.includes('3,50'))!.boxPt.xPt;
+  expect(xImporte).toBeGreaterThan(xManzanas);
+
+  // La imagen es un objeto imagen real, del tamaño declarado (457200 EMU / 12700 = 36pt), ±1pt.
+  const imagenes = engine.listImageObjects(doc, 0);
+  expect(imagenes).toHaveLength(1);
+  expect(imagenes[0]!.rectPt.wPt).toBeCloseTo(36, 0);
+  expect(imagenes[0]!.rectPt.hPt).toBeCloseTo(36, 0);
+
+  engine.close(doc);
+});
+
+test('word-completo.docx: tabla con encabezado/combinación/sombreado, imagen y enlaces (uno válido, uno rechazado por esquema)', async () => {
+  const engine = await PdfiumEngine.create();
+  const conversor = new ConversorDocxNavegador(engine);
+  const { pdf, advertencias } = await conversor.convertir('word-completo.docx', leerFixture('word-completo.docx'));
+
+  // El enlace javascript: se avisa; ni tabla ni imagen generan advertencia.
+  expect(advertencias.some((a) => /enlace/i.test(a))).toBe(true);
+  expect(advertencias.some((a) => /tabla/i.test(a))).toBe(false);
+  expect(advertencias.some((a) => /imagen/i.test(a))).toBe(false);
+
+  const doc = await engine.open(pdf);
+  const runs = engine.getPageText(doc, 0);
+  const texto = runs.map((r) => r.text).join(' ');
+  expect(texto).toContain('Encabezado combinado');
+  expect(texto).toContain('A1');
+  expect(texto).toContain('Ir a example.com');
+  expect(texto).toContain('enlace peligroso');
+
+  expect(engine.listImageObjects(doc, 0)).toHaveLength(1);
+
+  // La anotación /Link con la URI válida persiste en el PDF guardado; la de javascript: nunca se creó.
+  const crudo = Buffer.from(engine.save(doc)).toString('latin1');
+  expect(crudo).toContain('/Link');
+  expect(crudo).toContain('https://example.com');
+  expect(crudo).not.toContain('javascript:alert');
+
   engine.close(doc);
 });
 

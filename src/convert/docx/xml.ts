@@ -238,3 +238,21 @@ export function textoDirecto(el: XmlElemento): string {
   for (const h of el.hijos) if (h.tipo === 'texto') out += h.texto;
   return out;
 }
+
+/**
+ * Primer descendiente (a cualquier profundidad, no solo hijo directo) con
+ * `nombre`, en orden de documento (profundidad primero). Para estructuras
+ * DOCX donde el elemento que buscamos no es hijo directo (p. ej. `a:blip`
+ * dentro de `w:drawing > wp:inline > a:graphic > a:graphicData > pic:pic >
+ * pic:blipFill > a:blip`): recorrer nivel a nivel con `primerHijo` sería
+ * frágil ante variaciones de la jerarquía intermedia.
+ */
+export function buscarDescendiente(el: XmlElemento, nombre: string): XmlElemento | null {
+  for (const h of el.hijos) {
+    if (h.tipo !== 'elemento') continue;
+    if (h.nombre === nombre) return h;
+    const encontrado = buscarDescendiente(h, nombre);
+    if (encontrado) return encontrado;
+  }
+  return null;
+}

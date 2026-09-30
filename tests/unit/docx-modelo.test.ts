@@ -1,6 +1,11 @@
 import { test, expect } from 'vitest';
-import { construirModeloDocx } from '../../src/convert/docx/modelo';
+import { construirModeloDocx, esParrafo, esTabla, type Parrafo } from '../../src/convert/docx/modelo';
 import { DocxError } from '../../src/convert/docx/DocxError';
+
+/** Los tests que solo tratan párrafos siguen escribiendo `.parrafos` para minimizar el diff: helper que filtra `bloques` y castea. */
+function soloParrafos(modelo: ReturnType<typeof construirModeloDocx>): Parrafo[] {
+  return modelo.bloques.filter(esParrafo);
+}
 
 const STYLES_HERENCIA = `
 <w:styles>
@@ -32,7 +37,7 @@ test('herencia de estilos: docDefaults -> estilo -> basedOn -> run, con twips y 
   expect(modelo.margenSupPt).toBe(72);
   expect(modelo.margenIzqPt).toBe(72);
 
-  const titulo = modelo.parrafos[0]!;
+  const titulo = soloParrafos(modelo)[0]!;
   expect(titulo.nivelEncabezado).toBe(1);
   expect(titulo.espacioAntesPt).toBe(12); // 240 twips / 20
   expect(titulo.espacioDespuesPt).toBe(6); // 120 twips / 20
@@ -44,7 +49,7 @@ test('herencia de estilos: docDefaults -> estilo -> basedOn -> run, con twips y 
     expect(parteTitulo.formato.color).toEqual([255, 0, 0]);
   }
 
-  const cursiva = modelo.parrafos[1]!;
+  const cursiva = soloParrafos(modelo)[1]!;
   const parteCursiva = cursiva.partes[0]!;
   expect(parteCursiva).toMatchObject({ tipo: 'texto', texto: 'cursiva heredada' });
   if (parteCursiva.tipo === 'texto') {
@@ -61,7 +66,7 @@ test('un ciclo w:basedOn no cuelga la resolución de estilos (cota anti-ciclo)',
 </w:styles>`;
   const documentXml = `<w:document><w:body><w:p><w:pPr><w:pStyle w:val="A"/></w:pPr><w:r><w:t>x</w:t></w:r></w:p></w:body></w:document>`;
   const modelo = construirModeloDocx(documentXml, stylesCiclo, null);
-  expect(modelo.parrafos).toHaveLength(1);
+  expect(soloParrafos(modelo)).toHaveLength(1);
 });
 
 const NUMBERING = `
@@ -89,10 +94,11 @@ test('listas: viñetas de 2 niveles y numeración correlativa que se reinicia al
     ${parrafoLista('1', 0, 'raiz tres')}
   </w:body></w:document>`;
   const modelo = construirModeloDocx(documentXml, null, NUMBERING);
-  const marcadores = modelo.parrafos.map((p) => p.lista?.textoMarcador);
+  const parrafos = soloParrafos(modelo);
+  const marcadores = parrafos.map((p) => p.lista?.textoMarcador);
   expect(marcadores).toEqual(['•', '•', '•', '•']); // viñeta: mismo símbolo en todos los niveles
   // La sangría del nivel 1 (hijo) es mayor que la del nivel 0 (raíz): 1440/20=72pt frente a 720/20=36pt.
-  expect(modelo.parrafos[2]!.sangriaIzqPt).toBeGreaterThan(modelo.parrafos[0]!.sangriaIzqPt);
+  expect(parrafos[2]!.sangriaIzqPt).toBeGreaterThan(parrafos[0]!.sangriaIzqPt);
 });
 
 test('lista numerada: numeración decimal correlativa desde 1', () => {
@@ -102,23 +108,62 @@ test('lista numerada: numeración decimal correlativa desde 1', () => {
     ${parrafoLista('2', 0, 'tercero')}
   </w:body></w:document>`;
   const modelo = construirModeloDocx(documentXml, null, NUMBERING);
-  expect(modelo.parrafos.map((p) => p.lista?.textoMarcador)).toEqual(['1.', '2.', '3.']);
+  expect(soloParrafos(modelo).map((p) => p.lista?.textoMarcador)).toEqual(['1.', '2.', '3.']);
 });
 
-test('tablas: se aplanan a un párrafo por fila con celdas separadas por tabulador, y se avisa', () => {
+test('tablas: grid de anchos, gridSpan, vMerge, bordes y sombreado quedan en el modelo (fase 2a, tablas REALES)', () => {
   const documentXml = `<w:document><w:body>
     <w:tbl>
-      <w:tr><w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc></w:tr>
-      <w:tr><w:tc><w:p><w:r><w:t>A2</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B2</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tblPr><w:tblBorders><w:top w:val="single" w:sz="8" w:color="000000"/></w:tblBorders></w:tblPr>
+      <w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+      <w:tr><w:trPr><w:tblHeader/></w:trPr>
+        <w:tc><w:tcPr><w:gridSpan w:val="2"/><w:shd w:fill="FFCC00"/></w:tcPr><w:p><w:r><w:t>Encabezado combinado</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>C</w:t></w:r></w:p></w:tc>
+      </w:tr>
+      <w:tr>
+        <w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc>
+        <w:tc><w:p><w:r><w:t>C1</w:t></w:r></w:p></w:tc>
+      </w:tr>
     </w:tbl>
   </w:body></w:document>`;
   const modelo = construirModeloDocx(documentXml, null, null);
-  expect(modelo.parrafos).toHaveLength(2);
-  const fila1 = modelo.parrafos[0]!.partes;
-  expect(fila1.map((p) => p.tipo)).toEqual(['texto', 'tab', 'texto']);
-  expect(fila1[0]).toMatchObject({ texto: 'A1' });
-  expect(fila1[2]).toMatchObject({ texto: 'B1' });
-  expect(modelo.advertencias.some((a) => /tabla/i.test(a))).toBe(true);
+  expect(modelo.bloques).toHaveLength(1);
+  const tabla = modelo.bloques[0]!;
+  expect(esTabla(tabla)).toBe(true);
+  if (!esTabla(tabla)) throw new Error('se esperaba una tabla');
+
+  // Grid: 3 columnas de 2000 twips = 100pt cada una.
+  expect(tabla.anchosColPt).toEqual([100, 100, 100]);
+  expect(tabla.bordeColor).toEqual([0, 0, 0]);
+  expect(tabla.bordeGrosorPt).toBeCloseTo(1, 5); // w:sz=8 octavos de punto -> 1pt
+
+  expect(tabla.filas).toHaveLength(2);
+  expect(tabla.filas[0]!.esEncabezado).toBe(true);
+  expect(tabla.filas[1]!.esEncabezado).toBe(false);
+
+  const celdaCombinada = tabla.filas[0]!.celdas[0]!;
+  expect(celdaCombinada.gridSpan).toBe(2);
+  expect(celdaCombinada.colorFondo).toEqual([255, 204, 0]);
+  expect(celdaCombinada.partes[0]).toMatchObject({ tipo: 'texto', texto: 'Encabezado combinado' });
+
+  const filaDatos = tabla.filas[1]!.celdas.map((c) => (c.partes[0] as { texto: string }).texto);
+  expect(filaDatos).toEqual(['A1', 'B1', 'C1']);
+});
+
+test('tablas: w:vMerge "continue" se marca en el modelo (no se pierde en silencio)', () => {
+  const documentXml = `<w:document><w:body>
+    <w:tbl>
+      <w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid>
+      <w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>fusionada</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>x1</w:t></w:r></w:p></w:tc></w:tr>
+      <w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p/></w:tc><w:tc><w:p><w:r><w:t>x2</w:t></w:r></w:p></w:tc></w:tr>
+    </w:tbl>
+  </w:body></w:document>`;
+  const modelo = construirModeloDocx(documentXml, null, null);
+  const tabla = modelo.bloques[0]!;
+  if (!esTabla(tabla)) throw new Error('se esperaba una tabla');
+  expect(tabla.filas[0]!.celdas[0]!.vMerge).toBe('restart');
+  expect(tabla.filas[1]!.celdas[0]!.vMerge).toBe('continue');
 });
 
 test('imágenes, encabezados/pies, notas, comentarios, campos y control de cambios se cuentan en advertencias sin perderse en silencio', () => {
@@ -136,7 +181,7 @@ test('imágenes, encabezados/pies, notas, comentarios, campos y control de cambi
   expect(todas).toMatch(/nota al pie/i);
   expect(todas).toMatch(/cambio/i);
   // La inserción se conserva; la eliminación se descarta.
-  const textosPresentes = modelo.parrafos.flatMap((p) => p.partes).filter((x) => x.tipo === 'texto').map((x) => (x as { texto: string }).texto);
+  const textosPresentes = soloParrafos(modelo).flatMap((p) => p.partes).filter((x) => x.tipo === 'texto').map((x) => (x as { texto: string }).texto);
   expect(textosPresentes).toContain('agregado');
   expect(textosPresentes).not.toContain('quitado');
 });
@@ -150,9 +195,95 @@ test('alineación, sangría e interlineado exacto se leen del w:pPr directo', ()
     <w:p><w:pPr><w:jc w:val="both"/><w:ind w:left="360" w:right="180"/><w:spacing w:line="480" w:lineRule="exact"/></w:pPr><w:r><w:t>justificado</w:t></w:r></w:p>
   </w:body></w:document>`;
   const modelo = construirModeloDocx(documentXml, null, null);
-  const p = modelo.parrafos[0]!;
+  const p = soloParrafos(modelo)[0]!;
   expect(p.alineacion).toBe('justify');
   expect(p.sangriaIzqPt).toBe(18); // 360/20
   expect(p.sangriaDerPt).toBe(9); // 180/20
   expect(p.interlineadoExactoPt).toBe(24); // 480/20, lineRule exact -> puntos absolutos
+});
+
+// ---------------------------------------------------------------------------
+// Imágenes inline (fase 2a)
+// ---------------------------------------------------------------------------
+
+const RELS_UNA_IMAGEN = `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type=".../image" Target="media/image1.png"/>
+</Relationships>`;
+
+function drawingInline(rId: string, cx: number, cy: number): string {
+  return `<w:drawing><wp:inline><wp:extent cx="${cx}" cy="${cy}"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="${rId}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>`;
+}
+
+test('imagen inline resuelta: refId apunta a word/media/..., tamaño convertido de EMU a pt (12700 EMU/pt)', () => {
+  const documentXml = `<w:document><w:body>
+    <w:p><w:r>${drawingInline('rId1', 914400, 457200)}</w:r></w:p>
+  </w:body></w:document>`;
+  const modelo = construirModeloDocx(documentXml, null, null, RELS_UNA_IMAGEN);
+  const parrafo = soloParrafos(modelo)[0]!;
+  const parte = parrafo.partes[0]!;
+  expect(parte).toMatchObject({ tipo: 'imagen', refId: 'word/media/image1.png', wPt: 72, hPt: 36 });
+  expect(modelo.advertencias.some((a) => /imagen/i.test(a))).toBe(false);
+});
+
+test('imagen flotante (wp:anchor) se omite y se avisa', () => {
+  const documentXml = `<w:document><w:body>
+    <w:p><w:r><w:drawing><wp:anchor><wp:extent cx="914400" cy="914400"/></wp:anchor></w:drawing></w:r></w:p>
+  </w:body></w:document>`;
+  const modelo = construirModeloDocx(documentXml, null, null, RELS_UNA_IMAGEN);
+  expect(soloParrafos(modelo)[0]!.partes).toEqual([]);
+  expect(modelo.advertencias.some((a) => /flotante/i.test(a))).toBe(true);
+});
+
+test('imagen sin relación resoluble (r:embed que no existe en los rels) se omite y se avisa', () => {
+  const documentXml = `<w:document><w:body>
+    <w:p><w:r>${drawingInline('rIdInexistente', 914400, 914400)}</w:r></w:p>
+  </w:body></w:document>`;
+  const modelo = construirModeloDocx(documentXml, null, null, RELS_UNA_IMAGEN);
+  expect(soloParrafos(modelo)[0]!.partes).toEqual([]);
+  expect(modelo.advertencias.some((a) => /imagen/i.test(a))).toBe(true);
+});
+
+// ---------------------------------------------------------------------------
+// Hipervínculos (fase 2a)
+// ---------------------------------------------------------------------------
+
+const RELS_ENLACES = `<?xml version="1.0" encoding="UTF-8"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rIdOk" Type=".../hyperlink" Target="https://example.com" TargetMode="External"/>
+  <Relationship Id="rIdJs" Type=".../hyperlink" Target="javascript:alert(1)" TargetMode="External"/>
+</Relationships>`;
+
+test('w:hyperlink externo válido: el texto lleva la URL y color/subrayado azul por defecto', () => {
+  const documentXml = `<w:document><w:body>
+    <w:p><w:hyperlink r:id="rIdOk"><w:r><w:t>haz clic</w:t></w:r></w:hyperlink></w:p>
+  </w:body></w:document>`;
+  const modelo = construirModeloDocx(documentXml, null, null, RELS_ENLACES);
+  const parte = soloParrafos(modelo)[0]!.partes[0]!;
+  expect(parte).toMatchObject({ tipo: 'texto', texto: 'haz clic', url: 'https://example.com' });
+  if (parte.tipo === 'texto') {
+    expect(parte.formato.color).toEqual([37, 99, 235]);
+    expect(parte.formato.underline).toBe(true);
+  }
+});
+
+test('w:hyperlink con esquema no permitido (javascript:) NO lleva url y se avisa', () => {
+  const documentXml = `<w:document><w:body>
+    <w:p><w:hyperlink r:id="rIdJs"><w:r><w:t>peligroso</w:t></w:r></w:hyperlink></w:p>
+  </w:body></w:document>`;
+  const modelo = construirModeloDocx(documentXml, null, null, RELS_ENLACES);
+  const parte = soloParrafos(modelo)[0]!.partes[0]!;
+  expect(parte).toMatchObject({ tipo: 'texto', texto: 'peligroso' });
+  if (parte.tipo === 'texto') expect(parte.url).toBeUndefined();
+  expect(modelo.advertencias.some((a) => /enlace/i.test(a))).toBe(true);
+});
+
+test('un run con color explícito DENTRO de un w:hyperlink respeta ese color ("si el estilo no dice otra cosa")', () => {
+  const documentXml = `<w:document><w:body>
+    <w:p><w:hyperlink r:id="rIdOk"><w:r><w:rPr><w:color w:val="00FF00"/></w:rPr><w:t>verde</w:t></w:r></w:hyperlink></w:p>
+  </w:body></w:document>`;
+  const modelo = construirModeloDocx(documentXml, null, null, RELS_ENLACES);
+  const parte = soloParrafos(modelo)[0]!.partes[0]!;
+  expect(parte).toMatchObject({ tipo: 'texto', url: 'https://example.com' });
+  if (parte.tipo === 'texto') expect(parte.formato.color).toEqual([0, 255, 0]);
 });
