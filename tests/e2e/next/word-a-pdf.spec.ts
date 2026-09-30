@@ -6,12 +6,15 @@ import { fileURLToPath } from 'node:url';
  * §9 fila #4: abrir un `.docx` desde `#file-input` lo convierte a un PDF con
  * texto REAL y vectorial (nunca rasteriza), usando el motor PDFium — a
  * diferencia de la app vieja (`docx-preview` + `html2pdf`, que rasteriza).
- * `word-basico.docx`/`word-tabla-imagen.docx` (tests/fixtures) se generan
- * con `npm run test:fixtures` (ver `generar-fixtures.mjs`).
+ * Fase 2a añade tablas reales, imágenes inline y enlaces clicables (ver
+ * `word-completo.docx`, más abajo). `word-basico.docx`/`word-tabla-imagen.docx`/
+ * `word-completo.docx` (tests/fixtures) se generan con `npm run test:fixtures`
+ * (ver `generar-fixtures.mjs`).
  */
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const WORD_BASICO = path.resolve(AQUI, '../../fixtures/generados/word-basico.docx');
 const WORD_TABLA_IMAGEN = path.resolve(AQUI, '../../fixtures/generados/word-tabla-imagen.docx');
+const WORD_COMPLETO = path.resolve(AQUI, '../../fixtures/generados/word-completo.docx');
 
 async function dataTransferConFichero(page: Page, bytes: number[], fileName: string, mime: string) {
   return page.evaluateHandle(({ bytes, fileName, mime }) => {
@@ -42,23 +45,41 @@ test('abrir word-basico.docx lo convierte a un PDF de 2 páginas con el texto en
   await expect(page.locator('#conversion-warnings')).toBeHidden();
 });
 
-test('abrir word-tabla-imagen.docx muestra un aviso visible con las advertencias (tabla e imagen omitidas)', async ({ page }) => {
+test('abrir word-tabla-imagen.docx: la tabla sale como texto real (rejilla) y la imagen aparece en la capa de imágenes, sin aviso (fase 2a)', async ({ page }) => {
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(WORD_TABLA_IMAGEN);
   await expect(page.locator('.run').first()).toBeVisible();
 
-  await expect(page.locator('#conversion-warnings')).toBeVisible();
-  const avisoTexto = await page.locator('#conversion-warnings').textContent();
-  expect(avisoTexto ?? '').toMatch(/tabla/i);
-  expect(avisoTexto ?? '').toMatch(/imagen/i);
+  // Ya no se aplana ni se omite: sin advertencias, el aviso no se muestra.
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
 
-  // La tabla, aunque no es una tabla real, no se pierde: su texto aplanado está en la capa de texto.
   const textos = await page.locator('.run').allTextContents();
   expect(textos.join(' ')).toContain('Producto');
+  expect(textos.join(' ')).toContain('Manzanas');
 
-  // Cerrar el aviso lo oculta.
-  await page.locator('#conversion-warnings-close').click();
-  await expect(page.locator('#conversion-warnings')).toBeHidden();
+  // La imagen inline es un objeto imagen real, visible en la capa de imágenes.
+  await expect(page.locator('.image-box')).toHaveCount(1);
+});
+
+test('abrir word-completo.docx: tabla con celda combinada, imagen y aviso visible del enlace javascript: descartado (fase 2a)', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(WORD_COMPLETO);
+  await expect(page.locator('.run').first()).toBeVisible();
+
+  const textos = await page.locator('.run').allTextContents();
+  const todo = textos.join(' ');
+  expect(todo).toContain('Encabezado combinado');
+  expect(todo).toContain('A1');
+  expect(todo).toContain('Ir a example.com');
+  expect(todo).toContain('enlace peligroso');
+
+  await expect(page.locator('.image-box')).toHaveCount(1);
+
+  // El enlace javascript: se descarta y se avisa visiblemente; ni tabla ni imagen generan aviso.
+  await expect(page.locator('#conversion-warnings')).toBeVisible();
+  const avisoTexto = (await page.locator('#conversion-warnings').textContent()) ?? '';
+  expect(avisoTexto).toMatch(/enlace/i);
+  expect(avisoTexto).not.toMatch(/tabla/i);
 });
 
 test('soltar un .doc (Word 97 binario) muestra el mensaje de formato antiguo, sin intentar convertirlo', async ({ page }) => {
