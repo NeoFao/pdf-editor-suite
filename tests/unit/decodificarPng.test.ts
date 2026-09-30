@@ -3,18 +3,19 @@ import zlib from 'node:zlib';
 import { decodificarPng, esPng, MAX_IMG_DIM } from '../../src/convert/imagenes/decodificarPng';
 
 /** Construye un PNG RGBA mínimo (sin dependencias), igual técnica que `tests/fixtures/generar-fixtures.mjs`. */
+let tablaCrc: number[] | null = null;
 function crc32(buf: Buffer): number {
-  let c;
-  const tabla = crc32.tabla || (crc32.tabla = Array.from({ length: 256 }, (_, n) => {
-    c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    return c >>> 0;
-  }));
+  if (!tablaCrc) {
+    tablaCrc = Array.from({ length: 256 }, (_, n) => {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      return c >>> 0;
+    });
+  }
   let crc = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) crc = tabla[(crc ^ buf[i]!) & 0xff]! ^ (crc >>> 8);
+  for (let i = 0; i < buf.length; i++) crc = tablaCrc[(crc ^ buf[i]!) & 0xff]! ^ (crc >>> 8);
   return (crc ^ 0xffffffff) >>> 0;
 }
-namespace crc32 { export let tabla: number[]; }
 
 function chunk(tipo: string, datos: Buffer): Buffer {
   const t = Buffer.from(tipo, 'ascii');
