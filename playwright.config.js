@@ -30,8 +30,9 @@ export default defineConfig({
     {
       name: 'escritorio',
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 } },
-      // responsive.spec.js es del proyecto `movil`; la app nueva, del proyecto `next`.
-      testIgnore: [/responsive\.spec\.js/, /e2e[\\/]next[\\/]/]
+      // responsive.spec.js es del proyecto `movil`; la app nueva, del proyecto
+      // `next`; el smoke del cutover de despliegue, del proyecto `deploy`.
+      testIgnore: [/responsive\.spec\.js/, /e2e[\\/]next[\\/]/, /e2e[\\/]deploy[\\/]/]
     },
     { name: 'movil', use: { ...devices['Pixel 7'] }, testMatch: /responsive\.spec\.js/ },
     // App nueva (cimientos): servida por `vite preview` en :4173.
@@ -39,6 +40,15 @@ export default defineConfig({
       name: 'next',
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, baseURL: 'http://127.0.0.1:4173' },
       testMatch: /e2e[\\/]next[\\/].*\.spec\.ts/
+    },
+    // Smoke del cutover de despliegue (dist-deploy/): app nueva en `/` y app
+    // vieja completa en `/legacy/`, servidas estáticas desde el MISMO build
+    // que publica Vercel — ver scripts/construir-despliegue.mjs. Servido por
+    // `vite preview` en :4174.
+    {
+      name: 'deploy',
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, baseURL: 'http://127.0.0.1:4174' },
+      testMatch: /e2e[\\/]deploy[\\/].*\.spec\.ts/
     }
   ],
   webServer: [
@@ -65,6 +75,17 @@ export default defineConfig({
       // scripts/liberar-puertos.mjs (`npm run e2e:liberar`) y docs/TESTING.md.
       command: 'npm run build:next && npm run preview:next',
       port: 4173,
+      reuseExistingServer: false,
+      timeout: 120_000
+    },
+    {
+      // Mismo razonamiento que el webServer de arriba (E-033): `vite preview`
+      // sirve un `dist-deploy/` congelado en el momento del build, así que
+      // reutilizar un proceso vivo de una sesión anterior correría el smoke
+      // contra un build viejo. `build:deploy` construye la app nueva Y copia
+      // la app vieja a `legacy/` — ver scripts/construir-despliegue.mjs.
+      command: 'npm run build:deploy && npm run preview:deploy',
+      port: 4174,
       reuseExistingServer: false,
       timeout: 120_000
     }

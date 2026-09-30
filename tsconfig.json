@@ -11,5 +11,5 @@
     "verbatimModuleSyntax": true,
     "noEmit": true
   },
-  "include": ["src", "tests/unit", "tests/e2e/next", "vite.config.ts", "vitest.config.ts"]
+  "include": ["src", "tests/unit", "tests/e2e/next", "tests/e2e/deploy", "vite.config.ts", "vitest.config.ts"]
 }

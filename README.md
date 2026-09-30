@@ -107,13 +107,43 @@ Todas las contribuciones externas están sujetas a revisión obligatoria por el 
 
 ## ☁️ Despliegue en Vercel
 
-El repositorio incluye `vercel.json` configurado para despliegue instantáneo como SPA estático con cabeceras de seguridad activas:
+Desde el cutover de despliegue (2026-09-29), `vercel.json` compila y publica la
+**app nueva** (`src/`, Vite + TypeScript + PDFium) como página principal. La
+app vieja (este `index.html` + `js/` + `css/` documentados arriba) se sigue
+sirviendo, completa y sin cambios funcionales, en `/legacy/` — para quien la
+necesite mientras la app nueva alcanza paridad completa. No se ha borrado
+nada: es un cutover reversible, no una migración destructiva.
 
-1. Instala Vercel CLI o vincula tu repositorio en el panel de Vercel:
-   ```bash
-   npx vercel
-   ```
-2. El proyecto se desplegará sin requerir configuración adicional de build.
+`vercel.json`:
+- `buildCommand: npm run build:deploy` → `scripts/construir-despliegue.mjs`
+  construye la app nueva con Vite y copia la app vieja completa a
+  `legacy/`, leyendo `index.html` (y el `workerSrc` inline de pdf.js) para
+  saber qué copiar en vez de mantener una lista a mano.
+- `outputDirectory: dist-deploy` → lo que ese script produce.
+- Cabeceras de seguridad (CSP, HSTS, etc.) **idénticas** a las de antes,
+  aplicadas a todo el árbol (`/legacy/` incluido). Los assets de Vite en
+  `/assets/*` llevan hash de contenido en el nombre, así que se cachean
+  `immutable`; el resto sigue con `must-revalidate` como antes.
+
+Para desplegar:
+```bash
+npx vercel
+```
+El proyecto se despliega sin configuración adicional: Vercel ejecuta
+`npm run build:deploy` y publica `dist-deploy/`.
+
+### Construir el despliegue en local
+
+```bash
+npm run build:deploy    # genera dist-deploy/ (gitignored)
+npm run preview:deploy  # lo sirve en http://127.0.0.1:4174
+```
+
+`tests/e2e/deploy/*.spec.ts` (proyecto `deploy` de Playwright, incluido en
+`npm run verify`) es el smoke de ese árbol: `/` abre la app nueva y un PDF,
+`/legacy/` carga la app vieja sin 404 de recursos locales, y el enlace
+"Versión anterior" (en el diálogo de ayuda `?` de la app nueva) lleva a
+`/legacy/`.
 
 ---
 
