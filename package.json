@@ -20,7 +20,7 @@
     "dev:next": "vite",
     "build:next": "vite build",
     "preview:next": "vite preview --port 4173 --host 127.0.0.1 --strictPort",
-    "preview:deploy": "vite preview --outDir dist-deploy --port 4174 --host 127.0.0.1 --strictPort",
+    "preview:deploy": "node scripts/servir-despliegue.mjs --port 4174 --dir dist-deploy --config vercel.json",
     "typecheck": "tsc --noEmit",
     "test:unit:src": "vitest run",
     "test:unit": "node --test scripts/guards/*.test.mjs scripts/*.test.mjs",

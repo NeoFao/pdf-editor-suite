@@ -44,7 +44,10 @@ export default defineConfig({
     // Smoke del cutover de despliegue (dist-deploy/): app nueva en `/` y app
     // vieja completa en `/legacy/`, servidas estáticas desde el MISMO build
     // que publica Vercel — ver scripts/construir-despliegue.mjs. Servido por
-    // `vite preview` en :4174.
+    // scripts/servir-despliegue.mjs en :4174 (NO vite preview: ese no manda
+    // las cabeceras de vercel.json, así que nunca ejercitaba la app nueva
+    // bajo la CSP real de producción — ver el comentario de cabecera de ese
+    // fichero).
     {
       name: 'deploy',
       use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, baseURL: 'http://127.0.0.1:4174' },
@@ -79,11 +82,12 @@ export default defineConfig({
       timeout: 120_000
     },
     {
-      // Mismo razonamiento que el webServer de arriba (E-033): `vite preview`
-      // sirve un `dist-deploy/` congelado en el momento del build, así que
-      // reutilizar un proceso vivo de una sesión anterior correría el smoke
-      // contra un build viejo. `build:deploy` construye la app nueva Y copia
-      // la app vieja a `legacy/` — ver scripts/construir-despliegue.mjs.
+      // Mismo razonamiento que el webServer de arriba (E-033): `preview:deploy`
+      // (scripts/servir-despliegue.mjs) sirve un `dist-deploy/` congelado en
+      // el momento del build, así que reutilizar un proceso vivo de una
+      // sesión anterior correría el smoke contra un build viejo. `build:deploy`
+      // construye la app nueva Y copia la app vieja a `legacy/` — ver
+      // scripts/construir-despliegue.mjs.
       command: 'npm run build:deploy && npm run preview:deploy',
       port: 4174,
       reuseExistingServer: false,

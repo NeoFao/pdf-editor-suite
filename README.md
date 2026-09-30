@@ -120,10 +120,46 @@ nada: es un cutover reversible, no una migración destructiva.
   `legacy/`, leyendo `index.html` (y el `workerSrc` inline de pdf.js) para
   saber qué copiar en vez de mantener una lista a mano.
 - `outputDirectory: dist-deploy` → lo que ese script produce.
-- Cabeceras de seguridad (CSP, HSTS, etc.) **idénticas** a las de antes,
-  aplicadas a todo el árbol (`/legacy/` incluido). Los assets de Vite en
-  `/assets/*` llevan hash de contenido en el nombre, así que se cachean
-  `immutable`; el resto sigue con `must-revalidate` como antes.
+- Cabeceras de seguridad (CSP, HSTS, etc.), aplicadas a todo el árbol
+  (`/legacy/` incluido) y **obligatoriamente idénticas** en `vercel.json` y en
+  `server.js` — la regla determinista `csp-coherente`
+  (`scripts/guards/reglas.mjs`) lo exige, porque `server.js` es lo único que
+  la suite E2E prueba con CSP para la app vieja y `vercel.json` es lo que
+  Vercel manda de verdad en producción. Los assets de Vite en `/assets/*`
+  llevan hash de contenido en el nombre, así que se cachean `immutable`; el
+  resto sigue con `must-revalidate` como antes.
+
+  **Content-Security-Policy** (endurecida el 2026-09-29, autorización
+  explícita del dueño — paso 3 del cutover de despliegue, docs/ERRORES-CONOCIDOS.md
+  E-027/E-046):
+
+  ```
+  default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com blob:; style-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; font-src 'self' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net data:; img-src 'self' data: blob: https:; connect-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com https://raw.githubusercontent.com blob: data:; worker-src 'self' blob:; frame-src 'self' blob:; object-src 'none'; frame-ancestors 'self'; base-uri 'self'; form-action 'self';
+  ```
+
+  Dos cambios respecto a la política anterior:
+  - **Se retira `'unsafe-eval'`** de `script-src`. Sin él, un `eval()`/`new
+    Function()` inyectado por un PDF, `.docx` o `.md` manipulado a mala fe no
+    puede ejecutarse — defensa en profundidad sobre E-027 (pdf.js ya carga con
+    `isEvalSupported: false` desde esa entrada, así que esto no le afecta).
+    Verificado: los 161 tests E2E del repo (incluidos OCR real con
+    tesseract.js y la conversión Word con `docx-preview`+`html2pdf.js` en la
+    app vieja) siguen en verde sin él.
+  - **Se añade `'wasm-unsafe-eval'`**, que sustituye el permiso de WASM que
+    antes venía incluido en `'unsafe-eval'`: el motor PDFium (`@embedpdf/pdfium`,
+    WebAssembly) sigue compilando y ejecutándose con normalidad, pero sin abrir
+    la puerta a `eval()`/`new Function()` de JavaScript arbitrario.
+  - **Se añade `frame-src 'self' blob:`**, que faltaba (caía en `default-src
+    'self'`, sin `blob:`). Lo necesita `#btn-print` de la app nueva
+    (`src/ui/App.ts`): imprime cargando el PDF vectorial en un `<iframe
+    src="blob:...">` oculto. Antes de este cambio, el navegador bloqueaba esa
+    navegación y la app caía a su respaldo (abrir el PDF en una pestaña
+    nueva) — ambos caminos ya estaban implementados; ahora el camino
+    preferido (iframe, sin salir de la página) funciona directamente.
+
+  `tests/e2e/deploy/csp*.spec.ts` prueban esta política **de verdad**: contra
+  `dist-deploy/` servido con las cabeceras reales de `vercel.json` (ver
+  abajo), no contra un servidor de desarrollo que no las manda.
 
 Para desplegar:
 ```bash
@@ -140,10 +176,20 @@ npm run preview:deploy  # lo sirve en http://127.0.0.1:4174
 ```
 
 `tests/e2e/deploy/*.spec.ts` (proyecto `deploy` de Playwright, incluido en
-`npm run verify`) es el smoke de ese árbol: `/` abre la app nueva y un PDF,
-`/legacy/` carga la app vieja sin 404 de recursos locales, y el enlace
-"Versión anterior" (en el diálogo de ayuda `?` de la app nueva) lleva a
-`/legacy/`.
+`npm run verify`) es el smoke de ese árbol: `humo.spec.ts` comprueba que `/`
+abre la app nueva y un PDF, que `/legacy/` carga la app vieja sin 404 de
+recursos locales, y que el enlace "Versión anterior" (diálogo de ayuda `?` de
+la app nueva) lleva a `/legacy/`. `csp.spec.ts`/`csp-legacy.spec.ts`/
+`csp-ocr.spec.ts` prueban el comportamiento REAL bajo esa CSP (editar y
+guardar, abrir `.md`/`.docx`, imprimir, OCR, pdf.js en `/legacy/`) y exigen
+cero violaciones (`securitypolicyviolation` + consola). `preview:deploy`
+—usado por ese proyecto, con `reuseExistingServer: false` (E-033)— ya NO es
+`vite preview`: es `scripts/servir-despliegue.mjs`, un servidor Node sin
+dependencias que lee `vercel.json` y aplica de verdad sus `headers`/
+`rewrites`/`cleanUrls`, con el mismo tipo MIME de `.wasm` y la misma
+protección anti path-traversal que `server.js`. `vite preview` nunca mandaba
+esas cabeceras, así que antes de esto nada probaba la app nueva bajo CSP real
+(docs/ERRORES-CONOCIDOS.md, E-046).
 
 ---
 
