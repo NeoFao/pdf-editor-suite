@@ -593,11 +593,11 @@ select, input[type="text"], input[type="search"], input[type="number"] {
    * Excepción deliberada: la paleta de 8 muestras de color (§2/#18 de la
    * tabla de paridad) es un grupo denso y contiguo de swatches, no botones
    * de acción independientes — a 40px cada una desborda un viewport de
-   * 390px. Se mantiene su tamaño de diseño (18px) en vez del mínimo
-   * general; `#tool-color` (el selector personalizado, justo al lado)
-   * sigue en 40px.
+   * 390px. A-07: área clicable de 24px (mínimo WCAG 2.5.8) con el cuadro
+   * visible de 18px (padding + background-clip); `#tool-color` (el
+   * selector personalizado, justo al lado) sigue en 40px.
    */
-  #swatches button.swatch { min-width: 18px; min-height: 18px; }
+  #swatches button.swatch { min-width: 24px; min-height: 24px; }
 
   /*
    * Hermanos normales de `.topbar-scroll` (ver `topbarScroll` en App.ts), no
@@ -634,3 +634,6 @@ select, input[type="text"], input[type="search"], input[type="number"] {
     z-index: 40;
   }
 }
+
+/* A-05: el panel de compresión es un <dialog>; solo es flex mientras está abierto. */
+dialog.compress-panel[open] { display: flex; }

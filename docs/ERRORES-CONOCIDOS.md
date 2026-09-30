@@ -1968,3 +1968,29 @@ despliega" dejarían de ser la misma política, silenciosamente.
   más un servidor HTTP real de punta a punta.
 - Regla determinista `csp-coherente` (`scripts/guards/reglas.mjs`), con test
   en `scripts/guards/reglas.test.mjs`.
+
+### E-050 · La app nueva no cumplía WCAG 2.2 AA: teclado, diálogos, avisos, contraste y objetivos táctiles
+
+**Síntoma.** Los `.run` (líneas editables) no eran alcanzables con Tab; `#status`
+no se anunciaba a lectores de pantalla; los diálogos «Texto…» y «Comprimir» no
+devolvían el foco (el segundo ni siquiera atrapaba Tab); el texto tenue tenía
+2.9:1 de contraste; las muestras de color medían 18×18 px; el `<canvas>` de cada
+página no tenía nombre.
+
+**Causa raíz.** Se construyó la UI verificando el aspecto y el ratón, no el uso
+con teclado ni con tecnologías de apoyo; cada panel modal se escribía a mano.
+
+**Arreglo.** `TextLayer` con «roving tabindex» (un único tabstop por página, ↑/↓/Inicio/Fin,
+Enter edita, Escape sale; sin `tabindex=0` en cientos de runs); helper común
+`src/ui/dialogo.ts` (`mostrarModal`: `<dialog>` modal, trampa de Tab, Escape,
+foco devuelto) usado por `TextPanel` y `CompressPanel`; `role="status"` +
+`aria-live="polite"` en `#status` y en el aviso de conversión; tokens de
+`estilos.css` con ≥ 4.5:1 en texto y ≥ 3:1 en bordes de control/foco (nuevo
+`--ed-control-border`); muestras de 24×24 (cuadro visible de 18 con `background-clip`);
+`role="img"` + `aria-label="Página N"` en el canvas.
+
+**Cómo se detecta ahora.**
+- `tests/e2e/next/accesibilidad.spec.ts` (Chromium real).
+- `tests/unit/contraste.test.ts` calcula las ratios leyendo `estilos.css`.
+- Sin regla determinista: no hay un patrón de código que la máquina pueda
+  reconocer de forma fiable (a diferencia de un `innerHTML`); lo cubren los tests.

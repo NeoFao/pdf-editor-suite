@@ -744,12 +744,17 @@ export class Viewer {
     const canvas = document.createElement('canvas');
     canvas.width = width; canvas.height = height;
     canvas.style.display = 'block';
+    // A-06 (WCAG 1.1.1): el bitmap del motor es una imagen con nombre de página.
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', `Página ${i + 1}`);
     const img = new ImageData(width, height);
     img.data.set(data);
     canvas.getContext('2d')!.putImageData(img, 0, 0);
     wrapper.appendChild(canvas);
     const layer = document.createElement('div');
     layer.className = 'text-layer';
+    layer.setAttribute('role', 'group');
+    layer.setAttribute('aria-label', `Texto de la página ${i + 1}`);
     Object.assign(layer.style, { position: 'absolute', inset: '0' });
     wrapper.appendChild(layer);
     const geom = this.geoms[i]!;
