@@ -28,9 +28,10 @@ import {
  * Estilo (fijado por el dueño, no configurable en esta fase): cuerpo
  * Helvetica 11pt/interlineado 1.4; H1 22, H2 17, H3 14, H4-H6 12, todos
  * Helvetica-Bold; código Courier 10 con fondo gris; cita con sangría y barra
- * gris; listas con viñeta/número y sangría francesa; enlaces en azul (el
- * texto — la URL como anotación clicable queda para una fase posterior, ver
- * nota en `ConversorMarkdownNavegador`).
+ * gris; listas con viñeta/número y sangría francesa; enlaces en azul con su
+ * URL como anotación `/Link` clicable (fase 2a: el nodo `link` del AST lleva
+ * su `url` hasta el átomo y `paginar` la deja en `ResultadoLayout.enlaces`,
+ * que `ConversorMarkdownNavegador` traduce a `addLink`).
  *
  * Limitaciones conocidas de esta fase:
  * - La línea base se aproxima con `BASELINE_FRACTION` (fracción fija de la

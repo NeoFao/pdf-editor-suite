@@ -11,12 +11,13 @@ import type { PdfEngine, DocHandle, PageOp } from '../engine/PdfEngine';
  * glifos seleccionables. Ver docs/superpowers/specs/2026-09-25-cimientos-
  * motor-pdfium-design.md, §9 fila #32.
  *
- * Fase 1 (documentado también en `layout.ts` y `parse.ts`): sin tablas, sin
- * imágenes embebidas, sin URL de enlace como anotación clicable — el texto
- * del enlace se pinta en azul, pero el destino no queda clicable todavía
- * (`InsertTextSpec`/`PdfEngine` no tienen hoy un método para anotaciones
- * `/Link`; añadirlo es candidato para la fase 2, fuera de alcance de este
- * PR: no tocar el motor solo para esto).
+ * Fase 2a añade enlaces clicables: cada enlace del AST (`{ type: 'link',
+ * url }`, `parse.ts`) se emite como una anotación `/Link` real
+ * (`PdfEngine.addLink`, vía el lote `applyPageOps`) además de pintarse en
+ * azul. La validación de esquema (solo `http:`/`https:`/`mailto:`) la hace
+ * el propio motor (`validarUrlEnlace.ts`) — un esquema rechazado
+ * (`javascript:`, `file:`, `data:`...) simplemente no genera anotación, sin
+ * abortar la conversión. Sigue sin tablas GFM ni imágenes embebidas.
  */
 export class ConversorMarkdownNavegador implements ConversorDocumento {
   readonly acepta = ['md', 'markdown'] as const;
@@ -42,7 +43,7 @@ export class ConversorMarkdownNavegador implements ConversorDocumento {
       if (w === undefined) { w = this.engine.measureText(font, sizePt, s); cache.set(key, w); }
       return w;
     };
-    const { totalPaginas, trazos, barras } = layoutMarkdown(ast, medir);
+    const { totalPaginas, trazos, barras, enlaces } = layoutMarkdown(ast, medir);
 
     // Documento base: una página en blanco (createBlank), y tantas páginas
     // más como haga falta importando la MISMA página en blanco una y otra
@@ -70,6 +71,9 @@ export class ConversorMarkdownNavegador implements ConversorDocumento {
     }
     for (const t of trazos) {
       agregar(t.page, { type: 'insertText', spec: { xPt: t.xPt, yPt: t.yPt, text: t.text, sizePt: t.sizePt, fontName: t.font, color: t.color } });
+    }
+    for (const e of enlaces) {
+      agregar(e.page, { type: 'addLink', rect: { xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt }, url: e.url });
     }
     for (const [page, ops] of opsPorPagina) this.engine.applyPageOps(doc, page, ops);
 
