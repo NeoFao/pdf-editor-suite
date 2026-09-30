@@ -1564,6 +1564,14 @@ export class PdfiumEngine implements PdfEngine {
               this.mem.setValue(rectPtr + 12, op.rect.yPt, 'float');
               this.p.FPDFAnnot_SetRect(annot, rectPtr);
               this.mem.free(rectPtr);
+              // Sin esto, PDFium (como la mayoría de visores) pinta el borde
+              // POR DEFECTO de la anotación /Link (un rectángulo de 1pt
+              // alrededor del texto) — nada que ver con el azul+subrayado
+              // del propio texto, y nada profesional: Acrobat/Chrome/Word
+              // generan siempre un borde invisible en sus enlaces, el
+              // "aspecto" de enlace lo da el estilo del texto, no la caja
+              // de la anotación.
+              this.p.FPDFAnnot_SetBorder(annot, 0, 0, 0);
               // Acción /URI: EPDFAction_CreateURI crea la acción (marshaling
               // de "string" a cargo del propio binding, ver index.d.ts) y
               // EPDFAnnot_SetAction la asocia a la anotación /Link recién

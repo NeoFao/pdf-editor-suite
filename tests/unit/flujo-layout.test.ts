@@ -141,6 +141,24 @@ test('lineToFlowLine: dos átomos con URLs distintas NUNCA se fusionan en un sol
   expect(linea.segs).toHaveLength(2);
 });
 
+test('lineToFlowLine + paginar: un átomo con underline produce una barra de subrayado bajo la línea base ("azul y subrayado" de un hipervínculo)', () => {
+  const atoms: Atom[] = [{ text: 'clic', font: 'Helvetica', sizePt: 11, color: [37, 99, 235], underline: true }];
+  const linea = lineToFlowLine(atoms, 10, 300, 'left', true, 14, medir);
+  const geo: PageGeometry = { widthPt: 595, heightPt: 842, marginTopPt: 56, marginBottomPt: 56, marginLeftPt: 56, marginRightPt: 56 };
+  const { barras } = paginar([linea], geo, 0.28);
+  expect(barras).toHaveLength(1);
+  expect(barras[0]).toMatchObject({ page: 0, xPt: 10, wPt: 24, color: [37, 99, 235] });
+  expect(barras[0]!.hPt).toBeGreaterThan(0);
+});
+
+test('un átomo sin underline no produce ninguna barra', () => {
+  const atoms: Atom[] = [{ text: 'normal', font: 'Helvetica', sizePt: 11, color: [0, 0, 0] }];
+  const linea = lineToFlowLine(atoms, 0, 300, 'left', true, 14, medir);
+  const geo: PageGeometry = { widthPt: 595, heightPt: 842, marginTopPt: 56, marginBottomPt: 56, marginLeftPt: 56, marginRightPt: 56 };
+  const { barras } = paginar([linea], geo, 0.28);
+  expect(barras).toHaveLength(0);
+});
+
 test('paginar: un enlace en una línea produce una entrada en `enlaces` con la misma página y URL', () => {
   const items: FlowItem[] = [
     { kind: 'line', height: 14, segs: [{ xPt: 10, text: 'clic', font: 'Helvetica', sizePt: 11, color: [0, 0, 255], url: 'https://example.com', wPt: 24 }], bars: [] }

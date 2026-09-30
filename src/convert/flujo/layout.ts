@@ -50,6 +50,8 @@ export interface Atom {
    * cuando `Seg.url` está presente).
    */
   url?: string;
+  /** `true` si este átomo lleva subrayado (`w:u` de DOCX, o un enlace sin estilo propio que lo fuerza a `true`). `paginar` dibuja una barra fina bajo la línea base por cada `Seg` con `underline: true`. */
+  underline?: boolean;
 }
 
 export interface Trazo {
@@ -91,13 +93,16 @@ export interface Seg {
   /** URL del enlace clicable que cubre este trazo (ver `Atom.url`), o `undefined`. */
   url?: string;
   /**
-   * Ancho en puntos PDF de `text` (ya medido por `lineToFlowLine`). Solo se
-   * usa para calcular la caja del enlace clicable cuando `url` está
-   * presente — `paginar` no tiene acceso a `medir`, así que el ancho debe
-   * venir ya calculado. Opcional para no romper construcciones de `Seg` en
-   * tests que no lo necesitan (sin `url` tampoco hace falta).
+   * Ancho en puntos PDF de `text` (ya medido por `lineToFlowLine`). Se usa
+   * para calcular la caja del enlace clicable cuando `url` está presente y
+   * el ancho de la barra de subrayado cuando `underline` lo está —
+   * `paginar` no tiene acceso a `medir`, así que el ancho debe venir ya
+   * calculado. Opcional para no romper construcciones de `Seg` en tests que
+   * no lo necesitan (sin `url`/`underline` tampoco hace falta).
    */
   wPt?: number;
+  /** Ver `Atom.underline`. */
+  underline?: boolean;
 }
 export interface BarSeg { xPt: number; wPt: number; color: RGB }
 export interface BgSeg { xPt: number; wPt: number; color: RGB }
@@ -197,7 +202,7 @@ export function lineToFlowLine(
     const segs: Seg[] = [];
     let x = xStartPt;
     atoms.forEach((a, i) => {
-      segs.push({ xPt: x, text: a.text, font: a.font, sizePt: a.sizePt, color: a.color, url: a.url, wPt: anchos[i] });
+      segs.push({ xPt: x, text: a.text, font: a.font, sizePt: a.sizePt, color: a.color, url: a.url, wPt: anchos[i], underline: a.underline });
       x += anchos[i]!;
       if (i < atoms.length - 1) x += espacios[i]! + (atoms[i + 1]!.pegado ? 0 : extraPorHueco);
     });
@@ -223,12 +228,12 @@ export function lineToFlowLine(
     // ambos trazos). La URL del enlace también forma parte del "estilo": dos
     // átomos con URLs distintas (o uno con y otro sin) nunca se fusionan,
     // cada uno necesita su propia caja de anotación `/Link`.
-    while (j < atoms.length && atoms[j]!.font === a.font && atoms[j]!.sizePt === a.sizePt && sameColor(atoms[j]!.color, a.color) && atoms[j]!.url === a.url) {
+    while (j < atoms.length && atoms[j]!.font === a.font && atoms[j]!.sizePt === a.sizePt && sameColor(atoms[j]!.color, a.color) && atoms[j]!.url === a.url && !!atoms[j]!.underline === !!a.underline) {
       text += (atoms[j]!.pegado ? '' : ' ') + atoms[j]!.text;
       j++;
     }
     const anchoSeg = medir(a.font, a.sizePt, text);
-    segs.push({ xPt: x, text, font: a.font, sizePt: a.sizePt, color: a.color, url: a.url, wPt: anchoSeg });
+    segs.push({ xPt: x, text, font: a.font, sizePt: a.sizePt, color: a.color, url: a.url, wPt: anchoSeg, underline: a.underline });
     x += anchoSeg;
     if (j < atoms.length && !atoms[j]!.pegado) x += medir(a.font, a.sizePt, ' ');
     i = j;
@@ -273,6 +278,17 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     pintadoEnPagina = false;
   }
 
+  /**
+   * Barra fina de subrayado bajo la línea base de `seg`, si `seg.underline`
+   * está activo (y se conoce su ancho, `seg.wPt`) — proporción típica de un
+   * subrayado tipográfico: ~10% del tamaño de fuente por debajo de la línea
+   * base, ~6% de grosor (mínimo 0.6pt para tamaños muy pequeños).
+   */
+  function barraSubrayado(seg: Seg, baseline: number): Barra | null {
+    if (!seg.underline || !seg.wPt) return null;
+    return { page, xPt: seg.xPt, yPt: baseline - seg.sizePt * 0.1, wPt: seg.wPt, hPt: Math.max(0.6, seg.sizePt * 0.06), color: seg.color };
+  }
+
   /** Coloca una fila de tabla YA en la página/cursor actuales (no decide paginación: eso lo hace el llamador). */
   function colocarFila(row: FlowTableRow): void {
     for (const f of row.fondos) {
@@ -283,6 +299,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
       for (const seg of linea.segs) {
         trazos.push({ page, xPt: seg.xPt, yPt: baseline, text: seg.text, font: seg.font, sizePt: seg.sizePt, color: seg.color });
         if (seg.url && seg.wPt) enlaces.push({ page, xPt: seg.xPt, yPt: baseline - seg.sizePt * 0.2, wPt: seg.wPt, hPt: seg.sizePt * 1.1, url: seg.url });
+        const subrayado = barraSubrayado(seg, baseline);
+        if (subrayado) barras.push(subrayado);
       }
     }
     for (const b of row.bordes) {
@@ -342,6 +360,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
       for (const seg of item.segs) {
         trazos.push({ page, xPt: seg.xPt, yPt: baseline, text: seg.text, font: seg.font, sizePt: seg.sizePt, color: seg.color });
         if (seg.url && seg.wPt) enlaces.push({ page, xPt: seg.xPt, yPt: baseline - seg.sizePt * 0.2, wPt: seg.wPt, hPt: seg.sizePt * 1.1, url: seg.url });
+        const subrayado = barraSubrayado(seg, baseline);
+        if (subrayado) barras.push(subrayado);
         pintadoEnPagina = true;
       }
       if (item.bg) { barras.push({ page, xPt: item.bg.xPt, yPt: bottom, wPt: item.bg.wPt, hPt: item.height, color: item.bg.color }); pintadoEnPagina = true; }

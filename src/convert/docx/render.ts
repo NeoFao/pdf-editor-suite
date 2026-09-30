@@ -79,7 +79,7 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
       for (const palabra of parte.texto.split(/\s+/)) {
         if (palabra === '') continue;
         const pegado = primerPalabra && !empiezaConEspacio && !terminaEnEspacio && bufferAtomos.length > 0;
-        bufferAtomos.push({ text: palabra, font: parte.formato.font, sizePt: parte.formato.sizePt, color: parte.formato.color, pegado, url: parte.url });
+        bufferAtomos.push({ text: palabra, font: parte.formato.font, sizePt: parte.formato.sizePt, color: parte.formato.color, pegado, url: parte.url, underline: parte.formato.underline });
         primerPalabra = false;
       }
       if (parte.texto.length > 0) terminaEnEspacio = /\s$/.test(parte.texto);
@@ -119,8 +119,8 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
   return salida;
 }
 
-const TABLA_PAD_X_PT = 4;
-const TABLA_PAD_Y_PT = 3;
+const TABLA_PAD_X_PT = 5;
+const TABLA_PAD_Y_PT = 5;
 const TABLA_LINE_HEIGHT_FACTOR = 1.2;
 const TABLA_BASELINE_FRACTION = 0.28; // mismo valor que `paginar()` para el resto del documento (ver más abajo)
 const TABLA_SIZE_PT_DEFECTO = 10;
@@ -147,7 +147,7 @@ function celdaAGrupos(celda: CeldaTabla): Atom[][] {
       for (const palabra of parte.texto.split(/\s+/)) {
         if (palabra === '') continue;
         const pegado = primerPalabra && !empiezaConEspacio && !terminaEnEspacio && actual.length > 0;
-        actual.push({ text: palabra, font: parte.formato.font, sizePt: parte.formato.sizePt, color: parte.formato.color, pegado, url: parte.url });
+        actual.push({ text: palabra, font: parte.formato.font, sizePt: parte.formato.sizePt, color: parte.formato.color, pegado, url: parte.url, underline: parte.formato.underline });
         primerPalabra = false;
       }
       if (parte.texto.length > 0) terminaEnEspacio = /\s$/.test(parte.texto);
