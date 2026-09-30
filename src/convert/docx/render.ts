@@ -227,7 +227,7 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
     flowLinesPorCelda.forEach((lineas) => {
       let y = TABLA_PAD_Y_PT;
       for (const l of lineas) {
-        lineasRel.push({ relYPt: y + l.height * TABLA_BASELINE_FRACTION, segs: l.segs });
+        lineasRel.push({ relYPt: y + l.height * (1 - TABLA_BASELINE_FRACTION), segs: l.segs });
         y += l.height;
       }
     });

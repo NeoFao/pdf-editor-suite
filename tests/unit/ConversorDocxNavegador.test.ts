@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../src/engine/pdfium/PdfiumEngine';
 import { ConversorDocxNavegador } from '../../src/convert/ConversorDocxNavegador';
 import { DocxError } from '../../src/convert/docx/DocxError';
+import { construirModeloDocx } from '../../src/convert/docx/modelo';
+import { renderizarModeloDocx } from '../../src/convert/docx/render';
 
 // NOTA: no se importan las constantes de texto (DOCX_TITULO...) desde
 // `generar-fixtures.mjs` a propósito: ese módulo ejecuta `main()` (que
@@ -118,4 +120,17 @@ test('word-hostil.docx (zip bomb real) se rechaza con DocxError, sin colgarse ni
   const engine = await PdfiumEngine.create();
   const conversor = new ConversorDocxNavegador(engine);
   await expect(conversor.convertir('word-hostil.docx', leerFixture('word-hostil.docx'))).rejects.toThrow(DocxError);
+});
+
+test('la línea base del texto de una celda cae ~13,6pt bajo el borde superior de la fila (relleno 5pt + 72% de la altura de línea), no pegada arriba', () => {
+  const xml = `<w:document><w:body><w:tbl>
+    <w:tblPr><w:tblBorders><w:top w:val="single" w:sz="8" w:color="000000"/></w:tblBorders></w:tblPr>
+    <w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>
+    <w:tr><w:tc><w:p><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>X</w:t></w:r></w:p></w:tc></w:tr>
+  </w:tbl></w:body></w:document>`;
+  const { trazos, barras } = renderizarModeloDocx(construirModeloDocx(xml, null, null), (_f, _s, t) => t.length * 5);
+  const borde = barras.find((b) => b.hPt === 1 && b.wPt > 100)!; // borde superior de la fila (grosor 1pt)
+  const topeFila = borde.yPt + borde.hPt;
+  // sizePt 10 -> altura de línea 12; baseline a 5 + 12*0.72 = 13,64pt bajo el tope.
+  expect(topeFila - trazos[0]!.yPt).toBeCloseTo(13.64, 1);
 });

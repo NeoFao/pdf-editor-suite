@@ -1990,3 +1990,11 @@ pero ningún código lo convertía en trazo: era un dato huérfano.
 `un átomo sin underline no produce ninguna barra`
 (`tests/unit/flujo-layout.test.ts`). El recuadro solo se ve a ojo: la defensa
 es la revisión visual obligatoria (AGENTS.md §2.8), no un test de píxeles.
+
+**Tercer defecto de la misma revisión.** El texto de las celdas de tabla salía
+pegado al borde superior: `renderizarTabla` medía la fracción de línea base
+(0,28) desde ARRIBA de la línea, y en `paginar` se mide desde ABAJO (mismo
+tipo de mezcla de orígenes que el resto de E-0xx de geometría). Arreglo:
+`relYPt = y + alto * (1 - fracción)`. Test:
+`la línea base del texto de una celda cae ~13,6pt bajo el borde superior…`
+(`tests/unit/ConversorDocxNavegador.test.ts`), rojo antes (8,36 pt).
