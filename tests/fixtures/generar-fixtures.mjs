@@ -686,6 +686,26 @@ function docxJpeg() {
   ]);
 }
 
+/** .docx con una celda combinada verticalmente (3 filas, sombreada) junto a celdas normales (T1b). */
+function docxCombinada() {
+  const bordes = '<w:tblBorders>' + ['top', 'bottom', 'left', 'right', 'insideH', 'insideV']
+    .map((lado) => `<w:${lado} w:val="single" w:sz="8" w:color="000000"/>`).join('') + '</w:tblBorders>';
+  const fila = (a, b, pr) => `<w:tr><w:tc><w:tcPr>${pr}</w:tcPr><w:p><w:r><w:t>${a}</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>${b}</w:t></w:r></w:p></w:tc></w:tr>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:tbl><w:tblPr>${bordes}</w:tblPr><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>
+    ${fila('Fusionada', 'fila uno', '<w:vMerge w:val="restart"/><w:shd w:fill="CCE5FF"/>')}
+    ${fila('', 'fila dos', '<w:vMerge/>')}
+    ${fila('', 'fila tres', '<w:vMerge/>')}
+    ${fila('Suelta', 'fila cuatro', '')}
+  </w:tbl>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') }
+  ]);
+}
+
 /**
  * Fixture "completo" de la fase 2a (spec, ítem 8): tabla 3×3 con encabezado,
  * una celda combinada horizontalmente (`w:gridSpan`) y sombreada (`w:shd`),
@@ -778,6 +798,7 @@ async function main() {
     'word-tabla-imagen.docx': docxTablaImagen(),
     'word-completo.docx': docxCompleto(),
     'word-jpeg.docx': docxJpeg(),
+    'word-combinada.docx': docxCombinada(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {

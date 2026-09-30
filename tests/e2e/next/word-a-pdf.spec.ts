@@ -17,6 +17,7 @@ const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const WORD_BASICO = path.resolve(AQUI, '../../fixtures/generados/word-basico.docx');
 const WORD_TABLA_IMAGEN = path.resolve(AQUI, '../../fixtures/generados/word-tabla-imagen.docx');
 const WORD_JPEG = path.resolve(AQUI, '../../fixtures/generados/word-jpeg.docx');
+const WORD_COMBINADA = path.resolve(AQUI, '../../fixtures/generados/word-combinada.docx');
 const WORD_COMPLETO = path.resolve(AQUI, '../../fixtures/generados/word-completo.docx');
 
 async function dataTransferConFichero(page: Page, bytes: number[], fileName: string, mime: string) {
@@ -113,4 +114,14 @@ test('abrir word-jpeg.docx: la imagen JPEG (createImageBitmap) llega al PDF con 
   expect(Math.abs(imagenes[0]!.rectPt.wPt - 72)).toBeLessThanOrEqual(1);
   expect(Math.abs(imagenes[0]!.rectPt.hPt - 36)).toBeLessThanOrEqual(1);
   eng.close(doc);
+});
+
+test('abrir word-combinada.docx: la celda combinada verticalmente muestra su texto UNA vez y sin aviso', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(WORD_COMBINADA);
+  await expect(page.locator('.run').first()).toBeVisible();
+  const textos = await page.locator('.run').allTextContents();
+  expect(textos.filter((t) => t.includes('Fusionada'))).toHaveLength(1);
+  expect(textos.join(' ')).toContain('fila cuatro');
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
 });
