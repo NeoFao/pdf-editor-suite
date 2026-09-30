@@ -2,7 +2,7 @@ import { test, expect } from 'vitest';
 import {
   layoutMarkdown, MARGIN_PT, CONTENT_WIDTH_PT, PAGE_HEIGHT_PT, BODY_SIZE_PT, LINE_HEIGHT_FACTOR,
   HEADING_SIZES_PT, HEADING_LINE_HEIGHT_FACTOR, LIST_INDENT_PT, HANGING_INDENT_PT, QUOTE_INDENT_PT,
-  type Medir
+  urlsRechazadas, type Medir
 } from '../../src/convert/markdown/layout';
 import type { Block, Inline } from '../../src/convert/markdown/ast';
 
@@ -147,4 +147,33 @@ test('documento vacío produce una página sin trazos', () => {
   expect(totalPaginas).toBe(1);
   expect(trazos).toEqual([]);
   expect(barras).toEqual([]);
+});
+
+// T1b: coherencia con DOCX — un enlace válido va azul y SUBRAYADO; uno rechazado es texto plano, sin url ni subrayado.
+test('enlace válido: azul, con url y subrayado real (una barra bajo el trazo)', () => {
+  const b: Block[] = [{ type: 'paragraph', children: [{ type: 'link', text: 'web', url: 'https://example.com' }] }];
+  const { trazos, barras, enlaces } = layoutMarkdown(b, medir);
+  expect(trazos[0]!.color).toEqual([37, 99, 235]);
+  expect(enlaces).toHaveLength(1);
+  const sub = barras.filter((x) => x.color[2] === 235);
+  expect(sub).toHaveLength(1);
+  expect(sub[0]!.xPt).toBe(trazos[0]!.xPt);
+});
+
+test('enlace con esquema rechazado: texto plano (no azul), sin url y sin subrayado', () => {
+  const b: Block[] = [{ type: 'paragraph', children: [{ type: 'link', text: 'x', url: 'javascript:alert(1)' }] }];
+  const { trazos, barras, enlaces } = layoutMarkdown(b, medir);
+  expect(trazos[0]!.color).toEqual([0, 0, 0]);
+  expect(enlaces).toHaveLength(0);
+  expect(barras).toHaveLength(0);
+});
+
+test('urlsRechazadas recorre encabezados, listas, sublistas y citas', () => {
+  const link = (url: string): Inline => ({ type: 'link', text: 't', url });
+  const b: Block[] = [
+    { type: 'heading', level: 1, children: [link('javascript:1')] },
+    { type: 'list', ordered: false, items: [{ children: [link('https://ok.com')], sublist: { type: 'list', ordered: false, items: [{ children: [link('file:///x')] }] } }] },
+    { type: 'blockquote', children: [{ type: 'paragraph', children: [link('data:text/html,1')] }] }
+  ];
+  expect(urlsRechazadas(b)).toEqual(['javascript:1', 'file:///x', 'data:text/html,1']);
 });

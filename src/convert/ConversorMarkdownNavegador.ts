@@ -1,6 +1,6 @@
 import type { ConversorDocumento, ResultadoConversion } from './ConversorDocumento';
 import { parseMarkdown } from './markdown/parse';
-import { layoutMarkdown, PAGE_WIDTH_PT, PAGE_HEIGHT_PT } from './markdown/layout';
+import { layoutMarkdown, urlsRechazadas, PAGE_WIDTH_PT, PAGE_HEIGHT_PT } from './markdown/layout';
 import type { PdfEngine, DocHandle, PageOp } from '../engine/PdfEngine';
 
 /**
@@ -79,6 +79,8 @@ export class ConversorMarkdownNavegador implements ConversorDocumento {
 
     const out = this.engine.save(doc);
     this.engine.close(doc);
-    return { pdf: out, advertencias: [] };
+    // Un enlace que no se pudo convertir en clicable no se pierde en silencio: el texto se conserva y se avisa (misma política que DOCX).
+    const advertencias = urlsRechazadas(ast).map((u) => `El enlace "${u}" no se convirtió en enlace clicable (solo se admiten http:, https: y mailto:); el texto se conserva.`);
+    return { pdf: out, advertencias };
   }
 }

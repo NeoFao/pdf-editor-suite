@@ -75,3 +75,14 @@ test('convertir con Markdown vacío produce un PDF de 1 página sin texto', asyn
   expect(engine.getPageText(doc, 0)).toEqual([]);
   engine.close(doc);
 });
+
+test('un enlace con esquema rechazado devuelve una advertencia visible (con la URL); uno válido no', async () => {
+  const engine = await PdfiumEngine.create();
+  const conversor = new ConversorMarkdownNavegador(engine);
+  const md = '[bien](https://example.com) y [mal](javascript:void0) y [rel](pagina.html)';
+  const { advertencias } = await conversor.convertir('e.md', new TextEncoder().encode(md));
+  expect(advertencias).toHaveLength(2);
+  expect(advertencias.join(' | ')).toContain('javascript:void0');
+  expect(advertencias.join(' | ')).toContain('pagina.html');
+  expect(advertencias.join(' | ')).not.toContain('https://example.com');
+});

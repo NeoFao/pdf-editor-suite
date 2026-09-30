@@ -1,4 +1,5 @@
 import type { Block, Inline, ListBlock } from './ast';
+import { validarUrlEnlace } from '../../engine/validarUrlEnlace';
 import {
   wrapAtoms, lineToFlowLine, paginar as paginarFlujo,
   type Atom, type RGB, type Medir, type FlowItem, type FlowLine, type BarSeg, type BgSeg, type ResultadoLayout, type PageGeometry
@@ -127,7 +128,11 @@ function flattenInline(nodes: Inline[], sizePt: number, color: RGB, bold: boolea
       // convierte en una anotación /Link real (validada con
       // validarUrlEnlace.ts en el conversor, que también filtra el esquema
       // ANTES de llamar a addLink — ver ConversorMarkdownNavegador).
-      for (const w of node.text.split(/\s+/)) if (w !== '') atoms.push({ text: w, font, sizePt, color: LINK_BLUE, url: node.url });
+      // Enlace válido: azul + subrayado + url (misma presentación que DOCX). Rechazado
+      // (esquema no permitido o URL no absoluta): texto plano — no se pinta como enlace
+      // algo que no lo es; el conversor avisa con `urlsRechazadas`.
+      const url = validarUrlEnlace(node.url);
+      for (const w of node.text.split(/\s+/)) if (w !== '') atoms.push(url ? { text: w, font, sizePt, color: LINK_BLUE, url, underline: true } : { text: w, font, sizePt, color });
     }
   }
   return atoms;
@@ -250,6 +255,27 @@ function renderBlocksFlat(blocks: Block[], indentPt: number, medir: Medir, widow
     items.push(...blockItems);
   }
   return items;
+}
+
+/** URLs de enlaces del documento que NO se pueden convertir en enlace clicable (esquema no permitido o no absoluta), en orden de aparición. */
+export function urlsRechazadas(blocks: Block[]): string[] {
+  const out: string[] = [];
+  const inlines = (nodes: Inline[]): void => {
+    for (const n of nodes) {
+      if (n.type === 'link') { if (!validarUrlEnlace(n.url)) out.push(n.url); }
+      else if (n.type === 'strong' || n.type === 'em') inlines(n.children);
+    }
+  };
+  const lista = (l: ListBlock): void => { for (const it of l.items) { inlines(it.children); if (it.sublist) lista(it.sublist); } };
+  const bloques = (bs: Block[]): void => {
+    for (const b of bs) {
+      if (b.type === 'heading' || b.type === 'paragraph') inlines(b.children);
+      else if (b.type === 'list') lista(b);
+      else if (b.type === 'blockquote') bloques(b.children);
+    }
+  };
+  bloques(blocks);
+  return out;
 }
 
 export function layoutMarkdown(blocks: Block[], medir: Medir): ResultadoLayout {
