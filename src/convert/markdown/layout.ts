@@ -54,7 +54,7 @@ import {
  *   (encabezados casi nunca envuelven) y no cubierto por los tests.
  */
 
-export type { RGB, Medir, Trazo, Barra, ResultadoLayout } from '../flujo/layout';
+export type { RGB, Medir, Trazo, Barra, ResultadoLayout, EnlaceColocado } from '../flujo/layout';
 
 // --- Geometría de página y estilo (constantes del dueño, no configurables) ---
 
@@ -122,7 +122,11 @@ function flattenInline(nodes: Inline[], sizePt: number, color: RGB, bold: boolea
       for (const w of node.text.split(/\s+/)) if (w !== '') atoms.push({ text: w, font: 'Courier', sizePt, color });
     } else if (node.type === 'link') {
       const font = lockFont ?? bodyFontFor(bold, italic);
-      for (const w of node.text.split(/\s+/)) if (w !== '') atoms.push({ text: w, font, sizePt, color: LINK_BLUE });
+      // Fase 2a: la URL viaja en el átomo y `paginar` (flujo/layout.ts) la
+      // convierte en una anotación /Link real (validada con
+      // validarUrlEnlace.ts en el conversor, que también filtra el esquema
+      // ANTES de llamar a addLink — ver ConversorMarkdownNavegador).
+      for (const w of node.text.split(/\s+/)) if (w !== '') atoms.push({ text: w, font, sizePt, color: LINK_BLUE, url: node.url });
     }
   }
   return atoms;
@@ -205,7 +209,8 @@ function renderBlock(block: Block, indentPt: number, medir: Medir, color: RGB): 
     case 'blockquote': {
       const inner = renderBlocksFlat(block.children, indentPt + QUOTE_INDENT_PT, medir, false, QUOTE_GRAY_TEXT);
       const bar: BarSeg = { xPt: MARGIN_PT + indentPt, wPt: QUOTE_BAR_WIDTH_PT, color: QUOTE_BAR_GRAY };
-      return inner.map((it) => (it.kind === 'pagebreak' ? it : { ...it, bars: [...it.bars, bar] }));
+      // Markdown nunca produce imagen/tabla: solo line/gap/rule (con `bars`) o pagebreak.
+      return inner.map((it) => (it.kind === 'line' || it.kind === 'gap' || it.kind === 'rule' ? { ...it, bars: [...it.bars, bar] } : it));
     }
     case 'code':
       return renderCode(block, indentPt);
@@ -233,7 +238,10 @@ function renderBlocksFlat(blocks: Block[], indentPt: number, medir: Medir, widow
         const nextGap = spacingBefore(block.type, next.type);
         const nextItems = renderBlock(next, indentPt, medir, color);
         const nextFirst = nextItems[0];
-        const extra = nextGap + (nextFirst && nextFirst.kind !== 'pagebreak' ? nextFirst.height : 0);
+        // Markdown nunca produce imagen/tabla, así que solo line/gap/rule tienen `height` aquí en la práctica;
+        // la comprobación explícita evita depender de que TS lo infiera desde `FlowItem` entero.
+        const tieneAltura = nextFirst && (nextFirst.kind === 'line' || nextFirst.kind === 'gap' || nextFirst.kind === 'rule' || nextFirst.kind === 'image' || nextFirst.kind === 'tableRow');
+        const extra = nextGap + (tieneAltura ? nextFirst.height : 0);
         const last = blockItems[blockItems.length - 1]!;
         if (last.kind === 'line') last.keepWithNextHeight = (last.keepWithNextHeight ?? 0) + extra;
       }
@@ -244,7 +252,7 @@ function renderBlocksFlat(blocks: Block[], indentPt: number, medir: Medir, widow
 }
 
 export function layoutMarkdown(blocks: Block[], medir: Medir): ResultadoLayout {
-  if (blocks.length === 0) return { totalPaginas: 1, trazos: [], barras: [] };
+  if (blocks.length === 0) return { totalPaginas: 1, trazos: [], barras: [], imagenes: [], enlaces: [] };
   const items = renderBlocksFlat(blocks, 0, medir, true, BLACK);
   return paginarFlujo(items, PAGE_GEOMETRY, BASELINE_FRACTION);
 }

@@ -124,6 +124,77 @@ test('paginar: un salto de página explícito DESPUÉS de contenido mueve lo sig
   expect(trazos.find((t) => t.text === 'pagina2')!.page).toBe(1);
 });
 
+test('lineToFlowLine: un átomo con url produce un Seg con url y wPt (base del enlace clicable)', () => {
+  const atoms: Atom[] = [{ text: 'clic', font: 'Helvetica', sizePt: 11, color: [0, 0, 255], url: 'https://example.com' }];
+  const linea = lineToFlowLine(atoms, 0, 300, 'left', true, 14, medir);
+  expect(linea.segs).toHaveLength(1);
+  expect(linea.segs[0]!.url).toBe('https://example.com');
+  expect(linea.segs[0]!.wPt).toBe(24); // 4 chars * 6
+});
+
+test('lineToFlowLine: dos átomos con URLs distintas NUNCA se fusionan en un solo trazo, aunque compartan estilo', () => {
+  const atoms: Atom[] = [
+    { text: 'uno', font: 'Helvetica', sizePt: 11, color: [0, 0, 255], url: 'https://a.example.com' },
+    { text: 'dos', font: 'Helvetica', sizePt: 11, color: [0, 0, 255], url: 'https://b.example.com' }
+  ];
+  const linea = lineToFlowLine(atoms, 0, 300, 'left', true, 14, medir);
+  expect(linea.segs).toHaveLength(2);
+});
+
+test('paginar: un enlace en una línea produce una entrada en `enlaces` con la misma página y URL', () => {
+  const items: FlowItem[] = [
+    { kind: 'line', height: 14, segs: [{ xPt: 10, text: 'clic', font: 'Helvetica', sizePt: 11, color: [0, 0, 255], url: 'https://example.com', wPt: 24 }], bars: [] }
+  ];
+  const geo: PageGeometry = { widthPt: 595, heightPt: 842, marginTopPt: 56, marginBottomPt: 56, marginLeftPt: 56, marginRightPt: 56 };
+  const { enlaces } = paginar(items, geo, 0.28);
+  expect(enlaces).toHaveLength(1);
+  expect(enlaces[0]).toMatchObject({ page: 0, xPt: 10, url: 'https://example.com' });
+});
+
+test('paginar: un ítem `image` reserva su propia altura y aparece en `imagenes` con su id', () => {
+  const items: FlowItem[] = [{ kind: 'image', height: 100, xPt: 56, wPt: 200, imgId: 'img-1' }];
+  const geo: PageGeometry = { widthPt: 595, heightPt: 842, marginTopPt: 56, marginBottomPt: 56, marginLeftPt: 56, marginRightPt: 56 };
+  const { imagenes, totalPaginas } = paginar(items, geo, 0.28);
+  expect(totalPaginas).toBe(1);
+  expect(imagenes).toEqual([{ page: 0, xPt: 56, yPt: 842 - 56 - 100, wPt: 200, hPt: 100, imgId: 'img-1' }]);
+});
+
+test('paginar: una fila de tabla que no cabe entera pasa COMPLETA a la página siguiente (nunca se corta)', () => {
+  const geo: PageGeometry = { widthPt: 300, heightPt: 200, marginTopPt: 10, marginBottomPt: 10, marginLeftPt: 10, marginRightPt: 10 };
+  // Área útil: 180pt de alto. Una línea de 150pt deja 30pt libres; una fila de 60pt no cabe -> pasa a la página 2 ENTERA.
+  const items: FlowItem[] = [
+    { kind: 'line', height: 150, segs: [{ xPt: 0, text: 'x', font: 'Helvetica', sizePt: 11, color: [0, 0, 0] }], bars: [] },
+    { kind: 'tableRow', height: 60, lineas: [{ relYPt: 20, segs: [{ xPt: 10, text: 'celda', font: 'Helvetica', sizePt: 11, color: [0, 0, 0] }] }], fondos: [], bordes: [], esEncabezado: false }
+  ];
+  const { trazos } = paginar(items, geo, 0.28);
+  const filaTrazo = trazos.find((t) => t.text === 'celda')!;
+  expect(filaTrazo.page).toBe(1);
+});
+
+test('paginar: repite la(s) fila(s) de encabezado al principio de cada página nueva mientras dura la tabla', () => {
+  const geo: PageGeometry = { widthPt: 300, heightPt: 150, marginTopPt: 10, marginBottomPt: 10, marginLeftPt: 10, marginRightPt: 10 };
+  const encabezado: FlowItem & { kind: 'tableRow' } = {
+    kind: 'tableRow', height: 20, esEncabezado: true, fondos: [], bordes: [],
+    lineas: [{ relYPt: 14, segs: [{ xPt: 10, text: 'ENC', font: 'Helvetica', sizePt: 11, color: [0, 0, 0] }] }]
+  };
+  const filaGrande = (texto: string): FlowItem => ({
+    kind: 'tableRow', height: 100, esEncabezado: false, fondos: [], bordes: [],
+    lineas: [{ relYPt: 14, segs: [{ xPt: 10, text: texto, font: 'Helvetica', sizePt: 11, color: [0, 0, 0] }] }]
+  });
+  const items: FlowItem[] = [
+    { kind: 'tableStart', headerRows: [encabezado] },
+    encabezado,
+    filaGrande('fila-1'),
+    filaGrande('fila-2'), // área útil = 130pt: encabezado(20)+fila-1(100)=120 cabe; fila-2(100) no cabe -> salto, se repite ENC
+    { kind: 'tableEnd' }
+  ];
+  const { trazos } = paginar(items, geo, 0.28);
+  const encPorPagina = trazos.filter((t) => t.text === 'ENC').map((t) => t.page);
+  expect(encPorPagina).toEqual([0, 1]); // una vez en cada página
+  expect(trazos.find((t) => t.text === 'fila-1')!.page).toBe(0);
+  expect(trazos.find((t) => t.text === 'fila-2')!.page).toBe(1);
+});
+
 test('paginar respeta márgenes distintos de un documento con geometría propia (no A4)', () => {
   const items: FlowItem[] = Array.from({ length: 3 }, (_v, i) => ({ kind: 'line' as const, height: 100, segs: [{ xPt: 0, text: `l${i}`, font: 'Helvetica', sizePt: 11, color: [0, 0, 0] as [number, number, number] }], bars: [] }));
   const geo: PageGeometry = { widthPt: 300, heightPt: 320, marginTopPt: 10, marginBottomPt: 10, marginLeftPt: 10, marginRightPt: 10 };
