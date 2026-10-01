@@ -52,7 +52,9 @@ import { Viewer, type ToolMode } from './Viewer';
 import { calcularEscalaAjusteAncho } from './layout';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
-import type { RectPt, OutlineItem } from '../engine/PdfEngine';
+import type { RectPt } from '../engine/PdfEngine';
+import { PanelMarcadores } from './PanelMarcadores';
+import { SetOutlineCmd } from '../commands/SetOutline';
 import { STANDARD_FONTS } from '../engine/standardFontFor';
 import { stripSubsetPrefix } from '../engine/fontClassify';
 import { ComentariosPanel } from './ComentariosPanel';
@@ -194,6 +196,8 @@ export class App {
   /** Orden en que se pintaron las miniaturas ya renderizadas — para desalojar las más antiguas si se acumulan demasiadas (`maybeEvictFarThumbs`). */
   private thumbRenderOrder: number[] = [];
   private readonly outlineEl: HTMLElement;
+  private readonly outlineBarEl: HTMLElement;
+  private panelMarcadores: PanelMarcadores | null = null;
   private readonly tabPages: HTMLButtonElement;
   private readonly tabOutline: HTMLButtonElement;
   private readonly tabComments: HTMLButtonElement;
@@ -695,7 +699,10 @@ export class App {
       borrar: (p, a) => { void this.bus?.execute(new RemoveNoteCmd(p, a)); this.setStatus('Comentario borrado.'); }
     });
 
-    sidebar.append(tabs, this.thumbsEl, this.outlineEl, this.commentsEl);
+    this.outlineBarEl = document.createElement('div');
+    this.outlineBarEl.id = 'outline-toolbar';
+    this.outlineBarEl.style.display = 'none';
+    sidebar.append(tabs, this.outlineBarEl, this.thumbsEl, this.outlineEl, this.commentsEl);
 
     this.viewerEl = document.createElement('div');
     this.viewerEl.id = 'viewer';
@@ -1127,6 +1134,18 @@ export class App {
     // `reload`).
     this.session.model.onReload(() => this.reconcileSelectionAfterReload());
     this.session.model.onPageRebuilt(() => this.reconcileSelectionAfterReload());
+    const sesion = this.session;
+    this.panelMarcadores = new PanelMarcadores({
+      contenedor: this.outlineEl,
+      barra: this.outlineBarEl,
+      obtenerArbol: () => sesion.engine.getOutline(sesion.doc),
+      paginaActual: () => this.currentPage,
+      ir: (pageIndex) => this.goToPage(pageIndex),
+      aplicar: async (antes, despues, etiqueta) => { await this.bus?.execute(new SetOutlineCmd(antes, despues, etiqueta)); },
+      estado: (m) => this.setStatus(m)
+    });
+    // Crear/renombrar/borrar/mover… y su deshacer/rehacer repintan el panel.
+    this.session.model.onOutlineChange(() => this.buildOutline());
     this.buildThumbnails();
     this.buildOutline();
     this.comentarios.invalidarTodo();
@@ -1734,6 +1753,7 @@ export class App {
   private showSidebarTab(which: 'pages' | 'outline' | 'comments'): void {
     this.thumbsEl.style.display = which === 'pages' ? 'block' : 'none';
     this.outlineEl.style.display = which === 'outline' ? 'block' : 'none';
+    this.outlineBarEl.style.display = which === 'outline' ? 'flex' : 'none';
     this.commentsEl.style.display = which === 'comments' ? 'block' : 'none';
     this.tabPages.setAttribute('aria-selected', String(which === 'pages'));
     this.tabOutline.setAttribute('aria-selected', String(which === 'outline'));
@@ -1742,73 +1762,9 @@ export class App {
     this.comentarios.setVisible(which === 'comments');
   }
 
-  /** Árbol de marcadores del documento. Se reconstruye al abrir otro documento y tras cualquier `onReload` (borrar/mover página cambia los índices). */
+  /** Repinta el panel de marcadores (al abrir otro documento, tras cualquier `onReload` —borrar/mover página cambia los índices— y tras cada cambio del outline). */
   private buildOutline(): void {
-    this.outlineEl.textContent = '';
-    const s = this.session;
-    if (!s) return;
-    const items = s.engine.getOutline(s.doc);
-    if (items.length === 0) {
-      const p = document.createElement('p');
-      p.textContent = 'Este documento no tiene marcadores.';
-      this.outlineEl.appendChild(p);
-      return;
-    }
-    this.outlineEl.appendChild(this.buildOutlineList(items, 0));
-  }
-
-  /** Nivel de la lista de marcadores: un `<ul>` con un `<li>` por nodo, recursivo para los hijos. */
-  private buildOutlineList(items: OutlineItem[], depth: number): HTMLUListElement {
-    const ul = document.createElement('ul');
-    Object.assign(ul.style, { listStyle: 'none', margin: '0', padding: '0' });
-    for (const item of items) {
-      const li = document.createElement('li');
-      const row = document.createElement('div');
-      Object.assign(row.style, { display: 'flex', alignItems: 'center', paddingLeft: `${depth * 14}px` });
-
-      let childrenUl: HTMLUListElement | null = null;
-      if (item.children.length > 0) {
-        const toggle = document.createElement('button');
-        toggle.className = 'outline-toggle';
-        toggle.textContent = '▸';
-        toggle.setAttribute('aria-expanded', 'false');
-        toggle.title = 'Desplegar/plegar';
-        Object.assign(toggle.style, { border: 'none', background: 'none', color: 'inherit', cursor: 'pointer', width: '16px', flex: '0 0 16px', padding: '0' });
-        toggle.addEventListener('click', () => {
-          const expandido = toggle.getAttribute('aria-expanded') === 'true';
-          const siguiente = !expandido;
-          toggle.setAttribute('aria-expanded', String(siguiente));
-          toggle.textContent = siguiente ? '▾' : '▸';
-          if (childrenUl) childrenUl.style.display = siguiente ? 'block' : 'none';
-        });
-        row.appendChild(toggle);
-      } else {
-        const spacer = document.createElement('span');
-        Object.assign(spacer.style, { width: '16px', flex: '0 0 16px', display: 'inline-block' });
-        row.appendChild(spacer);
-      }
-
-      const btn = document.createElement('button');
-      btn.className = 'outline-item';
-      btn.textContent = item.title;
-      Object.assign(btn.style, { border: 'none', background: 'none', color: 'inherit', textAlign: 'left', flex: '1', padding: '2px 0', cursor: item.pageIndex !== null ? 'pointer' : 'default' });
-      if (item.pageIndex !== null) {
-        const pageIndex = item.pageIndex;
-        btn.addEventListener('click', () => this.goToPage(pageIndex));
-      } else {
-        btn.disabled = true;
-      }
-      row.appendChild(btn);
-      li.appendChild(row);
-
-      if (item.children.length > 0) {
-        childrenUl = this.buildOutlineList(item.children, depth + 1);
-        childrenUl.style.display = 'none';
-        li.appendChild(childrenUl);
-      }
-      ul.appendChild(li);
-    }
-    return ul;
+    this.panelMarcadores?.render();
   }
 
   /** Miniaturas: un canvas pequeño por página; clic desplaza el visor, arrastrar reordena (ver beginThumbDrag). */

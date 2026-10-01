@@ -147,6 +147,23 @@ export interface OutlineItem {
   title: string;
   pageIndex: number | null;
   children: OutlineItem[];
+  /**
+   * Acción del marcador cuando NO es un destino de página. Ausente = destino de
+   * página (`pageIndex`) o marcador sin destino. `uri`: enlace http/https/mailto
+   * que el motor sabe recrear. `no-soportada`: Launch, GoToR, JavaScript, URI con
+   * esquema no permitido, destino sin página… — NUNCA se ejecuta y el motor se
+   * niega a reescribir un outline que la contenga (no puede conservarla fielmente).
+   */
+  accion?: AccionMarcador;
+}
+
+export type AccionMarcador =
+  | { tipo: 'uri'; uri: string }
+  | { tipo: 'no-soportada'; descripcion: string };
+
+/** true si algún marcador del árbol lleva una acción que no se puede conservar al reescribir. */
+export function outlineTieneAccionesNoSoportadas(items: OutlineItem[]): boolean {
+  return items.some((i) => i.accion?.tipo === 'no-soportada' || outlineTieneAccionesNoSoportadas(i.children));
 }
 
 /** Puntero opaco al documento dentro del motor. */
@@ -198,6 +215,13 @@ export interface PdfEngine {
    * implementación del motor.
    */
   getOutline(doc: DocHandle): OutlineItem[];
+  /**
+   * Reescribe el árbol de marcadores completo (reemplaza el anterior). Lanza
+   * `RangeError` —sin tocar el documento— si el árbol supera las cotas de
+   * E-031 (`OUTLINE_MAX_DEPTH`, `OUTLINE_MAX_NODES`). `pageIndex` nulo o fuera
+   * de rango se escribe sin destino.
+   */
+  setOutline(doc: DocHandle, items: OutlineItem[]): void;
   /**
    * Edita el texto de un run EN SITIO: conserva fuente, tamaño, color y posición.
    * No crea objetos nuevos ni rasteriza. Devuelve `glyph-missing` (sin modificar)

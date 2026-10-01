@@ -226,7 +226,9 @@ Estado: **Conservada** (misma función, nueva base) · **Mejorada** (además cor
 
 - Notas adhesivas (`AddNoteCmd`, `#btn-note`).
 - Formularios AcroForm completos: texto, casilla, radio, combo y lista, con apariencia regenerada (`SetFormText/Checked/Choice/RadioCmd`, `tests/e2e/next/formulario.spec.ts`, `formulario-fase2.spec.ts`).
-- Marcadores (outline): árbol de lectura y navegación (`getOutline`, `tests/e2e/next/marcadores.spec.ts`).
+- Marcadores (outline): árbol de lectura y navegación (`getOutline`, `tests/e2e/next/marcadores.spec.ts`) y edición completa — añadir, renombrar, borrar, mover y reordenar con deshacer, conservando las acciones URI (`setOutline`, `SetOutlineCmd`, `tests/e2e/next/marcadores-edicion.spec.ts`, `docs/MARCADORES-EDICION.md`).
+- Panel «Comentarios»: lista, navega, edita y borra las notas y anotaciones con /Contents (`getComments`, `setNoteText`, `SetNoteTextCmd`/`RemoveNoteCmd`, `docs/PANEL-COMENTARIOS.md`).
+- Buscar y reemplazar (Ctrl/Cmd+H) con mayúsculas y palabra completa, un solo paso de deshacer (`buscarReemplazar.ts`, `ReemplazarTexto`, `tests/e2e/next/reemplazar.spec.ts`).
 - Subrayar y tachar como anotaciones reales, además de resaltar (`UnderlineRunCmd`, `StrikethroughRunCmd`, `tests/e2e/next/subrayar-tachar.spec.ts`).
 - Búsqueda de texto en el documento, con resaltado de coincidencias (`engine.findText`, `#btn-search`, `tests/e2e/next/busqueda.spec.ts`).
 - Sustitución de fuente cuando faltan glifos (`ReplaceRunFontCmd`) y cambio de fuente/tamaño elegido por el usuario desde el panel de propiedades (`SetRunFontCmd`/`SetRunFontSizeCmd`).

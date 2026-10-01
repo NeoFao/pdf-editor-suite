@@ -3,7 +3,7 @@ import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
 import { validarUrlEnlace } from '../validarUrlEnlace';
 import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_PAGEOBJ_PATH = 2;
@@ -44,14 +44,17 @@ const FPDF_FORMFIELD_KIND: Record<number, FormFieldKind> = {
 const FPDF_FORMFLAG_READONLY = 0x01; // bit 1 de /Ff (PDF 32000-1, tabla 221).
 const FPDF_FORMFLAG_CHOICE_MULTISELECT = 0x200000; // bit 22 de /Ff (tabla 231, solo campos de elección).
 
-const PDFACTION_GOTO = 1; // FPDFAction_GetType: acción "ir a" (destino dentro del propio documento).
+import { OUTLINE_MAX_DEPTH, OUTLINE_MAX_NODES } from '../cotasOutline';
+
+const PDFACTION_GOTO = 1;
+const PDFACTION_REMOTEGOTO = 2;
+const PDFACTION_URI = 3;
+const PDFACTION_LAUNCH = 4; // FPDFAction_GetType: acción "ir a" (destino dentro del propio documento).
 
 // Cotas del recorrido del outline (E-031, ver docs/ERRORES-CONOCIDOS.md): un
 // PDF hostil puede definir un outline con ciclos (un /Next o /First que
 // apunta hacia atrás) o una profundidad/cantidad de nodos desmedida. Sin
 // estas cotas, un `while` que sigue /NextSibling entraría en bucle infinito.
-const OUTLINE_MAX_DEPTH = 32;
-const OUTLINE_MAX_NODES = 10000;
 
 /**
  * Implementación de PdfEngine sobre @embedpdf/pdfium (WASM).
@@ -407,9 +410,9 @@ export class PdfiumEngine implements PdfEngine {
           (buf, len) => this.p.FPDFBookmark_GetTitle(marcador, buf, len),
           (ptr) => this.mem.readU16(ptr)
         );
-        const pageIndex = this.bookmarkPageIndex(doc, marcador);
+        const { pageIndex, accion } = this.bookmarkTarget(doc, marcador);
         const children = leerHermanos(marcador, profundidad + 1);
-        items.push({ title, pageIndex, children });
+        items.push(accion ? { title, pageIndex, children, accion } : { title, pageIndex, children });
         marcador = this.p.FPDFBookmark_GetNextSibling(doc, marcador);
       }
       return items;
@@ -418,21 +421,122 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   /**
-   * Página de destino de un marcador, o `null` si no resuelve a ninguna.
-   * Primero el destino directo (`/Dest`); si no hay, la acción GoTo del
-   * marcador (`/A`) — un marcador solo tiene uno de los dos, nunca ambos.
+   * Reescribe el árbol de marcadores COMPLETO con `EPDFBookmark_*` (el build
+   * de @embedpdf/pdfium las expone; son las únicas que escriben outline).
+   * Estrategia: validar el árbol con las cotas de E-031 ANTES de tocar nada
+   * (así un árbol rechazado deja el documento intacto), borrar los marcadores
+   * raíz actuales (`EPDFBookmark_Delete` arrastra a los hijos y reengancha
+   * /First, /Last, /Next, /Prev, /Count, /Parent) y reconstruir con
+   * `AppendChild` (padre 0 = raíz). Cada destino es `[página /Fit]`
+   * (`EPDFDest_CreateView`, modo 2 = Fit, 0 parámetros); `pageIndex` nulo o
+   * fuera de rango se escribe sin destino. El título lo codifica PDFium
+   * (UTF-16BE con BOM): sobrevive ñ, emoji (pares sustitutos) y similares.
+   * Acciones: los marcadores URI (http/https/mailto) se recrean con
+   * `EPDFAction_CreateURI` + `EPDFBookmark_SetAction`; un árbol con cualquier
+   * acción `no-soportada` se rechaza antes de tocar nada.
    */
-  private bookmarkPageIndex(doc: DocHandle, marcador: number): number | null {
-    let dest = this.p.FPDFBookmark_GetDest(doc, marcador);
-    if (!dest) {
-      const action = this.p.FPDFBookmark_GetAction(marcador);
-      if (action && this.p.FPDFAction_GetType(action) === PDFACTION_GOTO) {
-        dest = this.p.FPDFAction_GetDest(doc, action);
-      }
+  setOutline(doc: DocHandle, items: OutlineItem[]): void {
+    this.validarOutline(items);
+    // 1) Borra el outline vigente. Cotas anti-ciclo: sin ellas un outline
+    // hostil (A→B→A) podría hacer que este bucle no terminara nunca.
+    const borrados = new Set<number>();
+    let raiz = this.p.FPDFBookmark_GetFirstChild(doc, 0);
+    while (raiz && !borrados.has(raiz) && borrados.size < OUTLINE_MAX_NODES) {
+      borrados.add(raiz);
+      this.p.EPDFBookmark_Delete(doc, raiz);
+      raiz = this.p.FPDFBookmark_GetFirstChild(doc, 0);
     }
-    if (!dest) return null;
-    const pageIndex = this.p.FPDFDest_GetDestPageIndex(doc, dest);
-    return pageIndex >= 0 ? pageIndex : null;
+    // 2) Reconstruye.
+    const total = this.p.FPDF_GetPageCount(doc);
+    const escribir = (padre: number, hijos: OutlineItem[]): void => {
+      for (const item of hijos) {
+        const titulo = this.mem.wide(item.title);
+        const marcador = this.p.EPDFBookmark_AppendChild(doc, padre, titulo);
+        this.mem.free(titulo);
+        if (!marcador) throw new Error('PDFium no pudo crear el marcador');
+        if (item.accion?.tipo === 'uri') {
+          const accion = this.p.EPDFAction_CreateURI(doc, item.accion.uri);
+          if (!accion || !this.p.EPDFBookmark_SetAction(doc, marcador, accion)) throw new Error('PDFium no pudo escribir la acción URI del marcador');
+        } else if (item.pageIndex !== null && item.pageIndex >= 0 && item.pageIndex < total) {
+          const page = this.p.FPDF_LoadPage(doc, item.pageIndex);
+          if (page) {
+            try {
+              const params = this.mem.malloc(4);
+              const dest = this.p.EPDFDest_CreateView(page, 2 /* Fit */, params, 0);
+              this.mem.free(params);
+              if (dest) this.p.EPDFBookmark_SetDest(doc, marcador, dest);
+            } finally {
+              this.p.FPDF_ClosePage(page);
+            }
+          }
+        }
+        escribir(marcador, item.children);
+      }
+    };
+    escribir(0, items);
+  }
+
+  /** Lanza si el árbol supera las cotas de E-031 (profundidad o nodos). Sin efectos. */
+  private validarOutline(items: OutlineItem[]): void {
+    let nodos = 0;
+    const visitar = (hijos: OutlineItem[], profundidad: number): void => {
+      if (hijos.length > 0 && profundidad > OUTLINE_MAX_DEPTH) {
+        throw new RangeError(`Outline demasiado profundo (máximo ${OUTLINE_MAX_DEPTH} niveles de profundidad)`);
+      }
+      for (const h of hijos) {
+        if (h.accion?.tipo === 'no-soportada') {
+          throw new Error(`Hay marcadores con acciones que este editor no puede conservar (${h.accion.descripcion}): no se reescribe el outline`);
+        }
+        if (h.accion?.tipo === 'uri' && validarUrlEnlace(h.accion.uri) === null) throw new Error('URI de marcador con esquema no permitido');
+        if (++nodos > OUTLINE_MAX_NODES) throw new RangeError(`Outline con demasiados nodos (máximo ${OUTLINE_MAX_NODES})`);
+        visitar(h.children, profundidad + 1);
+      }
+    };
+    visitar(items, 0);
+  }
+
+  /**
+   * Destino de un marcador: página (`/Dest` o acción GoTo), URI permitida, o
+   * una acción que no sabemos conservar (`no-soportada`: Launch, GoToR,
+   * JavaScript, nombrada, URI con esquema no permitido, destino sin página).
+   * Solo se LEE: ninguna acción se ejecuta jamás. Sin destino ni acción:
+   * `{ pageIndex: null }` sin `accion`.
+   */
+  private bookmarkTarget(doc: DocHandle, marcador: number): { pageIndex: number | null; accion?: AccionMarcador } {
+    const noSop = (descripcion: string) => ({ pageIndex: null, accion: { tipo: 'no-soportada', descripcion } as AccionMarcador });
+    const paginaDe = (dest: number): number | null => {
+      const i = this.p.FPDFDest_GetDestPageIndex(doc, dest);
+      return i >= 0 ? i : null;
+    };
+    // Primero la acción: `FPDFBookmark_GetDest` también devuelve el `/D` de una
+    // acción GoToR (otro documento) y lo resolvería, falsamente, contra ESTE
+    // documento. Solo sin acción vale el `/Dest` directo.
+    const action = this.p.FPDFBookmark_GetAction(marcador);
+    if (!action) {
+      const dirigido = this.p.FPDFBookmark_GetDest(doc, marcador);
+      if (!dirigido) return { pageIndex: null };
+      const i = paginaDe(dirigido);
+      return i === null ? noSop('Destino sin página resoluble') : { pageIndex: i };
+    }
+    switch (this.p.FPDFAction_GetType(action)) {
+      case PDFACTION_GOTO: {
+        const dest = this.p.FPDFAction_GetDest(doc, action);
+        const i = dest ? paginaDe(dest) : null;
+        return i === null ? noSop('Acción GoTo sin página resoluble') : { pageIndex: i };
+      }
+      case PDFACTION_URI: {
+        // ASCII de 7 bits según la especificación; patrón de dos llamadas (E-028).
+        const uri = leerCadenaPdfium(
+          this.mem,
+          (buf, len) => this.p.FPDFAction_GetURIPath(doc, action, buf, len),
+          (ptr) => this.mem.UTF8ToString(ptr)
+        );
+        return validarUrlEnlace(uri) !== null ? { pageIndex: null, accion: { tipo: 'uri', uri } } : noSop('URI con esquema no permitido');
+      }
+      case PDFACTION_LAUNCH: return noSop('Acción Launch (abrir fichero)');
+      case PDFACTION_REMOTEGOTO: return noSop('Acción GoToR (otro documento)');
+      default: return noSop('Acción no soportada (JavaScript, nombrada u otra)');
+    }
   }
 
   editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult {
