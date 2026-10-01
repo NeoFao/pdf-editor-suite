@@ -52,7 +52,7 @@
   --ed-tablist-h: 36px;
   --ed-contextbar-h: 44px;
   --ed-statusbar-h: 28px;
-  --ed-sidebar-w: 168px;
+  --ed-sidebar-w: 208px; /* ancho de 3 pestañas (Páginas, Marcadores, Comentarios) sin recorte */
 
   color-scheme: light;
 }
@@ -333,7 +333,7 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   box-sizing: border-box;
 }
 .sidebar-tabs { display: flex; flex: 0 0 auto; border-bottom: 1px solid var(--ed-border); }
-.sidebar-tabs .tab { flex: 1; padding: var(--ed-sp-2) 4px; border-bottom: 2px solid transparent; color: var(--ed-text-muted); }
+.sidebar-tabs .tab { flex: 1 1 auto; min-width: 0; white-space: nowrap; padding: var(--ed-sp-2) 2px; border-bottom: 2px solid transparent; color: var(--ed-text-muted); }
 .sidebar-tabs .tab[aria-selected="true"] { color: var(--ed-accent-strong); border-bottom-color: var(--ed-accent); background: var(--ed-hover); }
 
 #thumbs, #outline-panel { flex: 1; overflow: auto; padding: var(--ed-sp-2); box-sizing: border-box; }

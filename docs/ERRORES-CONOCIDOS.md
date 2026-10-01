@@ -2072,3 +2072,23 @@ foco devuelto) usado por `TextPanel` y `CompressPanel`; `role="status"` +
 - `tests/unit/contraste.test.ts` calcula las ratios leyendo `estilos.css`.
 - Sin regla determinista: no hay un patrón de código que la máquina pueda
   reconocer de forma fiable (a diferencia de un `innerHTML`); lo cubren los tests.
+
+### E-051 · Las tres pestañas del panel lateral no cabían en 168 px y la primera quedaba recortada · encontrado al integrar ramas en paralelo
+
+**Síntoma.** Con las pestañas Páginas, Marcadores y Comentarios, el panel lateral
+(`--ed-sidebar-w: 168px`) desbordaba: al enfocar la última, el panel se
+desplazaba ~39 px y «Páginas» y los botones de la barra de marcadores salían
+recortados por la izquierda. Cada rama por separado (dos pestañas, o tres en la
+de comentarios sobre una barra distinta) pasaba su verify.
+
+**Causa raíz.** Dos ramas tocaron la misma zona (`App.ts` sidebar,
+`estilos.css`) sin que ninguna viera el resultado conjunto: el ancho del panel
+se dimensionó para dos pestañas. Los tests unitarios no calculan maquetación.
+
+**Arreglo.** Ancho del panel 208 px, pestañas `flex: 1 1 auto; min-width: 0;
+white-space: nowrap`. Test: `tests/e2e/next/panel-lateral-pestanas.spec.ts`
+(cada pestaña dentro del panel, sin truncar, sin `scrollLeft`).
+
+**Cómo se detecta ahora.** Ese test e2e y la revisión visual obligatoria
+(AGENTS.md §2.8) tras integrar ramas que añaden controles al mismo contenedor.
+No hay regla guard: no existe un patrón de código fiable.
