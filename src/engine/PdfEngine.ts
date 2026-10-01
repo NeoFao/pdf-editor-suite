@@ -180,6 +180,13 @@ export interface PdfEngine {
    */
   getOutline(doc: DocHandle): OutlineItem[];
   /**
+   * Reescribe el árbol de marcadores completo (reemplaza el anterior). Lanza
+   * `RangeError` —sin tocar el documento— si el árbol supera las cotas de
+   * E-031 (`OUTLINE_MAX_DEPTH`, `OUTLINE_MAX_NODES`). `pageIndex` nulo o fuera
+   * de rango se escribe sin destino.
+   */
+  setOutline(doc: DocHandle, items: OutlineItem[]): void;
+  /**
    * Edita el texto de un run EN SITIO: conserva fuente, tamaño, color y posición.
    * No crea objetos nuevos ni rasteriza. Devuelve `glyph-missing` (sin modificar)
    * si la fuente del run no tiene algún glifo del nuevo texto.

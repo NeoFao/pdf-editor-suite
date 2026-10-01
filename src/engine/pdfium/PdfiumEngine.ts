@@ -34,14 +34,14 @@ const FPDF_FORMFIELD_KIND: Record<number, FormFieldKind> = {
 const FPDF_FORMFLAG_READONLY = 0x01; // bit 1 de /Ff (PDF 32000-1, tabla 221).
 const FPDF_FORMFLAG_CHOICE_MULTISELECT = 0x200000; // bit 22 de /Ff (tabla 231, solo campos de elección).
 
+import { OUTLINE_MAX_DEPTH, OUTLINE_MAX_NODES } from '../cotasOutline';
+
 const PDFACTION_GOTO = 1; // FPDFAction_GetType: acción "ir a" (destino dentro del propio documento).
 
 // Cotas del recorrido del outline (E-031, ver docs/ERRORES-CONOCIDOS.md): un
 // PDF hostil puede definir un outline con ciclos (un /Next o /First que
 // apunta hacia atrás) o una profundidad/cantidad de nodos desmedida. Sin
 // estas cotas, un `while` que sigue /NextSibling entraría en bucle infinito.
-const OUTLINE_MAX_DEPTH = 32;
-const OUTLINE_MAX_NODES = 10000;
 
 /**
  * Implementación de PdfEngine sobre @embedpdf/pdfium (WASM).
@@ -392,6 +392,73 @@ export class PdfiumEngine implements PdfEngine {
       return items;
     };
     return leerHermanos(0, 0);
+  }
+
+  /**
+   * Reescribe el árbol de marcadores COMPLETO con `EPDFBookmark_*` (el build
+   * de @embedpdf/pdfium las expone; son las únicas que escriben outline).
+   * Estrategia: validar el árbol con las cotas de E-031 ANTES de tocar nada
+   * (así un árbol rechazado deja el documento intacto), borrar los marcadores
+   * raíz actuales (`EPDFBookmark_Delete` arrastra a los hijos y reengancha
+   * /First, /Last, /Next, /Prev, /Count, /Parent) y reconstruir con
+   * `AppendChild` (padre 0 = raíz). Cada destino es `[página /Fit]`
+   * (`EPDFDest_CreateView`, modo 2 = Fit, 0 parámetros); `pageIndex` nulo o
+   * fuera de rango se escribe sin destino. El título lo codifica PDFium
+   * (UTF-16BE con BOM): sobrevive ñ, emoji (pares sustitutos) y similares.
+   * Límite conocido: un marcador cuyo destino no es una página (URI, Launch…)
+   * llega aquí con `pageIndex: null` y pierde su acción original al reescribir.
+   */
+  setOutline(doc: DocHandle, items: OutlineItem[]): void {
+    this.validarOutline(items);
+    // 1) Borra el outline vigente. Cotas anti-ciclo: sin ellas un outline
+    // hostil (A→B→A) podría hacer que este bucle no terminara nunca.
+    const borrados = new Set<number>();
+    let raiz = this.p.FPDFBookmark_GetFirstChild(doc, 0);
+    while (raiz && !borrados.has(raiz) && borrados.size < OUTLINE_MAX_NODES) {
+      borrados.add(raiz);
+      this.p.EPDFBookmark_Delete(doc, raiz);
+      raiz = this.p.FPDFBookmark_GetFirstChild(doc, 0);
+    }
+    // 2) Reconstruye.
+    const total = this.p.FPDF_GetPageCount(doc);
+    const escribir = (padre: number, hijos: OutlineItem[]): void => {
+      for (const item of hijos) {
+        const titulo = this.mem.wide(item.title);
+        const marcador = this.p.EPDFBookmark_AppendChild(doc, padre, titulo);
+        this.mem.free(titulo);
+        if (!marcador) throw new Error('PDFium no pudo crear el marcador');
+        if (item.pageIndex !== null && item.pageIndex >= 0 && item.pageIndex < total) {
+          const page = this.p.FPDF_LoadPage(doc, item.pageIndex);
+          if (page) {
+            try {
+              const params = this.mem.malloc(4);
+              const dest = this.p.EPDFDest_CreateView(page, 2 /* Fit */, params, 0);
+              this.mem.free(params);
+              if (dest) this.p.EPDFBookmark_SetDest(doc, marcador, dest);
+            } finally {
+              this.p.FPDF_ClosePage(page);
+            }
+          }
+        }
+        escribir(marcador, item.children);
+      }
+    };
+    escribir(0, items);
+  }
+
+  /** Lanza si el árbol supera las cotas de E-031 (profundidad o nodos). Sin efectos. */
+  private validarOutline(items: OutlineItem[]): void {
+    let nodos = 0;
+    const visitar = (hijos: OutlineItem[], profundidad: number): void => {
+      if (hijos.length > 0 && profundidad > OUTLINE_MAX_DEPTH) {
+        throw new RangeError(`Outline demasiado profundo (máximo ${OUTLINE_MAX_DEPTH} niveles de profundidad)`);
+      }
+      for (const h of hijos) {
+        if (++nodos > OUTLINE_MAX_NODES) throw new RangeError(`Outline con demasiados nodos (máximo ${OUTLINE_MAX_NODES})`);
+        visitar(h.children, profundidad + 1);
+      }
+    };
+    visitar(items, 0);
   }
 
   /**
