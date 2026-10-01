@@ -55,6 +55,9 @@ import type { PtPoint } from '../coords/PageGeometry';
 import type { RectPt, OutlineItem } from '../engine/PdfEngine';
 import { STANDARD_FONTS } from '../engine/standardFontFor';
 import { stripSubsetPrefix } from '../engine/fontClassify';
+import { ComentariosPanel } from './ComentariosPanel';
+import { SetNoteTextCmd } from '../commands/SetNoteText';
+import { RemoveNoteCmd } from '../commands/RemoveNote';
 import { crearIcono, type NombreIcono } from './iconos';
 import { contarRenderPage } from '../diagnostico';
 
@@ -193,6 +196,9 @@ export class App {
   private readonly outlineEl: HTMLElement;
   private readonly tabPages: HTMLButtonElement;
   private readonly tabOutline: HTMLButtonElement;
+  private readonly tabComments: HTMLButtonElement;
+  private readonly commentsEl: HTMLElement;
+  private readonly comentarios: ComentariosPanel;
   private readonly status: HTMLElement;
   /** Aviso visible (no solo `#status`/consola) con las advertencias de una conversión Word/Markdown -> PDF (§9 fila #4: "no se pierde en silencio"). Oculto (`hidden`) cuando no hay advertencias pendientes. */
   private readonly avisoConversionEl: HTMLElement;
@@ -664,9 +670,11 @@ export class App {
     tabs.setAttribute('role', 'tablist');
     this.tabPages = this.button('Páginas', 'tab-pages', () => this.showSidebarTab('pages'));
     this.tabOutline = this.button('Marcadores', 'tab-outline', () => this.showSidebarTab('outline'));
+    this.tabComments = this.button('Comentarios', 'tab-comments', () => this.showSidebarTab('comments'));
     this.tabPages.className = 'tab';
     this.tabOutline.className = 'tab';
-    tabs.append(this.tabPages, this.tabOutline);
+    this.tabComments.className = 'tab';
+    tabs.append(this.tabPages, this.tabOutline, this.tabComments);
 
     this.thumbsEl = document.createElement('div');
     this.thumbsEl.id = 'thumbs';
@@ -675,7 +683,19 @@ export class App {
     this.outlineEl.id = 'outline-panel';
     this.outlineEl.style.display = 'none';
 
-    sidebar.append(tabs, this.thumbsEl, this.outlineEl);
+    this.commentsEl = document.createElement('div');
+    this.commentsEl.id = 'comments-panel';
+    this.commentsEl.style.display = 'none';
+    this.comentarios = new ComentariosPanel(this.commentsEl, {
+      totalPaginas: () => this.session?.model.pages.length ?? 0,
+      leerPagina: (i) => (this.session ? this.session.engine.getComments(this.session.doc, i) : []),
+      irAPagina: (i) => this.goToPage(i),
+      resaltar: (p, a) => this.viewer?.resaltarNota(p, a),
+      editar: (p, a, t) => { void this.bus?.execute(new SetNoteTextCmd(p, a, t)); this.setStatus('Comentario editado.'); },
+      borrar: (p, a) => { void this.bus?.execute(new RemoveNoteCmd(p, a)); this.setStatus('Comentario borrado.'); }
+    });
+
+    sidebar.append(tabs, this.thumbsEl, this.outlineEl, this.commentsEl);
 
     this.viewerEl = document.createElement('div');
     this.viewerEl.id = 'viewer';
@@ -1079,6 +1099,7 @@ export class App {
       if (this.currentPage >= total) this.currentPage = Math.max(0, total - 1);
       this.buildThumbnails();
       this.buildOutline();
+      this.comentarios.invalidarTodo();
       this.setActiveThumb(this.currentPage);
       this.updateIndicator();
     });
@@ -1087,7 +1108,7 @@ export class App {
     // conjunto de páginas no cambió, así que basta con refrescar la
     // miniatura de esa página (nunca las 500) — `refreshThumbnail` no hace
     // nada si esa miniatura seguía sin pintar (placeholder fuera de vista).
-    this.session.model.on('change', (pageIndex) => this.refreshThumbnail(pageIndex));
+    this.session.model.on('change', (pageIndex) => { this.refreshThumbnail(pageIndex); this.comentarios.invalidarPagina(pageIndex); });
     // Tras CUALQUIER recarga del modelo (deshacer/rehacer de un cambio de
     // fuente/tamaño/página, que recrean el documento desde una copia —
     // `EditSession.reload`—, lo reconstruyen en sitio —`refresh()`— o tocan
@@ -1108,6 +1129,7 @@ export class App {
     this.session.model.onPageRebuilt(() => this.reconcileSelectionAfterReload());
     this.buildThumbnails();
     this.buildOutline();
+    this.comentarios.invalidarTodo();
     this.showSidebarTab('pages');
     this.updateIndicator();
     this.setStatus(`${this.session.model.pages.length} página(s)`);
@@ -1709,11 +1731,15 @@ export class App {
   }
 
   /** Alterna el panel lateral entre miniaturas de página y árbol de marcadores. */
-  private showSidebarTab(which: 'pages' | 'outline'): void {
+  private showSidebarTab(which: 'pages' | 'outline' | 'comments'): void {
     this.thumbsEl.style.display = which === 'pages' ? 'block' : 'none';
     this.outlineEl.style.display = which === 'outline' ? 'block' : 'none';
+    this.commentsEl.style.display = which === 'comments' ? 'block' : 'none';
     this.tabPages.setAttribute('aria-selected', String(which === 'pages'));
     this.tabOutline.setAttribute('aria-selected', String(which === 'outline'));
+    this.tabComments.setAttribute('aria-selected', String(which === 'comments'));
+    // Lectura perezosa: el panel solo toca el motor mientras está a la vista.
+    this.comentarios.setVisible(which === 'comments');
   }
 
   /** Árbol de marcadores del documento. Se reconstruye al abrir otro documento y tras cualquier `onReload` (borrar/mover página cambia los índices). */

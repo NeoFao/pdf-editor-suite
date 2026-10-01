@@ -45,6 +45,21 @@ export type SetSizeResult =
 /** Nota adhesiva (anotación PDF real de subtipo Text). `index` es su índice entre TODAS las anotaciones de la página. */
 export interface NoteInfo { index: number; text: string; rectPt: RectPt }
 
+/**
+ * Tipo de una anotación con comentario, tal como la lista el panel "Comentarios".
+ * Alcance: solo anotaciones REALES del PDF. Los resaltados/subrayados/tachados
+ * que crea este editor son paths de contenido (no anotaciones) y por tanto no
+ * aparecen; sí aparecen los de ese tipo que traiga un PDF ajeno con `/Contents`.
+ */
+export type CommentKind = 'note' | 'highlight' | 'underline' | 'strikeout' | 'freetext' | 'other';
+
+/**
+ * Anotación con comentario de una página. `index` es su índice entre TODAS las
+ * anotaciones de la página (igual convención que `NoteInfo.index`); `author` es
+ * `/T` ('' si no existe); `rectPt` en puntos PDF (origen abajo-izquierda).
+ */
+export interface CommentInfo { index: number; kind: CommentKind; text: string; author: string; rectPt: RectPt }
+
 /** Tipo de campo AcroForm (FPDF_FORMFIELD_*). Fase 1 solo edita 'text' y 'checkbox'. */
 export type FormFieldKind = 'text' | 'checkbox' | 'radio' | 'combo' | 'list' | 'button' | 'signature' | 'unknown';
 
@@ -317,6 +332,18 @@ export interface PdfEngine {
   addNote(doc: DocHandle, pageIndex: number, spec: { xPt: number; yPt: number; text: string }): number;
   /** Anotaciones de subtipo Text de la página. */
   getNotes(doc: DocHandle, pageIndex: number): NoteInfo[];
+  /**
+   * Anotaciones con comentario de la página: todas las de subtipo Text (aunque
+   * su texto esté vacío) y cualquier otra de marcado (resaltado, subrayado,
+   * tachado, texto libre, sello...) con `/Contents` no vacío. Excluye enlaces,
+   * popups y widgets de formulario.
+   */
+  getComments(doc: DocHandle, pageIndex: number): CommentInfo[];
+  /**
+   * Reescribe `/Contents` de la anotación en `index` (entre todas las de la
+   * página). `false` si el índice no existe o es un enlace/popup/widget.
+   */
+  setNoteText(doc: DocHandle, pageIndex: number, index: number, text: string): boolean;
   /** Elimina la anotación en `index` (entre todas las de la página). */
   removeNote(doc: DocHandle, pageIndex: number, index: number): boolean;
   /** Campos de formulario AcroForm de la página (todos los tipos son editables desde fase 2, salvo botón/firma). */
