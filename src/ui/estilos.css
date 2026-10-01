@@ -629,3 +629,12 @@ select, input[type="text"], input[type="search"], input[type="number"] {
     z-index: 40;
   }
 }
+
+/* Panel de marcadores editable: barra de acciones, selección y campo de título inline. */
+#outline-toolbar { flex: 0 0 auto; flex-wrap: wrap; gap: 2px; padding: var(--ed-sp-1, 4px); border-bottom: 1px solid var(--ed-border); }
+#outline-toolbar .outline-action { font-size: var(--ed-font-sm); padding: 2px 6px; border-radius: var(--ed-radius-sm); color: var(--ed-text); }
+#outline-toolbar .outline-action:disabled { opacity: 0.4; cursor: default; }
+#outline-panel [role="treeitem"] { outline: none; }
+#outline-panel [role="treeitem"].seleccionado > div { background: var(--ed-hover); }
+#outline-panel [role="treeitem"]:focus-visible > div { outline: 2px solid var(--ed-focus-ring); outline-offset: -2px; }
+#outline-panel input.outline-edit { font: inherit; color: var(--ed-text); background: var(--ed-surface, transparent); border: 1px solid var(--ed-accent); border-radius: var(--ed-radius-sm); padding: 1px 4px; }
