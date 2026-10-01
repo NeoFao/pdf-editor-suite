@@ -1,4 +1,4 @@
-import type { OutlineItem } from '../engine/PdfEngine';
+import { outlineTieneAccionesNoSoportadas, type OutlineItem } from '../engine/PdfEngine';
 import {
   borrar, cambiarDestino, contarNodos, desangrar, insertarHermano, insertarHijo, mover, obtener, renombrar, sangrar,
   type Resultado, type Ruta
@@ -77,8 +77,17 @@ export class PanelMarcadores {
     this.actualizarBarra();
   }
 
+  /** true si el documento tiene marcadores con acciones que no se pueden conservar: la edición queda desactivada (nada se reescribe, nada se ejecuta). */
+  private bloqueado(): boolean {
+    return outlineTieneAccionesNoSoportadas(this.o.obtenerArbol());
+  }
+
   private actualizarBarra(): void {
     const arbol = this.o.obtenerArbol();
+    if (this.bloqueado()) {
+      for (const btn of this.botones.values()) btn.disabled = true;
+      return;
+    }
     const r = this.sel;
     const existe = !!r && !!obtener(arbol, r);
     const set = (k: string, ok: boolean): void => { this.botones.get(k)!.disabled = !ok; };
@@ -96,7 +105,7 @@ export class PanelMarcadores {
   // ------------------------------------------------------------- acciones
 
   private async ejecutar(despues: OutlineItem[] | null, etiqueta: string, nuevaSel: Ruta | null): Promise<void> {
-    if (!despues) return;
+    if (!despues || this.bloqueado()) return;
     const antes = this.o.obtenerArbol();
     this.borrador = null;
     this.editando = null;
@@ -121,6 +130,7 @@ export class PanelMarcadores {
 
   /** Nuevo marcador: aparece un campo de título en su sitio; se escribe en el documento al confirmar (Intro). */
   nuevo(comoHijo: boolean): void {
+    if (this.bloqueado()) return;
     const real = this.o.obtenerArbol();
     const sel = this.sel && obtener(real, this.sel) ? this.sel : null;
     const item: OutlineItem = { title: '', pageIndex: this.o.paginaActual(), children: [] };
@@ -134,28 +144,28 @@ export class PanelMarcadores {
   }
 
   private renombrarSel(): void {
-    if (!this.sel) return;
+    if (!this.sel || this.bloqueado()) return;
     this.editando = this.sel;
     this.render();
   }
 
   private destinoActual(): void {
-    if (!this.sel) return;
+    if (!this.sel || this.bloqueado()) return;
     void this.ejecutar(cambiarDestino(this.o.obtenerArbol(), this.sel, this.o.paginaActual()), 'Destino del marcador cambiado', this.sel);
   }
 
   private moverSel(delta: -1 | 1): void {
-    if (!this.sel) return;
+    if (!this.sel || this.bloqueado()) return;
     void this.aplicarResultado(mover(this.o.obtenerArbol(), this.sel, delta), delta < 0 ? 'Marcador movido arriba' : 'Marcador movido abajo');
   }
 
   private sangrarSel(): void {
-    if (!this.sel) return;
+    if (!this.sel || this.bloqueado()) return;
     void this.aplicarResultado(sangrar(this.o.obtenerArbol(), this.sel), 'Marcador sangrado');
   }
 
   private desangrarSel(): void {
-    if (!this.sel) return;
+    if (!this.sel || this.bloqueado()) return;
     void this.aplicarResultado(desangrar(this.o.obtenerArbol(), this.sel), 'Marcador desangrado');
   }
 
@@ -163,7 +173,7 @@ export class PanelMarcadores {
     const arbol = this.o.obtenerArbol();
     const ruta = this.sel;
     const item = ruta ? obtener(arbol, ruta) : null;
-    if (!ruta || !item) return;
+    if (!ruta || !item || this.bloqueado()) return;
     const hijos = contarNodos(item.children);
     if (hijos > 0) {
       const ok = window.confirm(`¿Borrar «${item.title}» y sus ${hijos} marcador(es) hijo(s)?`);
@@ -215,6 +225,13 @@ export class PanelMarcadores {
       c.appendChild(p);
       this.actualizarBarra();
       return;
+    }
+    if (this.bloqueado()) {
+      const aviso = document.createElement('p');
+      aviso.id = 'outline-aviso-bloqueo';
+      aviso.setAttribute('role', 'note');
+      aviso.textContent = 'Este documento tiene marcadores con acciones que este editor aún no puede conservar; la edición está desactivada para no perderlas.';
+      c.appendChild(aviso);
     }
     const tree = this.construirLista(items, [], true);
     tree.setAttribute('role', 'tree');
@@ -370,7 +387,9 @@ export class PanelMarcadores {
     const tieneHijos = item.children.length > 0;
     const abierto = li.getAttribute('aria-expanded') === 'true';
 
+    const edicion = !this.bloqueado();
     if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+      if (!edicion) return;
       manejar(); this.seleccionar(ruta); this.moverSel(e.key === 'ArrowUp' ? -1 : 1); return;
     }
     switch (e.key) {
@@ -393,10 +412,11 @@ export class PanelMarcadores {
         manejar();
         if (item.pageIndex !== null) this.o.ir(item.pageIndex);
         return;
-      case 'F2': manejar(); this.seleccionar(ruta); this.renombrarSel(); return;
-      case 'Delete': manejar(); this.seleccionar(ruta); this.borrarSel(); return;
-      case 'Insert': manejar(); this.seleccionar(ruta); this.nuevo(e.ctrlKey); return;
+      case 'F2': if (!edicion) return; manejar(); this.seleccionar(ruta); this.renombrarSel(); return;
+      case 'Delete': if (!edicion) return; manejar(); this.seleccionar(ruta); this.borrarSel(); return;
+      case 'Insert': if (!edicion) return; manejar(); this.seleccionar(ruta); this.nuevo(e.ctrlKey); return;
       case 'Tab': {
+        if (!edicion) return;
         // Tab/Mayús+Tab sangran/desangran (como Acrobat). Solo si la operación
         // es posible: si no, Tab sigue su camino normal y el foco no queda atrapado.
         const r = e.shiftKey ? desangrar(arbol, ruta) : sangrar(arbol, ruta);

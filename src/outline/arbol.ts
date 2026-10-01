@@ -10,7 +10,7 @@ import { OUTLINE_MAX_DEPTH, OUTLINE_MAX_NODES } from '../engine/cotasOutline';
 export type Ruta = number[];
 
 export function clonar(items: OutlineItem[]): OutlineItem[] {
-  return items.map((i) => ({ title: i.title, pageIndex: i.pageIndex, children: clonar(i.children) }));
+  return items.map((i) => ({ title: i.title, pageIndex: i.pageIndex, children: clonar(i.children), ...(i.accion ? { accion: { ...i.accion } } : {}) }));
 }
 
 export function contarNodos(items: OutlineItem[]): number {
@@ -97,6 +97,7 @@ export function cambiarDestino(items: OutlineItem[], ruta: Ruta, pageIndex: numb
   const n = obtener(copia, ruta);
   if (!n) return null;
   n.pageIndex = pageIndex;
+  delete n.accion; // reapuntar a una página sustituye la acción (p. ej. una URI) a petición explícita del usuario
   return copia;
 }
 

@@ -26,12 +26,17 @@ el motor lo rechazaría.
 árboles enteros; deshacer = `setOutline(antes)`. Notifica a la UI con
 `DocumentModel.onOutlineChange` (no reconstruye páginas ni miniaturas).
 
-## Límite conocido
+## Acciones de marcador (sin pérdidas)
 
-Un marcador cuyo destino no es una página del documento (acción URI, Launch, destino con
-nombre sin resolver…) se lee como `pageIndex: null` y, al reescribir el árbol (cualquier
-edición del outline), se escribe SIN destino: pierde esa acción. `OutlineItem` no la
-transporta. Si importa, el siguiente paso es añadir al tipo un campo opaco de acción.
+`OutlineItem.accion` (opcional) transporta lo que no es un destino de página: `{tipo:'uri', uri}`
+(solo http/https/mailto, `src/engine/esquemaUri.ts`) se lee con `FPDFAction_GetURIPath` (dos
+llamadas, E-028) y se recrea con `EPDFAction_CreateURI` + `EPDFBookmark_SetAction`. Cualquier otra
+cosa (Launch, GoToR, JavaScript, nombrada, URI con esquema no permitido, destino sin página) se lee
+como `{tipo:'no-soportada'}`: NUNCA se ejecuta, y `setOutline` se niega a reescribir (lanza antes de
+tocar nada); el panel desactiva toda la edición con un aviso. Ausencia de `accion` = destino de
+página. Ojo: `FPDFBookmark_GetDest` devuelve también el `/D` de un GoToR y lo resolvería contra este
+documento, por eso `bookmarkTarget` consulta primero la acción. "Destino" (reapuntar a la página
+actual) sustituye a propósito una URI.
 
 ## UI y teclado
 

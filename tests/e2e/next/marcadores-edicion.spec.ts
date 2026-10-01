@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const MARCADORES = path.resolve(AQUI, '../../fixtures/generados/marcadores.pdf');
+const CON_URI = path.resolve(AQUI, '../../fixtures/generados/marcadores-uri.pdf');
+const CON_LAUNCH = path.resolve(AQUI, '../../fixtures/generados/marcadores-launch.pdf');
+const CON_JS = path.resolve(AQUI, '../../fixtures/generados/marcadores-js.pdf');
 const NATIVO = path.resolve(AQUI, '../../fixtures/generados/nativo.pdf');
 
 // Edición de marcadores (T4). marcadores.pdf: 3 páginas; "Capítulo 1" (p.1) con
@@ -188,3 +191,40 @@ test('marcadores: "Destino" reapunta el marcador a la página actual', async ({ 
   await item(page, 'Capítulo 2').locator(':scope > div > .outline-item').click();
   await expect(page.locator('#page-indicator')).toHaveText('2 / 3'); // antes era 3 / 3
 });
+
+test('marcadores: renombrar uno de página conserva la URI del otro tras guardar y reabrir', async ({ page }) => {
+  await abrirPanel(page, CON_URI);
+  await expect(page.locator('#outline-aviso-bloqueo')).toHaveCount(0);
+  await item(page, 'Capítulo').focus();
+  await page.keyboard.press('F2');
+  await page.locator('input.outline-edit').fill('Capítulo ñ');
+  await page.locator('input.outline-edit').press('Enter');
+  const [descarga] = await Promise.all([page.waitForEvent('download'), page.locator('#btn-save').click()]);
+  const destino = path.join(test.info().outputDir, 'con-uri.pdf');
+  await descarga.saveAs(destino);
+  const bytes = (await import('node:fs')).readFileSync(destino).toString('latin1');
+  expect(bytes).toContain('https://example.com/');
+  await abrirPanel(page, destino);
+  expect(await titulos(page)).toEqual(['Capítulo ñ', 'Web']);
+  await expect(page.locator('#outline-aviso-bloqueo')).toHaveCount(0);
+  await expect(page.locator('#btn-outline-renombrar')).toBeDisabled(); // sin selección
+});
+
+for (const [nombre, fichero] of [['Launch', CON_LAUNCH], ['JavaScript', CON_JS]] as const) {
+  test(`marcadores: con una acción ${nombre} la edición queda desactivada con aviso y no se reescribe nada`, async ({ page }) => {
+    await abrirPanel(page, fichero);
+    await expect(page.locator('#outline-aviso-bloqueo')).toContainText('la edición está desactivada para no perderlas');
+    await item(page, 'Capítulo').locator(':scope > div > .outline-item').click();
+    for (const id of ['nuevo', 'hijo', 'renombrar', 'destino', 'subir', 'bajar', 'sangrar', 'desangrar', 'borrar']) {
+      await expect(page.locator(`#btn-outline-${id}`)).toBeDisabled();
+    }
+    await item(page, 'Capítulo').focus();
+    await page.keyboard.press('F2');
+    await page.keyboard.press('Delete');
+    await expect(page.locator('input.outline-edit')).toHaveCount(0);
+    expect(await titulos(page)).toEqual(['Capítulo', 'Web']);
+    // La navegación sigue funcionando.
+    await item(page, 'Capítulo').locator(':scope > div > .outline-item').click();
+    await expect(page.locator('#page-indicator')).toHaveText('1 / 2');
+  });
+}

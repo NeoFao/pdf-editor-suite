@@ -73,3 +73,11 @@ test('sangrar respeta OUTLINE_MAX_DEPTH (E-031)', () => {
   expect(sangrar(arbol, [1])).toBeNull();
   expect(sangrar([n('a'), n('b')], [1])).not.toBeNull();
 });
+
+test('clonar conserva la acción URI y renombrar no la toca; cambiarDestino la sustituye por la página', () => {
+  const arbol: OutlineItem[] = [{ title: 'Web', pageIndex: null, children: [], accion: { tipo: 'uri', uri: 'https://a.es' } }];
+  expect(renombrar(arbol, [0], 'X')![0]!.accion).toEqual({ tipo: 'uri', uri: 'https://a.es' });
+  const r = cambiarDestino(arbol, [0], 2)![0]!;
+  expect(r.pageIndex).toBe(2);
+  expect(r.accion).toBeUndefined();
+});

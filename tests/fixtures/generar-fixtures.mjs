@@ -5,7 +5,7 @@
  * cada corrida (`npm run test:fixtures`). Así el repo no acumula binarios y
  * cualquier máquina obtiene exactamente el mismo documento.
  */
-import { PDFDocument, StandardFonts, rgb, PDFName, PDFHexString } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb, PDFName, PDFHexString, PDFString } from 'pdf-lib';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -652,6 +652,27 @@ function docxHostil() {
   return construirZip([{ nombre: 'word/document.xml', datos: ceros, metodo: 8 }]);
 }
 
+/**
+ * PDF de 2 páginas con marcadores planos: "Capítulo" (destino página 1) y
+ * "Web" con una acción en vez de destino. `accion` es el diccionario /A del
+ * segundo marcador (URI, Launch, JavaScript…): para probar que el editor
+ * conserva una URI y se niega a reescribir lo que no sabe conservar.
+ */
+async function pdfMarcadoresConAccion(accion) {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const p1 = doc.addPage([595.28, 841.89]);
+  p1.drawText('Pagina 1', { x: 60, y: 760, size: 20, font });
+  doc.addPage([595.28, 841.89]).drawText('Pagina 2', { x: 60, y: 760, size: 20, font });
+  const { context, catalog } = doc;
+  const root = context.nextRef(), a = context.nextRef(), b = context.nextRef();
+  context.assign(a, context.obj({ Title: PDFHexString.fromText('Capítulo'), Parent: root, Next: b, Dest: context.obj([p1.ref, PDFName.of('Fit')]) }));
+  context.assign(b, context.obj({ Title: PDFHexString.fromText('Web'), Parent: root, Prev: a, A: context.obj(accion) }));
+  context.assign(root, context.obj({ Type: 'Outlines', First: a, Last: b, Count: 2 }));
+  catalog.set(PDFName.of('Outlines'), root);
+  return doc.save();
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -663,6 +684,9 @@ async function main() {
     'subconjunto.pdf': await pdfSubconjunto(),
     'marcadores.pdf': await pdfMarcadores(),
     'outline-ciclo.pdf': await pdfOutlineCiclo(),
+    'marcadores-uri.pdf': await pdfMarcadoresConAccion({ S: 'URI', URI: PDFString.of('https://example.com/') }),
+    'marcadores-launch.pdf': await pdfMarcadoresConAccion({ S: 'Launch', F: PDFString.of('calc.exe') }),
+    'marcadores-js.pdf': await pdfMarcadoresConAccion({ S: 'JavaScript', JS: PDFString.of('app.alert(1)') }),
     'paginas-pequenas.pdf': await pdfPaginasPequenas(),
     'grande.pdf': await pdfGrande(),
     'paginas-pequenas-marcadores.pdf': await pdfPaginasPequenasMarcadores(),
