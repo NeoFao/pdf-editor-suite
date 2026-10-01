@@ -1,37 +1,11 @@
-import { test, expect, beforeAll, afterAll } from 'vitest';
+import { test, expect } from 'vitest';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
-import { chromium, type Browser } from '@playwright/test';
 import { PdfiumEngine } from '../../src/engine/pdfium/PdfiumEngine';
+import { JPEG_2X2_ROJO } from './_jpegsFijos';
 
-// `replaceImageJpeg` necesita un JPEG YA CODIFICADO de verdad (no hay
-// codificador JPEG en Node ni en este repo — AGENTS.md §5 prohíbe añadir una
-// dependencia nueva solo para esto). Se genera una vez, con un `<canvas>`
-// real en Chromium (Playwright ya es dependencia de desarrollo), en vez de
-// escribir bytes JPEG a mano: un JPEG hecho a mano es fácil de dejar
-// inválido (tablas de Huffman/cuantización, datos de escaneo entrópico) sin
-// que se note hasta que PDFium lo rechace en silencio.
-let browser: Browser;
-let JPEG_2X2_ROJO: Uint8Array;
-
-beforeAll(async () => {
-  browser = await chromium.launch();
-  const page = await browser.newPage();
-  const dataUrl = await page.evaluate(() => {
-    const c = document.createElement('canvas');
-    c.width = 2; c.height = 2;
-    const ctx = c.getContext('2d')!;
-    ctx.fillStyle = 'rgb(255,0,0)';
-    ctx.fillRect(0, 0, 2, 2);
-    return c.toDataURL('image/jpeg', 0.92);
-  });
-  await page.close();
-  const base64 = dataUrl.slice(dataUrl.indexOf(',') + 1);
-  JPEG_2X2_ROJO = new Uint8Array(Buffer.from(base64, 'base64'));
-}, 30000);
-
-afterAll(async () => {
-  await browser.close();
-});
+// `replaceImageJpeg` necesita un JPEG YA CODIFICADO de verdad: bytes fijos en
+// ./_jpegsFijos.ts (generados una vez con Chromium), no un navegador dentro de
+// Vitest (E-049).
 
 function imagenDegradado(w: number, h: number): Uint8Array {
   const rgba = new Uint8Array(w * h * 4);

@@ -918,6 +918,39 @@ export const sinCronometrajeEnUnit = {
   }
 };
 
+/* ── tests/unit no lanza navegadores (E-049) ───────────────────────────── */
+export const sinPlaywrightEnUnit = {
+  id: 'sin-playwright-en-unit',
+  titulo: 'tests/unit/** no importa Playwright: no lanza navegadores dentro de Vitest',
+  comoArreglar:
+    'Lanzar Chromium en un hook de Vitest hace que, con varios workers en paralelo, el ' +
+    'arranque supere el timeout (10 s) y la suite falle al azar. Si solo necesitas bytes de ' +
+    'ejemplo (un JPEG, un PNG), usa constantes base64 fijas (ver tests/unit/_jpegsFijos.ts). ' +
+    'Si el comportamiento necesita un navegador de verdad, el test va en tests/e2e/next/ ' +
+    '(Playwright) — ver docs/TESTING.md.',
+  ejecutar() {
+    const hallazgos = [];
+    const visitar = (dir) => {
+      for (const ent of fs.readdirSync(path.join(RAIZ, dir), { withFileTypes: true })) {
+        const rel = `${dir}/${ent.name}`;
+        if (ent.isDirectory()) { visitar(rel); continue; }
+        if (!/\.(ts|mjs|js)$/.test(ent.name)) continue;
+        if (tieneDeuda(rel, this.id)) continue;
+        const contenido = leer(rel);
+        const exentas = lineasExentas(contenido, this.id);
+        contenido.split('\n').forEach((linea, i) => {
+          if (exentas.has(i + 1)) return;
+          if (/\b(from\s+|import\s*\(\s*|require\s*\(\s*)['"](@playwright\/test|playwright(-core)?)['"]/.test(linea)) {
+            hallazgos.push(hallazgo(rel, i + 1, 'importa Playwright dentro de tests/unit — un navegador dentro de Vitest es inestable (E-049)'));
+          }
+        });
+      }
+    };
+    if (fs.existsSync(path.join(RAIZ, 'tests/unit'))) visitar('tests/unit');
+    return hallazgos;
+  }
+};
+
 /* ── E-042 · una DecompressionStream nunca se materializa entera de golpe ── */
 export const conDescompresionAcotada = {
   id: 'docx-descomprimir-acotado',
@@ -1036,6 +1069,7 @@ export const TODAS = [
   conMotorLoteEnBucle,
   conCapturasSinTransicionesEnCurso,
   sinCronometrajeEnUnit,
+  sinPlaywrightEnUnit,
   conDescompresionAcotada,
   conTextoPerezosoViaEditSession
 ];

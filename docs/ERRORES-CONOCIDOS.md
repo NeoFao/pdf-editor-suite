@@ -1968,3 +1968,27 @@ despliega" dejarían de ser la misma política, silenciosamente.
   más un servidor HTTP real de punta a punta.
 - Regla determinista `csp-coherente` (`scripts/guards/reglas.mjs`), con test
   en `scripts/guards/reglas.test.mjs`.
+
+### E-049 · Tests de Vitest lanzaban Chromium dentro de `tests/unit/` y fallaban al azar con "Hook timeout 10000ms" · defecto del TEST, no de la app
+
+**Síntoma.** `npx vitest run` fallaba en 1 de cada 3 corridas: los `beforeAll`
+de `ComprimirDocumento.test.ts` y `PdfiumEngine.imagepixels.test.ts` morían
+con `Hook timed out in 10000ms` (y `PdfiumEngine.heapgrowth.test.ts` tenía el
+mismo patrón). El job de unit es obligatorio en CI: un rojo aleatorio no se
+tolera.
+
+**Causa raíz.** Los tres importaban `chromium` de `@playwright/test` y hacían
+`chromium.launch()` dentro del hook solo para obtener unos bytes JPEG con
+`canvas.toDataURL`. Con varios workers de Vitest en paralelo, arrancar N
+navegadores a la vez supera el timeout del hook. Además rompía la separación
+del repo: los tests que necesitan navegador van a `tests/e2e/` (Playwright),
+los de `tests/unit/` corren en Node.
+
+**Arreglo.** Los tests no necesitaban el navegador, solo los bytes de un JPEG
+válido: ahora son constantes base64 fijas (`tests/unit/_jpegsFijos.ts`,
+generadas una vez con el codificador de Chromium). Ninguna aserción cambió
+(ver `.orquestacion/T-flaky-informe.md`).
+
+**Cómo se detecta ahora.** Regla `sin-playwright-en-unit`: ningún fichero de
+`tests/unit/**` puede importar `@playwright/test` ni `playwright`. Test en
+`scripts/guards/reglas.test.mjs`.
