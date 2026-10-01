@@ -412,6 +412,17 @@ export class Viewer {
     wrapper.appendChild(layer);
   }
 
+  /** Nota marcada desde el panel Comentarios (página + índice de anotación); sobrevive a repintados. */
+  private notaResaltada: { pageIndex: number; annotIndex: number } | null = null;
+
+  /** Resalta en el visor la nota `annotIndex` de la página (clase `activa`); quita la marca de la anterior. */
+  resaltarNota(pageIndex: number, annotIndex: number): void {
+    const anterior = this.notaResaltada;
+    this.notaResaltada = { pageIndex, annotIndex };
+    if (anterior && anterior.pageIndex !== pageIndex) this.drawNotes(anterior.pageIndex);
+    this.drawNotes(pageIndex);
+  }
+
   /** Marcadores de notas adhesivas (anotaciones reales); se leen del motor, no del modelo. */
   private drawNotes(i: number): void {
     const wrapper = this.wrappers[i];
@@ -427,6 +438,8 @@ export class Viewer {
       const c = geom.rectPtToCss(note.rectPt);
       const marker = document.createElement('div');
       marker.className = 'note-marker';
+      const r = this.notaResaltada;
+      if (r && r.pageIndex === i && r.annotIndex === note.index) marker.classList.add('activa');
       marker.title = note.text;
       marker.setAttribute('aria-label', note.text);
       // El motor ya pinta el icono de la nota al renderizar la página (el bitmap

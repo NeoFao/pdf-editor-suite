@@ -1,7 +1,7 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_PAGEOBJ_PATH = 2;
@@ -16,6 +16,14 @@ const FPDFBitmap_BGRx = 3;
 const FPDFBitmap_BGRA = 4;
 const FPDF_SEGMENT_MOVETO = 2; // FPDF_SEGMENTTYPE: inicia un subtrazo nuevo, sin conectar con el punto anterior.
 const FPDF_ANNOT_TEXT = 1;    // FPDF_ANNOTATION_SUBTYPE: nota adhesiva ("sticky note")
+// FPDF_ANNOTATION_SUBTYPE de las anotaciones que entiende el panel de comentarios.
+const FPDF_ANNOT_FREETEXT = 3;
+const FPDF_ANNOT_LINK = 2;
+const FPDF_ANNOT_HIGHLIGHT = 9;
+const FPDF_ANNOT_UNDERLINE = 10;
+const FPDF_ANNOT_STRIKEOUT = 12;
+const FPDF_ANNOT_POPUP = 16;
+const FPDF_ANNOT_WIDGET = 20;
 const FPDF_ANNOT_FLAG = 0x01; // flag de FPDF_RenderPageBitmap: pinta también las anotaciones
 const FPDFANNOT_COLORTYPE_Color = 0;
 
@@ -1163,6 +1171,72 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDF_ClosePage(page);
     }
     return notes;
+  }
+
+  getComments(doc: DocHandle, pageIndex: number): CommentInfo[] {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const out: CommentInfo[] = [];
+    try {
+      const n = this.p.FPDFPage_GetAnnotCount(page);
+      for (let i = 0; i < n; i++) {
+        const annot = this.p.FPDFPage_GetAnnot(page, i);
+        if (!annot) continue;
+        try {
+          const sub = this.p.FPDFAnnot_GetSubtype(annot);
+          if (sub === FPDF_ANNOT_LINK || sub === FPDF_ANNOT_POPUP || sub === FPDF_ANNOT_WIDGET) continue;
+          // Patrón de dos llamadas: ver leerCadenaPdfium (E-028).
+          const leer = (clave: string): string =>
+            leerCadenaPdfium(this.mem, (buf, len) => this.p.FPDFAnnot_GetStringValue(annot, clave, buf, len), (ptr) => this.mem.readU16(ptr));
+          const text = leer('Contents');
+          if (sub !== FPDF_ANNOT_TEXT && text === '') continue;
+          const rectPtr = this.mem.malloc(16);
+          this.p.FPDFAnnot_GetRect(annot, rectPtr);
+          const left = this.mem.getValue(rectPtr, 'float');
+          const top = this.mem.getValue(rectPtr + 4, 'float');
+          const right = this.mem.getValue(rectPtr + 8, 'float');
+          const bottom = this.mem.getValue(rectPtr + 12, 'float');
+          this.mem.free(rectPtr);
+          const kind: CommentKind =
+            sub === FPDF_ANNOT_TEXT ? 'note'
+            : sub === FPDF_ANNOT_HIGHLIGHT ? 'highlight'
+            : sub === FPDF_ANNOT_UNDERLINE ? 'underline'
+            : sub === FPDF_ANNOT_STRIKEOUT ? 'strikeout'
+            : sub === FPDF_ANNOT_FREETEXT ? 'freetext'
+            : 'other';
+          out.push({ index: i, kind, text, author: leer('T'), rectPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom } });
+        } finally {
+          this.p.FPDFPage_CloseAnnot(annot);
+        }
+      }
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+    return out;
+  }
+
+  setNoteText(doc: DocHandle, pageIndex: number, index: number, text: string): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      if (index < 0 || index >= this.p.FPDFPage_GetAnnotCount(page)) return false;
+      const annot = this.p.FPDFPage_GetAnnot(page, index);
+      if (!annot) return false;
+      try {
+        const sub = this.p.FPDFAnnot_GetSubtype(annot);
+        if (sub === FPDF_ANNOT_LINK || sub === FPDF_ANNOT_POPUP || sub === FPDF_ANNOT_WIDGET) return false;
+        const wptr = this.mem.wide(text);
+        try {
+          return !!this.p.FPDFAnnot_SetStringValue(annot, 'Contents', wptr);
+        } finally {
+          this.mem.free(wptr);
+        }
+      } finally {
+        this.p.FPDFPage_CloseAnnot(annot);
+      }
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
   }
 
   removeNote(doc: DocHandle, pageIndex: number, index: number): boolean {
