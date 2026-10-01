@@ -1,6 +1,7 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
+import { validarUrlEnlace } from '../validarUrlEnlace';
 import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
@@ -16,6 +17,7 @@ const FPDFBitmap_BGRx = 3;
 const FPDFBitmap_BGRA = 4;
 const FPDF_SEGMENT_MOVETO = 2; // FPDF_SEGMENTTYPE: inicia un subtrazo nuevo, sin conectar con el punto anterior.
 const FPDF_ANNOT_TEXT = 1;    // FPDF_ANNOTATION_SUBTYPE: nota adhesiva ("sticky note")
+const FPDF_ANNOT_LINK = 2;    // FPDF_ANNOTATION_SUBTYPE: enlace clicable (addLink, PR fase 2a)
 const FPDF_ANNOT_FLAG = 0x01; // flag de FPDF_RenderPageBitmap: pinta también las anotaciones
 const FPDFANNOT_COLORTYPE_Color = 0;
 
@@ -733,8 +735,18 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   insertImage(doc: DocHandle, pageIndex: number, spec: InsertImageSpec): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
-    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'insertImage', spec }]);
+    return (res as Extract<PageOpResult, { type: 'insertImage' }>).ok;
+  }
+
+  /**
+   * Crea el objeto de página IMAGEN para `spec`, sin insertarlo todavía (el
+   * llamador decide en qué página y cuándo regenerar el contenido — usado
+   * por `insertImage` suelto y por el caso `insertImage` de `applyPageOps`,
+   * E-037: nunca un `FPDF_LoadPage`/`GenerateContent` por imagen cuando se
+   * insertan varias en la misma página, p. ej. un DOCX con varias imágenes).
+   */
+  private crearObjetoImagen(doc: DocHandle, spec: InsertImageSpec): number {
     // FPDFBitmap_Create: formato BGRA con alfa (3 = BGRA). El motor copia los
     // píxeles al generar el contenido, así que el bitmap puede destruirse luego.
     const bmp = this.p.FPDFBitmap_Create(spec.imgWidth, spec.imgHeight, 1);
@@ -756,12 +768,9 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDFImageObj_SetBitmap(0, 0, obj, bmp);
       // La imagen se define en un cuadrado unidad: la matriz la escala y sitúa.
       this.p.FPDFPageObj_Transform(obj, spec.wPt, 0, 0, spec.hPt, spec.xPt, spec.yPt);
-      this.p.FPDFPage_InsertObject(page, obj);
-      this.p.FPDFPage_GenerateContent(page);
-      return true;
+      return obj;
     } finally {
       this.p.FPDFBitmap_Destroy(bmp);
-      this.p.FPDF_ClosePage(page);
     }
   }
 
@@ -1094,6 +1103,11 @@ export class PdfiumEngine implements PdfEngine {
   highlightRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean {
     const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'highlightRect', rect, color }]);
     return (res as Extract<PageOpResult, { type: 'highlightRect' }>).ok;
+  }
+
+  addLink(doc: DocHandle, pageIndex: number, rectPt: RectPt, url: string): boolean {
+    const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'addLink', rect: rectPt, url }]);
+    return (res as Extract<PageOpResult, { type: 'addLink' }>).ok;
   }
 
   addNote(doc: DocHandle, pageIndex: number, spec: { xPt: number; yPt: number; text: string }): number {
@@ -1523,6 +1537,52 @@ export class PdfiumEngine implements PdfEngine {
             this.p.FPDFPage_InsertObject(page, obj);
             mutado = true;
             results.push({ type: 'drawRect', ok: true });
+            break;
+          }
+          case 'insertImage': {
+            const obj = this.crearObjetoImagen(doc, op.spec);
+            this.p.FPDFPage_InsertObject(page, obj);
+            mutado = true;
+            results.push({ type: 'insertImage', ok: true });
+            break;
+          }
+          case 'addLink': {
+            // Solo http:/https:/mailto: (validarUrlEnlace.ts): un PDF es
+            // entrada no confiable, así que esta comprobación es la última
+            // línea de defensa aunque el llamador (DOCX/Markdown) ya filtre
+            // antes de construir el lote — mismo principio que E-003/E-027.
+            const urlValida = validarUrlEnlace(op.url);
+            if (!urlValida) { results.push({ type: 'addLink', ok: false }); break; }
+            const annot = this.p.FPDFPage_CreateAnnot(page, FPDF_ANNOT_LINK);
+            if (!annot) { results.push({ type: 'addLink', ok: false }); break; }
+            try {
+              // FS_RECTF = {left, top, right, bottom} en puntos PDF (floats, 16 bytes), igual que addNote/getNotes.
+              const rectPtr = this.mem.malloc(16);
+              this.mem.setValue(rectPtr, op.rect.xPt, 'float');
+              this.mem.setValue(rectPtr + 4, op.rect.yPt + op.rect.hPt, 'float');
+              this.mem.setValue(rectPtr + 8, op.rect.xPt + op.rect.wPt, 'float');
+              this.mem.setValue(rectPtr + 12, op.rect.yPt, 'float');
+              this.p.FPDFAnnot_SetRect(annot, rectPtr);
+              this.mem.free(rectPtr);
+              // Sin esto, PDFium (como la mayoría de visores) pinta el borde
+              // POR DEFECTO de la anotación /Link (un rectángulo de 1pt
+              // alrededor del texto) — nada que ver con el azul+subrayado
+              // del propio texto, y nada profesional: Acrobat/Chrome/Word
+              // generan siempre un borde invisible en sus enlaces, el
+              // "aspecto" de enlace lo da el estilo del texto, no la caja
+              // de la anotación.
+              this.p.FPDFAnnot_SetBorder(annot, 0, 0, 0);
+              // Acción /URI: EPDFAction_CreateURI crea la acción (marshaling
+              // de "string" a cargo del propio binding, ver index.d.ts) y
+              // EPDFAnnot_SetAction la asocia a la anotación /Link recién
+              // creada. No hace falta FPDFPage_GenerateContent: una
+              // anotación no vive en el flujo de contenido de la página.
+              const action = this.p.EPDFAction_CreateURI(doc, urlValida);
+              const ok = action ? this.p.EPDFAnnot_SetAction(annot, action) : false;
+              results.push({ type: 'addLink', ok });
+            } finally {
+              this.p.FPDFPage_CloseAnnot(annot);
+            }
             break;
           }
         }

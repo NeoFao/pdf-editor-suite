@@ -1,21 +1,31 @@
 import { DocxError } from './DocxError';
-import { parseXml, hijosElemento, primerHijo, textoDirecto, type XmlElemento } from './xml';
+import { parseXml, hijosElemento, primerHijo, textoDirecto, buscarDescendiente, type XmlElemento } from './xml';
 import { classifyFont } from '../../engine/fontClassify';
+import { leerRelaciones, rutaMediaDesdeWord, type Relacion } from './rels';
+import { validarUrlEnlace } from '../../engine/validarUrlEnlace';
 
 /**
  * Modelo del documento DOCX (§9 fila #4): de `word/document.xml` +
- * `word/styles.xml` (+ `word/numbering.xml` si existe) a una lista plana de
- * PÁRRAFOS con su formato ya resuelto (herencia de estilos incluida) y la
- * geometría de página. PURO: no toca el motor ni el DOM, igual que
- * `../markdown/parse.ts`. `render.ts` convierte este modelo en `FlowItem`
+ * `word/styles.xml` (+ `word/numbering.xml`/`word/_rels/document.xml.rels`
+ * si existen) a una lista plana de BLOQUES (párrafos y tablas) con su
+ * formato ya resuelto (herencia de estilos incluida) y la geometría de
+ * página. PURO: no toca el motor ni el DOM, igual que `../markdown/parse.ts`
+ * — tampoco decodifica píxeles de imagen, solo deja la referencia
+ * (`ParteParrafo` de tipo `'imagen'`, `refId` = ruta dentro del ZIP) para que
+ * `ConversorDocxNavegador` la resuelva de forma asíncrona con
+ * `decodificarImagenDocx`. `render.ts` convierte este modelo en `FlowItem`
  * para el maquetador común (`../flujo/layout.ts`).
  *
  * Unidades DOCX, documentadas aquí porque se mezclan en todo el módulo
  * (AGENTS.md §1: "escribe en el comentario en qué unidad está cada número"):
- * - Twips (1/20 pt): `w:ind`, `w:spacing`, `w:pgSz`, `w:pgMar`. `twipsAPt()`.
- * - Medios puntos: `w:sz` (tamaño de fuente). `mediosPuntosAPt()`.
+ * - Twips (1/20 pt): `w:ind`, `w:spacing`, `w:pgSz`, `w:pgMar`, `w:tblGrid`. `twipsAPt()`.
+ * - Medios puntos: `w:sz` de fuente (`w:rPr`). `mediosPuntosAPt()`.
+ * - Octavos de punto: `w:sz` de BORDE (`w:tblBorders`) — unidad distinta de
+ *   la de fuente pese al mismo nombre de atributo; dividir entre 8 (no 2).
+ * - EMU (1/914400 de pulgada = 1/12700 de punto): `wp:extent` (tamaño de
+ *   imagen inline). `EMU_POR_PUNTO`.
  *
- * Simplificaciones deliberadas de esta FASE 1 (documentadas también en el
+ * Simplificaciones deliberadas de esta FASE 2a (documentadas también en el
  * spec y en la fila #4 de la tabla §9):
  * - Solo se usa la geometría de página de la ÚLTIMA sección del documento
  *   (`w:sectPr`) para TODO el documento — un .docx con secciones de tamaño
@@ -39,6 +49,18 @@ import { classifyFont } from '../../engine/fontClassify';
  * - Los saltos de columna (`w:br` sin `w:type` o `w:type="column"`, fuera de
  *   `w:type="page"`) se tratan como saltos de línea simples (esta fase no
  *   admite columnas).
+ * - Tablas: bordes a nivel de TABLA únicamente (`w:tblBorders`), nunca por
+ *   celda (`w:tcBorders`); una celda es un único flujo lógico (varios `w:p`
+ *   se unen con salto de línea); `w:vMerge` "continue" se renderiza en
+ *   blanco (no se reconstruye el contenido combinado verticalmente a través
+ *   de varias filas, ver `CeldaTabla`); sin tablas anidadas.
+ * - Imágenes: solo `wp:inline` (en el flujo de texto) — `wp:anchor`
+ *   (flotante, con ajuste de texto) se cuenta en advertencias, igual que
+ *   EMF/WMF y cualquier formato que ni el decodificador PNG propio
+ *   (`decodificarPng.ts`) ni `createImageBitmap` del navegador entiendan.
+ * - Enlaces: solo `w:hyperlink` EXTERNO (`r:id` con `TargetMode="External"`);
+ *   un enlace interno a un marcador del propio documento (`w:anchor`) se
+ *   trata como texto plano, sin aviso (navegación interna fuera de alcance).
  */
 
 export type RGB = [number, number, number];
@@ -53,10 +75,13 @@ export interface RunFormato {
 }
 
 export type ParteParrafo =
-  | { tipo: 'texto'; texto: string; formato: RunFormato }
+  /** `url`, cuando está presente, es la URL YA VALIDADA (`validarUrlEnlace`) de un `w:hyperlink` que envuelve este texto. */
+  | { tipo: 'texto'; texto: string; formato: RunFormato; url?: string }
   | { tipo: 'tab' }
   | { tipo: 'saltoLinea' }
-  | { tipo: 'saltoPagina' };
+  | { tipo: 'saltoPagina' }
+  /** Imagen inline (`w:drawing > wp:inline`, fase 2a). `refId` es la ruta dentro del ZIP del .docx (p. ej. `word/media/image1.png`); `wPt`/`hPt` son el tamaño DECLARADO por Word (`wp:extent`, EMU → pt), sin clampar todavía al ancho útil de página — eso lo hace `render.ts`, que conoce la geometría. */
+  | { tipo: 'imagen'; refId: string; wPt: number; hPt: number };
 
 export interface InfoLista { textoMarcador: string }
 
@@ -82,6 +107,48 @@ export interface Parrafo {
   tamanoBasePt: number;
 }
 
+/**
+ * Celda de tabla (fase 2a). Simplificación deliberada: el contenido de una
+ * celda se aplana a UN solo flujo lógico de `partes` (varios `w:p` de la
+ * celda se unen con `saltoLinea` entre medias) — mismo límite que ya
+ * declara este módulo para los ítems de lista ("una sola línea lógica").
+ * Bordes: solo a nivel de TABLA (`w:tblBorders`), no por celda
+ * (`w:tcBorders`) — un `w:tcBorders` que anule el borde de una celda
+ * concreta no se respeta en esta fase.
+ */
+export interface CeldaTabla {
+  partes: ParteParrafo[];
+  /** Columnas que ocupa esta celda (`w:gridSpan`), 1 si no se combina horizontalmente. */
+  gridSpan: number;
+  /** `'restart'`/`'continue'` (`w:vMerge`) para una combinación vertical, `null` si la celda no se combina. `'continue'` se renderiza en blanco (ver `docx/render.ts`) — aproximación documentada en el spec: no se reconstruye el contenido combinado a través de varias filas. */
+  vMerge: 'restart' | 'continue' | null;
+  /** Color de sombreado (`w:shd w:fill`), o `null` sin sombreado. */
+  colorFondo: RGB | null;
+  alineacion: Alineacion;
+}
+
+export interface FilaTabla {
+  celdas: CeldaTabla[];
+  /** `w:tblHeader`: esta fila se repite al principio de cada página nueva mientras dure la tabla. */
+  esEncabezado: boolean;
+}
+
+export interface Tabla {
+  tipo: 'tabla';
+  /** Ancho de cada columna (`w:tblGrid`/`w:gridCol`, twips → pt), en el mismo orden que las celdas de cada fila (sumando `gridSpan`). */
+  anchosColPt: number[];
+  filas: FilaTabla[];
+  /** `null` = sin bordes visibles. Un único color/grosor para TODA la tabla (simplificación de fase 2a, ver comentario de `CeldaTabla`). */
+  bordeColor: RGB | null;
+  bordeGrosorPt: number;
+}
+
+/** Bloque de nivel superior del documento: párrafo o tabla, en el orden en que aparecen. */
+export type BloqueDocx = Parrafo | Tabla;
+
+export function esParrafo(b: BloqueDocx): b is Parrafo { return b.tipo === 'parrafo'; }
+export function esTabla(b: BloqueDocx): b is Tabla { return b.tipo === 'tabla'; }
+
 export interface ModeloDocx {
   paginaAnchoPt: number;
   paginaAltoPt: number;
@@ -89,7 +156,7 @@ export interface ModeloDocx {
   margenInfPt: number;
   margenIzqPt: number;
   margenDerPt: number;
-  parrafos: Parrafo[];
+  bloques: BloqueDocx[];
   advertencias: string[];
 }
 
@@ -387,7 +454,47 @@ interface Contexto {
   numMap: Map<string, string>;
   abstractNums: Map<string, AbstractNumDef>;
   contadoresListas: Map<string, number[]>;
+  /** `word/_rels/document.xml.rels` ya parseado (`null` si el .docx no lo trae, p. ej. sin imágenes ni enlaces). */
+  rels: Map<string, Relacion> | null;
+  /**
+   * Advertencias que solo se pueden generar AL RECORRER (imagen inline no
+   * resuelta/flotante, enlace con esquema rechazado...) — a diferencia de
+   * `construirAdvertencias`, que cuenta patrones estructurales escaneando
+   * todo el árbol al final. Se combinan al construir el `ModeloDocx` final.
+   */
+  advertenciasExtra: string[];
+  /** Descartes/degradaciones contados por tipo (`anotar`); se convierten en avisos al final (`MENSAJES_PERDIDAS`). */
+  perdidas: Map<string, number>;
 }
+
+function anotar(ctx: Contexto, clave: string): void { ctx.perdidas.set(clave, (ctx.perdidas.get(clave) ?? 0) + 1); }
+
+function cuenta(c: number, uno: string, varios: string): string { return c === 1 ? uno : varios.replace('{n}', String(c)); }
+
+/** Texto de cada tipo de pérdida (nada se descarta o degrada en silencio, AGENTS.md §3). Orden = orden de aparición en el aviso. */
+const MENSAJES_PERDIDAS: [string, (c: number) => string][] = [
+  ['enlaceInterno', (c) => cuenta(c, 'Un enlace interno (a un marcador del documento) se dejó como texto sin enlace.', '{n} enlaces internos (a marcadores del documento) se dejaron como texto sin enlace.')],
+  ['enlaceSinDestino', (c) => cuenta(c, 'Un enlace sin destino resoluble se dejó como texto sin enlace.', '{n} enlaces sin destino resoluble se dejaron como texto sin enlace.')],
+  ['desconocido', (c) => cuenta(c, 'Se omitió el texto de un elemento no reconocido del documento.', 'Se omitió el texto de {n} elementos no reconocidos del documento.')],
+  ['ecuacion', (c) => cuenta(c, 'Se omitió una ecuación (aún no soportada).', 'Se omitieron {n} ecuaciones (aún no soportadas).')],
+  ['sym', (c) => cuenta(c, 'Se omitió un símbolo especial (w:sym).', 'Se omitieron {n} símbolos especiales (w:sym).')],
+  ['saltoColumna', (c) => cuenta(c, 'Un salto de columna se trató como salto de línea (sin columnas).', '{n} saltos de columna se trataron como saltos de línea (sin columnas).')],
+  ['listaSinDef', (c) => cuenta(c, 'Un párrafo de lista cuya numeración no está definida se maquetó sin marcador.', '{n} párrafos de lista cuya numeración no está definida se maquetaron sin marcador.')],
+  ['tablaAnidada', (c) => cuenta(c, 'Una tabla anidada dentro de otra se aplanó a texto (celdas separadas por tabulador).', '{n} tablas anidadas se aplanaron a texto (celdas separadas por tabulador).')],
+  ['imagenEnCelda', (c) => cuenta(c, 'Se omitió una imagen dentro de una celda de tabla (aún no soportado).', 'Se omitieron {n} imágenes dentro de celdas de tabla (aún no soportado).')],
+  ['saltoPaginaEnCelda', (c) => cuenta(c, 'Un salto de página dentro de una celda de tabla se trató como salto de línea.', '{n} saltos de página dentro de celdas de tabla se trataron como saltos de línea.')],
+  ['vMergeConTexto', (c) => cuenta(c, 'Una celda de continuación de una combinación vertical traía texto propio, que no se muestra (como hace Word).', '{n} celdas de continuación de combinaciones verticales traían texto propio, que no se muestra (como hace Word).')]
+];
+
+/** Hijos de un run que son ruido estructural o se cuentan aparte: no avisan por sí mismos. */
+const RUIDO_RUN = new Set(['w:rPr', 'w:lastRenderedPageBreak', 'w:softHyphen', 'w:instrText', 'w:fldChar', 'w:footnoteReference', 'w:endnoteReference', 'w:commentReference', 'w:annotationRef', 'w:footnoteRef', 'w:endnoteRef', 'w:separator', 'w:continuationSeparator', 'w:pict', 'w:object', 'w:delText', 'w:delInstrText', 'w:t', 'w:tab', 'w:br', 'w:noBreakHyphen', 'w:drawing', 'w:sym', 'w:cr', 'w:ptab', 'mc:AlternateContent']);
+/** Ídem para hijos directos de un párrafo. */
+const RUIDO_PARRAFO = new Set(['w:pPr', 'w:bookmarkStart', 'w:bookmarkEnd', 'w:proofErr', 'w:permStart', 'w:permEnd', 'w:commentRangeStart', 'w:commentRangeEnd', 'w:moveFromRangeStart', 'w:moveFromRangeEnd', 'w:moveToRangeStart', 'w:moveToRangeEnd', 'w:del', 'w:moveFrom', 'w:r', 'w:hyperlink', 'w:ins', 'w:smartTag', 'w:sdt', 'w:fldSimple', 'w:customXml', 'w:dir', 'w:bdo', 'w:moveTo', 'm:oMath', 'm:oMathPara']);
+
+/** Azul + subrayado por defecto de un hipervínculo (`w:hyperlink`) cuyo estilo no diga otra cosa — mismo tono que usa el conversor Markdown. */
+const LINK_BLUE: RGB = [37, 99, 235];
+/** EMU (English Metric Units) por punto PDF: 914400 EMU/pulgada ÷ 72 pt/pulgada = 12700 EMU/pt (`wp:extent`, spec fase 2a §3). */
+const EMU_POR_PUNTO = 12700;
 
 /** Aplana `w:sdt` (control de contenido) a su `w:sdtContent`: fase 1 no distingue un párrafo dentro de un control de contenido de uno normal. */
 function aplanarCuerpo(cuerpo: XmlElemento): XmlElemento[] {
@@ -418,12 +525,64 @@ function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, parte
     if (h.tipo !== 'elemento') continue;
     if (h.nombre === 'w:t') { const t = textoDirecto(h); if (t.length > 0) partes.push({ tipo: 'texto', texto: t, formato }); }
     else if (h.nombre === 'w:tab') partes.push({ tipo: 'tab' });
-    else if (h.nombre === 'w:br') partes.push({ tipo: h.atributos['w:type'] === 'page' ? 'saltoPagina' : 'saltoLinea' });
+    else if (h.nombre === 'w:br') {
+      if (h.atributos['w:type'] === 'column') anotar(ctx, 'saltoColumna');
+      partes.push({ tipo: h.atributos['w:type'] === 'page' ? 'saltoPagina' : 'saltoLinea' });
+    }
+    else if (h.nombre === 'w:cr') partes.push({ tipo: 'saltoLinea' });
+    else if (h.nombre === 'w:ptab') partes.push({ tipo: 'tab' });
+    else if (h.nombre === 'w:sym') anotar(ctx, 'sym');
     else if (h.nombre === 'w:noBreakHyphen') partes.push({ tipo: 'texto', texto: '-', formato });
-    // w:drawing, w:pict, w:footnoteReference, w:commentReference, w:fldChar,
-    // w:instrText, w:delText...: contenido no soportado en fase 1, contado
-    // aparte en `construirAdvertencias` (no se pierde en silencio).
+    else if (h.nombre === 'w:drawing') { const parte = resolverImagenDrawing(h, ctx); if (parte) partes.push(parte); }
+    else if (h.nombre === 'mc:AlternateContent') {
+      // Word envuelve formas/dibujos modernos aquí: la parte útil está en el primer `w:drawing` de `mc:Choice`.
+      const dibujo = buscarDescendiente(h, 'w:drawing');
+      if (dibujo) { const parte = resolverImagenDrawing(dibujo, ctx); if (parte) partes.push(parte); }
+      else if (!buscarDescendiente(h, 'w:pict')) anotar(ctx, 'desconocido');
+    }
+    else if (!RUIDO_RUN.has(h.nombre) && buscarDescendiente(h, 'w:t')) anotar(ctx, 'desconocido');
+    // w:pict (VML, Word <2007), w:footnoteReference, w:commentReference,
+    // w:fldChar, w:instrText, w:delText...: contenido no soportado en esta
+    // fase, contado aparte en `construirAdvertencias` (no se pierde en silencio).
   }
+}
+
+/**
+ * Resuelve un `w:drawing` a su `ParteParrafo` de imagen, o `null` si no se
+ * pudo (con la advertencia correspondiente ya empujada a
+ * `ctx.advertenciasExtra` — nunca se pierde en silencio, AGENTS.md §3).
+ * Solo `wp:inline` (imagen en el flujo de texto): `wp:anchor` (imagen
+ * flotante, con ajuste de texto) queda fuera de esta fase.
+ */
+function resolverImagenDrawing(drawing: XmlElemento, ctx: Contexto): ParteParrafo | null {
+  if (primerHijo(drawing, 'wp:anchor')) {
+    ctx.advertenciasExtra.push('Se omitió una imagen flotante (con ajuste de texto); aún no soportada.');
+    return null;
+  }
+  const inline = primerHijo(drawing, 'wp:inline');
+  if (!inline) {
+    ctx.advertenciasExtra.push('No se pudo insertar una imagen del documento (formato de dibujo no reconocido).');
+    return null;
+  }
+  const extent = primerHijo(inline, 'wp:extent');
+  const blip = buscarDescendiente(inline, 'a:blip');
+  const embedId = blip?.atributos['r:embed'];
+  if (!extent || !embedId) {
+    ctx.advertenciasExtra.push('No se pudo insertar una imagen del documento (faltan sus datos de tamaño u origen).');
+    return null;
+  }
+  const rel = ctx.rels?.get(embedId);
+  if (!rel) {
+    ctx.advertenciasExtra.push('No se pudo insertar una imagen del documento (no se encontró su relación en el paquete).');
+    return null;
+  }
+  const cx = Number(extent.atributos['cx'] ?? '0');
+  const cy = Number(extent.atributos['cy'] ?? '0');
+  if (!(cx > 0) || !(cy > 0)) {
+    ctx.advertenciasExtra.push('No se pudo insertar una imagen del documento (tamaño declarado inválido).');
+    return null;
+  }
+  return { tipo: 'imagen', refId: rutaMediaDesdeWord(rel.target), wPt: cx / EMU_POR_PUNTO, hPt: cy / EMU_POR_PUNTO };
 }
 
 function recorrerContenidoParrafo(contenedor: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, partes: ParteParrafo[]): void {
@@ -431,14 +590,54 @@ function recorrerContenidoParrafo(contenedor: XmlElemento, baseRuns: RPrAcum, ct
     if (h.tipo !== 'elemento') continue;
     switch (h.nombre) {
       case 'w:r': procesarRun(h, baseRuns, ctx, partes); break;
-      case 'w:hyperlink': recorrerContenidoParrafo(h, baseRuns, ctx, partes); break;
+      case 'w:hyperlink': procesarHyperlink(h, baseRuns, ctx, partes); break;
       case 'w:ins': recorrerContenidoParrafo(h, baseRuns, ctx, partes); break; // inserción de control de cambios: se acepta
-      case 'w:smartTag': recorrerContenidoParrafo(h, baseRuns, ctx, partes); break;
-      case 'w:del': break; // eliminación de control de cambios: se descarta (advertencia aparte)
+      case 'w:smartTag': case 'w:fldSimple': case 'w:customXml': case 'w:dir': case 'w:bdo': case 'w:moveTo':
+        recorrerContenidoParrafo(h, baseRuns, ctx, partes); break; // envoltorios: su contenido se conserva
+      case 'w:sdt': { const c = primerHijo(h, 'w:sdtContent'); if (c) recorrerContenidoParrafo(c, baseRuns, ctx, partes); break; } // control de contenido en línea
+      case 'm:oMath': case 'm:oMathPara': anotar(ctx, 'ecuacion'); break;
+      case 'w:del': case 'w:moveFrom': break; // eliminación de control de cambios: se descarta (advertencia aparte, `cambios`)
       case 'w:pPr': break; // procesado aparte
-      default: break; // bookmarkStart/End, proofErr...: ruido estructural
+      default: if (!RUIDO_PARRAFO.has(h.nombre) && buscarDescendiente(h, 'w:t')) anotar(ctx, 'desconocido'); break; // bookmarkStart/End, proofErr...: ruido estructural sin texto
     }
   }
+}
+
+/**
+ * `w:hyperlink r:id="rIdN"` (fase 2a). Solo enlaces EXTERNOS
+ * (`TargetMode="External"`, siempre el caso de un hipervínculo a una URL —
+ * un `w:anchor` en vez de `r:id` es un enlace INTERNO a un marcador del
+ * propio documento, fuera de alcance de esta fase, se trata como texto
+ * plano sin aviso). El esquema se valida con `validarUrlEnlace` (mismo
+ * criterio que el motor, E-0NN de esta fase): un esquema no permitido dentro
+ * del propio `.docx` NO crea un enlace clicable y se avisa — nunca en
+ * silencio. Con enlace válido, el texto adopta azul+subrayado por DEFECTO
+ * (seminario en `baseRuns` antes de recorrer: el run puede seguir
+ * sobrescribiéndolo con su propio `w:rPr`, "si el estilo no dice otra cosa").
+ */
+function procesarHyperlink(h: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, partes: ParteParrafo[]): void {
+  const rId = h.atributos['r:id'];
+  const rel = rId ? ctx.rels?.get(rId) : undefined;
+  if (!rId && h.atributos['w:anchor'] !== undefined) {
+    anotar(ctx, 'enlaceInterno'); // a un marcador del propio documento: el texto se conserva, el enlace no
+    recorrerContenidoParrafo(h, baseRuns, ctx, partes);
+    return;
+  }
+  if (!rId || !rel || rel.targetMode !== 'External') {
+    anotar(ctx, rel && rel.targetMode === 'Internal' ? 'enlaceInterno' : 'enlaceSinDestino');
+    recorrerContenidoParrafo(h, baseRuns, ctx, partes);
+    return;
+  }
+  const url = validarUrlEnlace(rel.target);
+  if (!url) {
+    ctx.advertenciasExtra.push(`Se omitió un enlace con esquema no permitido ("${rel.target}").`);
+    recorrerContenidoParrafo(h, baseRuns, ctx, partes);
+    return;
+  }
+  const baseConEnlace: RPrAcum = { ...baseRuns, color: LINK_BLUE, underline: true };
+  const antes = partes.length;
+  recorrerContenidoParrafo(h, baseConEnlace, ctx, partes);
+  for (let i = antes; i < partes.length; i++) { const p = partes[i]!; if (p.tipo === 'texto') p.url = url; }
 }
 
 function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
@@ -473,6 +672,7 @@ function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
   for (const p of partes) if (p.tipo === 'texto') { tamanoBasePt = p.formato.sizePt; break; }
 
   const lista = acc.numId ? calcularInfoLista(acc.numId, acc.ilvl, ctx) : null;
+  if (acc.numId && !lista) anotar(ctx, 'listaSinDef');
 
   return {
     tipo: 'parrafo', partes,
@@ -484,43 +684,104 @@ function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
   };
 }
 
-function formatoPorDefecto(ctx: Contexto): RunFormato {
-  const acc = rPrPorDefecto();
-  if (ctx.docDefaultsRPr) aplicarRPr(acc, ctx.docDefaultsRPr);
-  return { font: fuenteEstandarPara(acc.fontName, acc.bold, acc.italic), sizePt: acc.sizePt, color: acc.color, underline: acc.underline };
-}
+// ---------------------------------------------------------------------------
+// Tablas (w:tbl) — fase 2a: tablas REALES (grid, spans, merges, bordes, sombreado)
+// ---------------------------------------------------------------------------
 
-/** Texto de todos los `w:t` bajo `el`, recorriendo cualquier profundidad (para aplanar una celda de tabla a una sola línea). `w:tab`→tabulador, `w:br`→espacio. */
-function textoProfundo(el: XmlElemento): string {
-  let out = '';
-  for (const h of el.hijos) {
-    if (h.tipo !== 'elemento') continue;
-    if (h.nombre === 'w:t') out += textoDirecto(h);
-    else if (h.nombre === 'w:tab') out += '\t';
-    else if (h.nombre === 'w:br') out += ' ';
-    else out += textoProfundo(h);
+/**
+ * Borde de toda la tabla (`w:tblPr > w:tblBorders`). Simplificación de fase
+ * 2a (ver `CeldaTabla`): un único color/grosor para toda la tabla, tomado
+ * del PRIMER lado con borde visible que se encuentre (`w:top`/`w:bottom`/
+ * `w:left`/`w:right`/`w:insideH`/`w:insideV`, en ese orden) — casi siempre
+ * los seis coinciden en un documento real. `w:sz` viene en OCTAVOS DE PUNTO
+ * (no twips): dividir entre 8 da puntos PDF directamente.
+ */
+function leerBordesTabla(tblBorders: XmlElemento | null): { color: RGB | null; grosorPt: number } {
+  if (!tblBorders) return { color: null, grosorPt: 0 };
+  for (const lado of ['w:top', 'w:bottom', 'w:left', 'w:right', 'w:insideH', 'w:insideV']) {
+    const el = primerHijo(tblBorders, lado);
+    const val = el?.atributos['w:val'];
+    if (!el || !val || val === 'nil' || val === 'none') continue;
+    const szRaw = el.atributos['w:sz'];
+    const grosorPt = szRaw !== undefined ? Math.max(0.5, Number(szRaw) / 8) : 0.5;
+    const colorRaw = el.atributos['w:color'];
+    const color: RGB = colorRaw && colorRaw !== 'auto' ? hexAColor(colorRaw) : [0, 0, 0];
+    return { color, grosorPt };
   }
-  return out;
+  return { color: null, grosorPt: 0 };
 }
 
-/** Tablas fase 1 (§9 fila #4): se APLANAN a un párrafo por fila, celdas separadas por tabulador — no se pierden en silencio, pero tampoco son tablas reales (ver `construirAdvertencias`). */
-function procesarTabla(tbl: XmlElemento, ctx: Contexto): Parrafo[] {
-  const formato = formatoPorDefecto(ctx);
-  return hijosElemento(tbl, 'w:tr').map((fila) => {
-    const celdas = hijosElemento(fila, 'w:tc');
-    const partes: ParteParrafo[] = [];
-    celdas.forEach((celda, i) => {
-      if (i > 0) partes.push({ tipo: 'tab' });
-      const texto = textoProfundo(celda).trim().replace(/\s+/g, ' ');
-      if (texto) partes.push({ tipo: 'texto', texto, formato });
-    });
-    return {
-      tipo: 'parrafo' as const, partes,
-      alineacion: 'left' as const, sangriaIzqPt: 0, sangriaDerPt: 0, sangriaPrimeraLineaPt: 0,
-      espacioAntesPt: 0, espacioDespuesPt: 4, interlineadoFactor: 1.15, interlineadoExactoPt: null,
-      saltoPaginaAntes: false, nivelEncabezado: null, lista: null, tamanoBasePt: formato.sizePt
-    };
-  });
+/** Contenido de una celda: varios `w:p` se unen en un único flujo lógico con `saltoLinea` entre medias (ver el comentario de `CeldaTabla`). */
+function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
+  const tcPr = primerHijo(tc, 'w:tcPr');
+  const gridSpanVal = tcPr ? primerHijo(tcPr, 'w:gridSpan')?.atributos['w:val'] : undefined;
+  const gridSpan = gridSpanVal !== undefined ? Math.max(1, Number(gridSpanVal)) : 1;
+  const vMergeEl = tcPr ? primerHijo(tcPr, 'w:vMerge') : null;
+  const vMerge: 'restart' | 'continue' | null = vMergeEl ? (vMergeEl.atributos['w:val'] === 'restart' ? 'restart' : 'continue') : null;
+  const fill = tcPr ? primerHijo(tcPr, 'w:shd')?.atributos['w:fill'] : undefined;
+  const colorFondo: RGB | null = fill && fill !== 'auto' && /^[0-9a-fA-F]{6}$/.test(fill) ? hexAColor(fill) : null;
+
+  const partes: ParteParrafo[] = [];
+  let alineacion: Alineacion = 'left';
+  let bloquesVistos = 0;
+  // `aplanarCuerpo` también abre `w:sdt` (control de contenido a nivel de bloque): nada dentro de la celda se pierde.
+  for (const hijo of aplanarCuerpo(tc)) {
+    if (hijo.nombre === 'w:p') {
+      if (bloquesVistos > 0) partes.push({ tipo: 'saltoLinea' });
+      const pPr = primerHijo(hijo, 'w:pPr');
+      if (bloquesVistos === 0) {
+        const jc = pPr ? primerHijo(pPr, 'w:jc') : null;
+        if (jc?.atributos['w:val'] !== undefined) alineacion = mapAlineacion(jc.atributos['w:val']);
+      }
+      const baseRuns = rPrPorDefecto();
+      if (ctx.docDefaultsRPr) aplicarRPr(baseRuns, ctx.docDefaultsRPr);
+      recorrerContenidoParrafo(hijo, baseRuns, ctx, partes);
+      bloquesVistos++;
+    } else if (hijo.nombre === 'w:tbl') {
+      // Tabla anidada: fuera de alcance como rejilla; su texto se conserva aplanado (una línea por fila, celdas separadas por tabulador) y se avisa.
+      anotar(ctx, 'tablaAnidada');
+      const anidada = procesarTablaReal(hijo, ctx);
+      for (const fila of anidada.filas) {
+        if (bloquesVistos > 0) partes.push({ tipo: 'saltoLinea' });
+        fila.celdas.forEach((c, k) => { if (k > 0) partes.push({ tipo: 'tab' }); partes.push(...c.partes); });
+        bloquesVistos++;
+      }
+    } else if (!['w:tcPr', 'w:bookmarkStart', 'w:bookmarkEnd', 'w:proofErr'].includes(hijo.nombre) && buscarDescendiente(hijo, 'w:t')) {
+      anotar(ctx, 'desconocido');
+    }
+  }
+
+  // Lo que una celda no puede pintar en esta fase se degrada CON aviso, nunca en silencio.
+  for (let k = partes.length - 1; k >= 0; k--) {
+    const parte = partes[k]!;
+    if (parte.tipo === 'imagen') { partes.splice(k, 1); anotar(ctx, 'imagenEnCelda'); }
+    else if (parte.tipo === 'saltoPagina') { partes[k] = { tipo: 'saltoLinea' }; anotar(ctx, 'saltoPaginaEnCelda'); }
+  }
+  if (vMerge === 'continue' && partes.some((x) => x.tipo === 'texto')) { anotar(ctx, 'vMergeConTexto'); partes.length = 0; }
+
+  return { partes, gridSpan, vMerge, colorFondo, alineacion };
+}
+
+function procesarFila(fila: XmlElemento, ctx: Contexto): FilaTabla {
+  const trPr = primerHijo(fila, 'w:trPr');
+  const esEncabezado = !!(trPr && primerHijo(trPr, 'w:tblHeader'));
+  return { celdas: hijosElemento(fila, 'w:tc').map((tc) => procesarCelda(tc, ctx)), esEncabezado };
+}
+
+/** Tabla REAL (fase 2a, §9 fila #4): grid, spans horizontales/verticales, bordes y sombreado — ver `Tabla` y `CeldaTabla` para las simplificaciones deliberadas de esta fase. */
+function procesarTablaReal(tbl: XmlElemento, ctx: Contexto): Tabla {
+  const tblGrid = primerHijo(tbl, 'w:tblGrid');
+  let anchosColPt = tblGrid ? hijosElemento(tblGrid, 'w:gridCol').map((gc) => twipsAPt(Number(gc.atributos['w:w'] ?? '0'))) : [];
+  const tblPr = primerHijo(tbl, 'w:tblPr');
+  const { color: bordeColor, grosorPt: bordeGrosorPt } = leerBordesTabla(tblPr ? primerHijo(tblPr, 'w:tblBorders') : null);
+  const filas = hijosElemento(tbl, 'w:tr').map((fila) => procesarFila(fila, ctx));
+  if (anchosColPt.length === 0) {
+    // Sin w:tblGrid (raro en un .docx real: Word siempre lo escribe): ancho
+    // de 1" por columna como valor por defecto razonable, mejor que fallar.
+    const numCols = filas.reduce((max, f) => Math.max(max, f.celdas.reduce((s, c) => s + c.gridSpan, 0)), 1);
+    anchosColPt = new Array(numCols).fill(72);
+  }
+  return { tipo: 'tabla', anchosColPt, filas, bordeColor, bordeGrosorPt };
 }
 
 function leerGeometriaPagina(sectPr: XmlElemento | null): { anchoPt: number; altoPt: number; margenSup: number; margenInf: number; margenIzq: number; margenDer: number } {
@@ -560,21 +821,41 @@ function contarConAtributo(nodo: XmlElemento, nombre: string, attr: string, valo
   return c;
 }
 
+function contarColumnasMultiples(nodo: XmlElemento): number {
+  let c = nodo.nombre === 'w:cols' && Number(nodo.atributos['w:num'] ?? '1') > 1 ? 1 : 0;
+  for (const h of nodo.hijos) if (h.tipo === 'elemento') c += contarColumnasMultiples(h);
+  return c;
+}
+
 function pluralizar(n: number, singular: string, plural: string): string { return n === 1 ? singular : plural; }
 
-/** Cuenta el contenido NO soportado de fase 1 en TODO el árbol (no solo el cuerpo: notas al pie y comentarios viven en sus propias partes, pero sus REFERENCIAS están en el cuerpo) y arma los avisos — nunca se pierde en silencio (spec §3). */
-function construirAdvertencias(docRoot: XmlElemento, tablas: number): string[] {
+/**
+ * Cuenta el contenido NO soportado de fase 2a en TODO el árbol (no solo el
+ * cuerpo: notas al pie y comentarios viven en sus propias partes, pero sus
+ * REFERENCIAS están en el cuerpo) y arma los avisos — nunca se pierde en
+ * silencio (spec §3). Las imágenes inline (`w:drawing > wp:inline`) y los
+ * enlaces YA NO se cuentan aquí a ciegas: cada fallo concreto (flotante, sin
+ * relación, esquema rechazado...) se avisa AL RECORRER, en
+ * `ctx.advertenciasExtra` (`resolverImagenDrawing`/`procesarHyperlink`) —
+ * más preciso que un conteo estructural que no sabe si la imagen se resolvió
+ * o no. `w:pict` (dibujo VML, Word anterior a 2007) sigue sin soportarse en
+ * absoluto, así que sí se cuenta aquí.
+ */
+function construirAdvertencias(docRoot: XmlElemento): string[] {
   const advertencias: string[] = [];
-  const imagenes = contarElementos(docRoot, 'w:drawing') + contarElementos(docRoot, 'w:pict');
+  const imagenesVml = contarElementos(docRoot, 'w:pict');
   const encabezados = contarElementos(docRoot, 'w:headerReference');
   const pies = contarElementos(docRoot, 'w:footerReference');
   const cuadros = contarElementos(docRoot, 'w:txbxContent');
-  const notas = contarElementos(docRoot, 'w:footnoteReference');
+  const notas = contarElementos(docRoot, 'w:footnoteReference') + contarElementos(docRoot, 'w:endnoteReference');
   const comentarios = contarElementos(docRoot, 'w:commentReference');
   const campos = contarConAtributo(docRoot, 'w:fldChar', 'w:fldCharType', 'begin') + contarElementos(docRoot, 'w:fldSimple');
-  const cambios = contarElementos(docRoot, 'w:ins') + contarElementos(docRoot, 'w:del');
+  const cambios = contarElementos(docRoot, 'w:ins') + contarElementos(docRoot, 'w:del') + contarElementos(docRoot, 'w:moveFrom') + contarElementos(docRoot, 'w:moveTo');
+  const secciones = contarElementos(docRoot, 'w:sectPr');
+  const conColumnas = contarColumnasMultiples(docRoot);
+  const objetos = contarElementos(docRoot, 'w:object');
 
-  if (imagenes > 0) advertencias.push(`Se omitieron ${imagenes} ${pluralizar(imagenes, 'imagen', 'imágenes')} (aún no soportadas).`);
+  if (imagenesVml > 0) advertencias.push(`Se omitieron ${imagenesVml} ${pluralizar(imagenesVml, 'imagen', 'imágenes')} en formato antiguo (VML, aún no soportado).`);
   if (encabezados > 0) advertencias.push(`Se omitieron ${encabezados} ${pluralizar(encabezados, 'encabezado', 'encabezados')} de página (aún no soportados).`);
   if (pies > 0) advertencias.push(`Se omitieron ${pies} ${pluralizar(pies, 'pie', 'pies')} de página (aún no soportados).`);
   if (cuadros > 0) advertencias.push(`Se omitieron ${cuadros} ${pluralizar(cuadros, 'cuadro de texto', 'cuadros de texto')} (aún no soportados).`);
@@ -582,18 +863,23 @@ function construirAdvertencias(docRoot: XmlElemento, tablas: number): string[] {
   if (comentarios > 0) advertencias.push(`Se omitieron ${comentarios} ${pluralizar(comentarios, 'comentario', 'comentarios')} (aún no soportados).`);
   if (campos > 0) advertencias.push(`Se omitieron ${campos} ${pluralizar(campos, 'campo', 'campos')} (aún no soportados).`);
   if (cambios > 0) advertencias.push(`El documento tiene ${cambios} ${pluralizar(cambios, 'cambio', 'cambios')} de control de cambios sin resolver; se aceptaron las inserciones y se descartaron las eliminaciones.`);
-  if (tablas > 0) advertencias.push(`Se simplificaron ${tablas} ${pluralizar(tablas, 'tabla', 'tablas')} a texto con celdas separadas por tabulador (las tablas reales aún no se admiten).`);
+
+  if (objetos > 0) advertencias.push(`Se omitieron ${objetos} ${pluralizar(objetos, 'objeto incrustado', 'objetos incrustados')} (OLE; aún no soportados).`);
+  if (secciones > 1) advertencias.push(`El documento tiene ${secciones} secciones; se usa el tamaño de página y los márgenes de la última para todo el documento.`);
+  if (conColumnas > 0) advertencias.push(`Se omitió la distribución en columnas de ${conColumnas} ${pluralizar(conColumnas, 'sección', 'secciones')}; el texto se maqueta a una sola columna.`);
 
   return advertencias;
 }
 
 /**
  * Construye el modelo a partir del texto YA DECODIFICADO (UTF-8) de
- * `word/document.xml` y, si existen, `word/styles.xml`/`word/numbering.xml`.
- * PURO: no lee el ZIP (eso lo hace `ConversorDocxNavegador`, que decodifica
- * cada entrada y llama aquí).
+ * `word/document.xml` y, si existen, `word/styles.xml`/`word/numbering.xml`/
+ * `word/_rels/document.xml.rels` (imágenes y enlaces, fase 2a). PURO: no lee
+ * el ZIP (eso lo hace `ConversorDocxNavegador`, que decodifica cada entrada
+ * y llama aquí) ni decodifica píxeles de imagen (eso lo hace
+ * `decodificarImagenDocx`, después, sobre los `refId` que deja este modelo).
  */
-export function construirModeloDocx(documentXml: string, stylesXml: string | null, numberingXml: string | null): ModeloDocx {
+export function construirModeloDocx(documentXml: string, stylesXml: string | null, numberingXml: string | null, relsXml: string | null = null): ModeloDocx {
   const docRoot = parseXml(documentXml);
   const body = primerHijo(docRoot, 'w:body');
   if (!body) throw new DocxError('El documento .docx no tiene contenido (falta <w:body> en document.xml).');
@@ -604,33 +890,37 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
   const { numMap, abstractNums } = numberingXml
     ? leerNumbering(parseXml(numberingXml))
     : { numMap: new Map<string, string>(), abstractNums: new Map<string, AbstractNumDef>() };
+  const rels = relsXml ? leerRelaciones(relsXml) : null;
 
-  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map() };
+  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), rels, advertenciasExtra: [], perdidas: new Map() };
 
-  const parrafos: Parrafo[] = [];
+  const bloques: BloqueDocx[] = [];
   let sectPrFinal: XmlElemento | null = null;
-  let tablas = 0;
 
   for (const hijo of aplanarCuerpo(body)) {
     if (hijo.nombre === 'w:p') {
       const pPr = primerHijo(hijo, 'w:pPr');
       const sectPrParrafo = pPr ? primerHijo(pPr, 'w:sectPr') : null;
       if (sectPrParrafo) sectPrFinal = sectPrParrafo;
-      parrafos.push(procesarParrafo(hijo, ctx));
+      bloques.push(procesarParrafo(hijo, ctx));
     } else if (hijo.nombre === 'w:tbl') {
-      tablas++;
-      parrafos.push(...procesarTabla(hijo, ctx));
+      bloques.push(procesarTablaReal(hijo, ctx));
     } else if (hijo.nombre === 'w:sectPr') {
       sectPrFinal = hijo;
+    } else if (hijo.nombre === 'm:oMathPara' || hijo.nombre === 'm:oMath') {
+      anotar(ctx, 'ecuacion');
+    } else if (!['w:bookmarkStart', 'w:bookmarkEnd', 'w:proofErr', 'w:permStart', 'w:permEnd'].includes(hijo.nombre) && buscarDescendiente(hijo, 'w:t')) {
+      anotar(ctx, 'desconocido');
     }
   }
 
   const geo = leerGeometriaPagina(sectPrFinal);
-  const advertencias = construirAdvertencias(docRoot, tablas);
+  const perdidas = MENSAJES_PERDIDAS.filter(([clave]) => (ctx.perdidas.get(clave) ?? 0) > 0).map(([clave, msg]) => msg(ctx.perdidas.get(clave)!));
+  const advertencias = [...construirAdvertencias(docRoot), ...ctx.advertenciasExtra, ...perdidas];
 
   return {
     paginaAnchoPt: geo.anchoPt, paginaAltoPt: geo.altoPt,
     margenSupPt: geo.margenSup, margenInfPt: geo.margenInf, margenIzqPt: geo.margenIzq, margenDerPt: geo.margenDer,
-    parrafos, advertencias
+    bloques, advertencias
   };
 }

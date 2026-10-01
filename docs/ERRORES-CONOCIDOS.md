@@ -1969,6 +1969,60 @@ despliega" dejarían de ser la misma política, silenciosamente.
 - Regla determinista `csp-coherente` (`scripts/guards/reglas.mjs`), con test
   en `scripts/guards/reglas.test.mjs`.
 
+---
+
+### E-047 · Los enlaces salían con un recuadro visible y el subrayado nunca se dibujaba · encontrado en la revisión visual de Word fase 2a
+
+**Síntoma.** En `word-completo.docx` convertido, el hipervínculo aparecía
+encerrado en un rectángulo negro/azul, y el "subrayado" que pide el spec no
+existía: el texto solo salía azul.
+
+**Causa raíz.** Doble. (1) Una anotación `/Link` creada con
+`FPDFPage_CreateAnnot` sin `/Border` propio se pinta con el borde por defecto
+de 1 pt (el render usa `FPDF_ANNOT`); Acrobat, Chrome y Word generan siempre
+borde invisible. (2) `RunFormato.underline` se leía de `w:u` desde la fase 1
+pero ningún código lo convertía en trazo: era un dato huérfano.
+
+**Cómo se detecta ahora.** `PdfiumEngine.addLink` llama a
+`FPDFAnnot_SetBorder(annot, 0, 0, 0)`. `Atom/Seg.underline` viaja por
+`lineToFlowLine` y `paginar` traza la barra; tests
+`lineToFlowLine + paginar: un átomo con underline…` y
+`un átomo sin underline no produce ninguna barra`
+(`tests/unit/flujo-layout.test.ts`). El recuadro solo se ve a ojo: la defensa
+es la revisión visual obligatoria (AGENTS.md §2.8), no un test de píxeles.
+
+**Tercer defecto de la misma revisión.** El texto de las celdas de tabla salía
+pegado al borde superior: `renderizarTabla` medía la fracción de línea base
+(0,28) desde ARRIBA de la línea, y en `paginar` se mide desde ABAJO (mismo
+tipo de mezcla de orígenes que el resto de E-0xx de geometría). Arreglo:
+`relYPt = y + alto * (1 - fracción)`. Test:
+`la línea base del texto de una celda cae ~13,6pt bajo el borde superior…`
+(`tests/unit/ConversorDocxNavegador.test.ts`), rojo antes (8,36 pt).
+
+---
+
+### E-048 · La fase 2a descartaba contenido de Word sin avisar · encontrado al auditar la fase 2a
+
+**Síntoma.** Una celda `vMerge` "continue" se pintaba en blanco sin sombreado;
+una fila más alta que una página se salía de ella (contenido perdido bajo el
+margen); un `w:hyperlink` con `w:anchor`, un `w:sdt` o `w:fldSimple` dentro de
+un párrafo, una ecuación, un `w:sym`, una tabla anidada o una imagen dentro de
+una celda desaparecían o se aplanaban SIN ninguna advertencia. En Markdown, un
+enlace `javascript:` se pintaba azul como si funcionara.
+
+**Causa raíz.** Los `default: break`/`continue` de `modelo.ts` y `render.ts`
+descartaban nodos por ser "ruido", sin distinguir el ruido real (marcadores,
+`w:proofErr`) de contenido con texto. La regla del proyecto es que lo no
+soportado puede degradarse pero nunca en silencio (§3 del spec de la fila #4).
+
+**Cómo se detecta ahora.** `modelo.ts` cuenta cada descarte con `anotar()` y lo
+convierte en aviso (`MENSAJES_PERDIDAS`); cualquier elemento no reconocido que
+contenga `w:t` avisa como `desconocido`. Tests en `tests/unit/docx-modelo.test.ts`
+(bloque "T1b"), `tests/unit/docx-tabla-render.test.ts` (vMerge, cruce de página,
+fila partida, rejilla ampliada, escala) y `tests/unit/markdown-layout.test.ts`.
+Regla determinista: no se añade; "descartar sin avisar" no tiene firma
+sintáctica única (la defensa es el test de cada categoría al añadir una nueva).
+
 ### E-049 · Tests de Vitest lanzaban Chromium dentro de `tests/unit/` y fallaban al azar con "Hook timeout 10000ms" · defecto del TEST, no de la app
 
 **Síntoma.** `npx vitest run` fallaba en 1 de cada 3 corridas: los `beforeAll`

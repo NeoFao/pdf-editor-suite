@@ -40,6 +40,18 @@ export interface Atom {
    * equivalente a `false`): mismo comportamiento de siempre.
    */
   pegado?: boolean;
+  /**
+   * URL del enlace clicable que cubre este átomo (fase 2a: enlaces en DOCX y
+   * Markdown), o `undefined` si el átomo no forma parte de ningún enlace.
+   * Dos átomos consecutivos con URLs distintas (o uno con y otro sin URL)
+   * nunca se fusionan en el mismo trazo (`lineToFlowLine`), aunque
+   * compartan fuente/tamaño/color — cada `Seg` resultante necesita su
+   * propia caja para la anotación `/Link` (`paginar` la añade a `enlaces`
+   * cuando `Seg.url` está presente).
+   */
+  url?: string;
+  /** `true` si este átomo lleva subrayado (`w:u` de DOCX, o un enlace sin estilo propio que lo fuerza a `true`). `paginar` dibuja una barra fina bajo la línea base por cada `Seg` con `underline: true`. */
+  underline?: boolean;
 }
 
 export interface Trazo {
@@ -63,13 +75,37 @@ export interface Barra {
   color: RGB;
 }
 
+/** Imagen ya colocada en una página concreta, en puntos PDF (origen abajo-izquierda). `imgId` referencia el registro de imágenes decodificadas del conversor. */
+export interface ImagenColocada { page: number; xPt: number; yPt: number; wPt: number; hPt: number; imgId: string }
+/** Enlace clicable ya colocado en una página concreta, en puntos PDF (origen abajo-izquierda) — listo para `PdfEngine.addLink`. */
+export interface EnlaceColocado { page: number; xPt: number; yPt: number; wPt: number; hPt: number; url: string }
+
 export interface ResultadoLayout {
   totalPaginas: number;
   trazos: Trazo[];
   barras: Barra[];
+  imagenes: ImagenColocada[];
+  enlaces: EnlaceColocado[];
+  /** Avisos generados al paginar (p. ej. una combinación vertical de celdas que cruza un salto de página). */
+  advertencias: string[];
 }
 
-export interface Seg { xPt: number; text: string; font: string; sizePt: number; color: RGB }
+export interface Seg {
+  xPt: number; text: string; font: string; sizePt: number; color: RGB;
+  /** URL del enlace clicable que cubre este trazo (ver `Atom.url`), o `undefined`. */
+  url?: string;
+  /**
+   * Ancho en puntos PDF de `text` (ya medido por `lineToFlowLine`). Se usa
+   * para calcular la caja del enlace clicable cuando `url` está presente y
+   * el ancho de la barra de subrayado cuando `underline` lo está —
+   * `paginar` no tiene acceso a `medir`, así que el ancho debe venir ya
+   * calculado. Opcional para no romper construcciones de `Seg` en tests que
+   * no lo necesitan (sin `url`/`underline` tampoco hace falta).
+   */
+  wPt?: number;
+  /** Ver `Atom.underline`. */
+  underline?: boolean;
+}
 export interface BarSeg { xPt: number; wPt: number; color: RGB }
 export interface BgSeg { xPt: number; wPt: number; color: RGB }
 
@@ -78,7 +114,38 @@ export interface FlowGap { kind: 'gap'; height: number; bars: BarSeg[] }
 export interface FlowRule { kind: 'rule'; height: number; xPt: number; wPt: number; color: RGB; bars: BarSeg[] }
 /** Salto de página explícito (`w:br w:type="page"` o `w:pageBreakBefore` en DOCX). Markdown no lo usa. */
 export interface FlowPageBreak { kind: 'pagebreak' }
-export type FlowItem = FlowLine | FlowGap | FlowRule | FlowPageBreak;
+
+/** Imagen colocada como bloque propio del flujo (fase 2a: `w:drawing` inline en DOCX). `imgId` referencia el registro de imágenes decodificadas que mantiene el conversor — el maquetador nunca toca bytes de imagen (sigue puro). */
+export interface FlowImage { kind: 'image'; height: number; xPt: number; wPt: number; imgId: string }
+
+/** Línea de texto de una celda, POSICIONADA en x absoluto de página pero en y RELATIVO al borde SUPERIOR de la fila (positivo hacia abajo) — `paginar` no conoce la posición vertical de la fila hasta que le toca el turno. */
+export interface RelLinea { relYPt: number; segs: Seg[] }
+/** Rectángulo relleno (fondo de celda o segmento de borde) relativo al borde SUPERIOR de la fila, igual convención que `RelLinea`. */
+export interface RelBarra { relYPt: number; hPt: number; xPt: number; wPt: number; color: RGB }
+
+/**
+ * Fila de tabla (fase 2a, §9 fila #4), tratada como bloque ATÓMICO por
+ * `paginar`: si no cabe entera en lo que queda de página, la fila COMPLETA
+ * pasa a la siguiente (nunca se corta a mitad de fila) — salvo que sea más
+ * alta que una página entera, caso que el llamador debe partir aparte y
+ * avisar (ver `docx/render.ts`). `esEncabezado` marca las filas que
+ * `paginar` debe repetir automáticamente al principio de cada página nueva
+ * mientras dure la tabla (entre el `FlowTableStart` que las declara y el
+ * `FlowTableEnd` correspondiente).
+ */
+export interface FlowTableRow {
+  kind: 'tableRow'; height: number; lineas: RelLinea[]; fondos: RelBarra[]; bordes: RelBarra[]; esEncabezado: boolean;
+  /** Ids de combinaciones verticales (`w:vMerge`) que EMPIEZAN en esta fila. */
+  mergeInicio?: number[];
+  /** Ids de combinaciones verticales que CONTINÚAN en esta fila (la celda ocupa también las filas anteriores del grupo). `paginar` avisa si la fila cae en una página distinta a la del inicio del grupo. */
+  mergeContinua?: number[];
+}
+/** Abre una tabla: `headerRows` son las filas (ya construidas como `FlowTableRow`) que `paginar` repite tras cada salto de página dentro de esta tabla. */
+export interface FlowTableStart { kind: 'tableStart'; headerRows: FlowTableRow[] }
+/** Cierra la tabla abierta por el último `FlowTableStart`: deja de repetir encabezado tras este punto. */
+export interface FlowTableEnd { kind: 'tableEnd' }
+
+export type FlowItem = FlowLine | FlowGap | FlowRule | FlowPageBreak | FlowImage | FlowTableRow | FlowTableStart | FlowTableEnd;
 
 /** Tamaño y márgenes de una página, en puntos PDF. */
 export interface PageGeometry {
@@ -143,7 +210,7 @@ export function lineToFlowLine(
     const segs: Seg[] = [];
     let x = xStartPt;
     atoms.forEach((a, i) => {
-      segs.push({ xPt: x, text: a.text, font: a.font, sizePt: a.sizePt, color: a.color });
+      segs.push({ xPt: x, text: a.text, font: a.font, sizePt: a.sizePt, color: a.color, url: a.url, wPt: anchos[i], underline: a.underline });
       x += anchos[i]!;
       if (i < atoms.length - 1) x += espacios[i]! + (atoms[i + 1]!.pegado ? 0 : extraPorHueco);
     });
@@ -166,13 +233,16 @@ export function lineToFlowLine(
     // comparte estilo con `a` — un átomo pegado de OTRO estilo, como una
     // coma normal tras una palabra en negrita, no se fusiona aquí: rompe el
     // bucle por estilo distinto y se resuelve más abajo, sin espacio entre
-    // ambos trazos).
-    while (j < atoms.length && atoms[j]!.font === a.font && atoms[j]!.sizePt === a.sizePt && sameColor(atoms[j]!.color, a.color)) {
+    // ambos trazos). La URL del enlace también forma parte del "estilo": dos
+    // átomos con URLs distintas (o uno con y otro sin) nunca se fusionan,
+    // cada uno necesita su propia caja de anotación `/Link`.
+    while (j < atoms.length && atoms[j]!.font === a.font && atoms[j]!.sizePt === a.sizePt && sameColor(atoms[j]!.color, a.color) && atoms[j]!.url === a.url && !!atoms[j]!.underline === !!a.underline) {
       text += (atoms[j]!.pegado ? '' : ' ') + atoms[j]!.text;
       j++;
     }
-    segs.push({ xPt: x, text, font: a.font, sizePt: a.sizePt, color: a.color });
-    x += medir(a.font, a.sizePt, text);
+    const anchoSeg = medir(a.font, a.sizePt, text);
+    segs.push({ xPt: x, text, font: a.font, sizePt: a.sizePt, color: a.color, url: a.url, wPt: anchoSeg, underline: a.underline });
+    x += anchoSeg;
     if (j < atoms.length && !atoms[j]!.pegado) x += medir(a.font, a.sizePt, ' ');
     i = j;
   }
@@ -195,21 +265,70 @@ export function lineToFlowLine(
 export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: number): ResultadoLayout {
   const trazos: Trazo[] = [];
   const barras: Barra[] = [];
+  const imagenes: ImagenColocada[] = [];
+  const enlaces: EnlaceColocado[] = [];
   let page = 0;
   const topPt = geo.heightPt - geo.marginTopPt;
   const bottomPt = geo.marginBottomPt;
   let cursor = topPt;
   let skipLeadingGaps = false;
   let pintadoEnPagina = false;
+  // Encabezado(s) de la tabla actualmente abierta (entre FlowTableStart y
+  // FlowTableEnd): se repiten al principio de cada página nueva mientras
+  // dure la tabla. Como este maquetador no admite tablas anidadas, basta con
+  // una sola "tabla activa" a la vez.
+  let encabezadosTabla: FlowTableRow[] = [];
+  // Página en la que se colocó la última fila de cada combinación vertical; si una continuación cae en otra, esa combinación queda cortada por el salto.
+  const paginaDeMerge = new Map<number, number>();
+  const mergesPartidos = new Set<number>();
+
+  function nuevaPagina(): void {
+    page++;
+    cursor = topPt;
+    skipLeadingGaps = true;
+    pintadoEnPagina = false;
+  }
+
+  /**
+   * Barra fina de subrayado bajo la línea base de `seg`, si `seg.underline`
+   * está activo (y se conoce su ancho, `seg.wPt`) — proporción típica de un
+   * subrayado tipográfico: ~10% del tamaño de fuente por debajo de la línea
+   * base, ~6% de grosor (mínimo 0.6pt para tamaños muy pequeños).
+   */
+  function barraSubrayado(seg: Seg, baseline: number): Barra | null {
+    if (!seg.underline || !seg.wPt) return null;
+    return { page, xPt: seg.xPt, yPt: baseline - seg.sizePt * 0.1, wPt: seg.wPt, hPt: Math.max(0.6, seg.sizePt * 0.06), color: seg.color };
+  }
+
+  /** Coloca una fila de tabla YA en la página/cursor actuales (no decide paginación: eso lo hace el llamador). */
+  function colocarFila(row: FlowTableRow): void {
+    for (const id of row.mergeContinua ?? []) if (paginaDeMerge.get(id) !== page) mergesPartidos.add(id);
+    for (const id of [...(row.mergeInicio ?? []), ...(row.mergeContinua ?? [])]) paginaDeMerge.set(id, page);
+    for (const f of row.fondos) {
+      barras.push({ page, xPt: f.xPt, yPt: cursor - f.relYPt - f.hPt, wPt: f.wPt, hPt: f.hPt, color: f.color });
+    }
+    for (const linea of row.lineas) {
+      const baseline = cursor - linea.relYPt;
+      for (const seg of linea.segs) {
+        trazos.push({ page, xPt: seg.xPt, yPt: baseline, text: seg.text, font: seg.font, sizePt: seg.sizePt, color: seg.color });
+        if (seg.url && seg.wPt) enlaces.push({ page, xPt: seg.xPt, yPt: baseline - seg.sizePt * 0.2, wPt: seg.wPt, hPt: seg.sizePt * 1.1, url: seg.url });
+        const subrayado = barraSubrayado(seg, baseline);
+        if (subrayado) barras.push(subrayado);
+      }
+    }
+    for (const b of row.bordes) {
+      barras.push({ page, xPt: b.xPt, yPt: cursor - b.relYPt - b.hPt, wPt: b.wPt, hPt: b.hPt, color: b.color });
+    }
+    pintadoEnPagina = true;
+    cursor -= row.height;
+  }
 
   for (const item of items) {
+    if (item.kind === 'tableStart') { encabezadosTabla = item.headerRows; continue; }
+    if (item.kind === 'tableEnd') { encabezadosTabla = []; continue; }
+
     if (item.kind === 'pagebreak') {
-      if (pintadoEnPagina) {
-        page++;
-        cursor = topPt;
-        skipLeadingGaps = true;
-        pintadoEnPagina = false;
-      }
+      if (pintadoEnPagina) nuevaPagina();
       continue;
     }
 
@@ -218,13 +337,32 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
       skipLeadingGaps = false;
     }
 
+    if (item.kind === 'tableRow') {
+      if (cursor - item.height < bottomPt && cursor < topPt) {
+        nuevaPagina();
+        // Repite el encabezado en la página nueva, salvo si la fila que
+        // provocó el salto es ella misma una fila de encabezado (evita
+        // duplicarla / recursión cuando el propio encabezado es lo primero
+        // de la tabla en la página nueva).
+        if (!item.esEncabezado) for (const h of encabezadosTabla) colocarFila(h);
+      }
+      colocarFila(item);
+      continue;
+    }
+
+    if (item.kind === 'image') {
+      if (cursor - item.height < bottomPt && cursor < topPt) nuevaPagina();
+      const bottom = cursor - item.height;
+      imagenes.push({ page, xPt: item.xPt, yPt: bottom, wPt: item.wPt, hPt: item.height, imgId: item.imgId });
+      pintadoEnPagina = true;
+      cursor = bottom;
+      continue;
+    }
+
     const extra = item.kind === 'line' ? (item.keepWithNextHeight ?? 0) : 0;
     const needed = item.height + extra;
     if (cursor - needed < bottomPt && cursor < topPt) {
-      page++;
-      cursor = topPt;
-      skipLeadingGaps = true;
-      pintadoEnPagina = false;
+      nuevaPagina();
       if (item.kind === 'gap') continue;
     }
 
@@ -232,7 +370,13 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
 
     if (item.kind === 'line') {
       const baseline = bottom + item.height * baselineFraction;
-      for (const seg of item.segs) { trazos.push({ page, xPt: seg.xPt, yPt: baseline, text: seg.text, font: seg.font, sizePt: seg.sizePt, color: seg.color }); pintadoEnPagina = true; }
+      for (const seg of item.segs) {
+        trazos.push({ page, xPt: seg.xPt, yPt: baseline, text: seg.text, font: seg.font, sizePt: seg.sizePt, color: seg.color });
+        if (seg.url && seg.wPt) enlaces.push({ page, xPt: seg.xPt, yPt: baseline - seg.sizePt * 0.2, wPt: seg.wPt, hPt: seg.sizePt * 1.1, url: seg.url });
+        const subrayado = barraSubrayado(seg, baseline);
+        if (subrayado) barras.push(subrayado);
+        pintadoEnPagina = true;
+      }
       if (item.bg) { barras.push({ page, xPt: item.bg.xPt, yPt: bottom, wPt: item.bg.wPt, hPt: item.height, color: item.bg.color }); pintadoEnPagina = true; }
       for (const bar of item.bars) { barras.push({ page, xPt: bar.xPt, yPt: bottom, wPt: bar.wPt, hPt: item.height, color: bar.color }); pintadoEnPagina = true; }
     } else if (item.kind === 'rule') {
@@ -246,5 +390,10 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     cursor = bottom;
   }
 
-  return { totalPaginas: page + 1, trazos, barras };
+  const advertencias: string[] = [];
+  if (mergesPartidos.size > 0) {
+    const c = mergesPartidos.size;
+    advertencias.push(`${c === 1 ? 'Una celda combinada verticalmente cruza' : `${c} celdas combinadas verticalmente cruzan`} un salto de página: la celda se muestra cortada en el salto (el texto está en la primera página de la combinación).`);
+  }
+  return { totalPaginas: page + 1, trazos, barras, imagenes, enlaces, advertencias };
 }
