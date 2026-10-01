@@ -15,6 +15,8 @@ export interface Ctx {
   refresh(): void;
   /** Reconstruye SOLO `pageIndex` (tamaño, rotación, texto) — para comandos que tocan una única página existente (E-043/E-044, docs/ERRORES-CONOCIDOS.md). */
   refreshPage(pageIndex: number): void;
+  /** Avisa a la UI de que el árbol de marcadores cambió (no toca páginas ni miniaturas). */
+  refreshOutline(): void;
 }
 
 export interface Command {
