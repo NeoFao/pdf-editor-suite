@@ -637,3 +637,33 @@ select, input[type="text"], input[type="search"], input[type="number"] {
 
 /* A-05: el panel de compresión es un <dialog>; solo es flex mientras está abierto. */
 dialog.compress-panel[open] { display: flex; }
+
+/* ── Buscar y reemplazar (Ctrl/Cmd+H) ───────────────────────────────────── */
+.replace-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ed-sp-2);
+  padding: var(--ed-sp-1) var(--ed-sp-3);
+  background: var(--ed-surface);
+  border-bottom: 1px solid var(--ed-border);
+  font-size: var(--ed-font-sm);
+  color: var(--ed-text);
+}
+.replace-bar[hidden] { display: none; }
+.replace-bar input[type="text"] {
+  height: 28px; box-sizing: border-box; min-width: 140px;
+  border: 1px solid var(--ed-control-border); border-radius: var(--ed-radius-sm);
+  background: var(--ed-surface-2); color: var(--ed-text); padding: 0 var(--ed-sp-2);
+  font-size: var(--ed-font-sm);
+}
+.replace-opt { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; }
+.replace-btn {
+  height: 28px; padding: 0 var(--ed-sp-3); cursor: pointer;
+  border: 1px solid var(--ed-control-border); border-radius: var(--ed-radius-sm);
+  background: var(--ed-surface-2); color: var(--ed-text); font-size: var(--ed-font-sm);
+}
+.replace-btn:hover:not(:disabled) { background: var(--ed-hover); }
+.replace-btn:disabled { opacity: .55; cursor: default; }
+.replace-result { color: var(--ed-text-muted); flex: 1 1 auto; min-width: 0; }

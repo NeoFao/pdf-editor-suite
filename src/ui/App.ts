@@ -3,6 +3,8 @@ import { EditSession } from '../model/EditSession';
 import { CommandBus } from '../commands/Command';
 import { EditTextRunCmd } from '../commands/EditTextRun';
 import { ReplaceRunFontCmd } from '../commands/ReplaceRunFont';
+import { ReemplazarTextoCmd, type CambioTexto } from '../commands/ReemplazarTexto';
+import { buscarEnRuns, aplicarReemplazos, type Coincidencia, type OpcionesBusqueda } from '../texto/buscarReemplazar';
 import { DeleteRunCmd } from '../commands/DeleteRun';
 import { InsertTextCmd } from '../commands/InsertText';
 import { MoveRunCmd } from '../commands/MoveRun';
@@ -122,6 +124,12 @@ function cederHilo(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** Resultado de recorrer el documento buscando para reemplazar: runs con coincidencias propias + nº de coincidencias que cruzan runs. */
+interface EscaneoReemplazo {
+  runs: { pageIndex: number; runId: number; texto: string; coincidencias: Coincidencia[] }[];
+  cruzan: number;
+}
+
 /** Orquesta motor + sesión + comandos + visor. Punto de entrada de la app nueva. */
 export class App {
   private engine!: PdfiumEngine;
@@ -207,6 +215,19 @@ export class App {
   private readonly searchInput: HTMLInputElement;
   /** Incrementado en cada `search()`: una búsqueda vieja que sigue en vuelo se abandona en cuanto detecta que ya no es la última (ver `search`). */
   private searchSeq = 0;
+  // ── Buscar y reemplazar (Ctrl/Cmd+H) ──
+  private replaceBar!: HTMLElement;
+  private replaceInput!: HTMLInputElement;
+  private optCase!: HTMLInputElement;
+  private optWord!: HTMLInputElement;
+  private btnReplace!: HTMLButtonElement;
+  private btnReplaceAll!: HTMLButtonElement;
+  private replaceResult!: HTMLElement;
+  private btnReplaceToggle!: HTMLButtonElement;
+  /** true mientras corre un reemplazo: evita solapar dos operaciones de documento completo. */
+  private reemplazando = false;
+  /** Posición tras la última coincidencia reemplazada (página, run, desplazamiento UTF-16): el siguiente "Reemplazar" busca A PARTIR de aquí, para no re-reemplazar lo recién escrito si contiene la consulta. */
+  private cursorReemplazo: { pageIndex: number; runId: number; pos: number } | null = null;
   private readonly rangeInput: HTMLInputElement;
   private currentPage = 0;
   /** `#file-input`: se guarda como campo para poder disparar `.click()` desde el atajo Ctrl/Cmd+O (§9, #34). */
@@ -392,6 +413,9 @@ export class App {
     searchBox.appendChild(crearIcono('buscar'));
     searchBox.appendChild(this.searchInput);
 
+    this.searchInput.addEventListener('input', () => { this.cursorReemplazo = null; });
+    this.construirBarraReemplazo();
+
     const btnPrev = this.iconBoton('flecha-izq', 'Página anterior', 'btn-prev', () => this.goToPage(this.currentPage - 1));
     const btnNext = this.iconBoton('flecha-der', 'Página siguiente', 'btn-next', () => this.goToPage(this.currentPage + 1));
     const btnRotate = this.iconBoton('rotar', 'Rotar', 'btn-rotate', () => { if (this.bus) void this.bus.execute(new RotatePageCmd(this.currentPage, 90)); }, { mostrarEtiqueta: true });
@@ -503,7 +527,7 @@ export class App {
       grupoGuardar,
       Object.assign(document.createElement('div'), { className: 'topbar-spacer' }),
       grupoZoom, this.separador('topbar-sep'),
-      searchBox, this.separador('topbar-sep'),
+      searchBox, this.btnReplaceToggle, this.separador('topbar-sep'),
       btnShortcuts
     );
     topbar.append(this.btnDrawer, topbarScroll, this.btnMore);
@@ -576,7 +600,7 @@ export class App {
 
     const toolbarWrap = document.createElement('div');
     toolbarWrap.id = 'toolbar';
-    toolbarWrap.append(topbar, this.toolbarMoreEl);
+    toolbarWrap.append(topbar, this.replaceBar, this.toolbarMoreEl);
     rootEl.appendChild(toolbarWrap);
 
     // Aviso de advertencias de conversión (§9 fila #4: "NO se pierde en
@@ -1208,6 +1232,10 @@ export class App {
         e.preventDefault();
         this.searchInput.focus();
         this.searchInput.select();
+        break;
+      case 'reemplazar':
+        e.preventDefault();
+        this.abrirReemplazo();
         break;
       case 'zoom-in':
         e.preventDefault();
@@ -2048,7 +2076,7 @@ export class App {
       for (let i = 0; i < pages.length; i++) {
         if (this.searchSeq !== token) return; // una búsqueda más reciente ya la reemplazó
         const page = pages[i]!;
-        const rects = this.session.engine.findText(this.session.doc, page.index, q);
+        const rects = this.session.engine.findText(this.session.doc, page.index, q, this.opcionesBusqueda());
         if (rects.length) { byPage.set(page.index, rects); total += rects.length; }
         if ((i + 1) % PAGE_YIELD_CHUNK === 0 || i === pages.length - 1) {
           if (pages.length > PAGE_YIELD_CHUNK) this.setStatus(`Buscando… ${i + 1}/${pages.length}`);
@@ -2059,6 +2087,277 @@ export class App {
     if (this.searchSeq !== token) return;
     this.viewer.setHighlights(byPage);
     this.setStatus(q ? `${total} coincidencia(s)` : '');
+  }
+
+  // ───────────────────────── Buscar y reemplazar ─────────────────────────
+
+  private construirBarraReemplazo(): void {
+    this.btnReplaceToggle = document.createElement('button');
+    this.btnReplaceToggle.type = 'button';
+    this.btnReplaceToggle.id = 'btn-replace-toggle';
+    this.btnReplaceToggle.className = 'icon-btn';
+    this.btnReplaceToggle.textContent = 'Reemplazar…';
+    this.btnReplaceToggle.title = 'Buscar y reemplazar (Ctrl/Cmd+H)';
+    this.btnReplaceToggle.setAttribute('aria-expanded', 'false');
+    this.btnReplaceToggle.setAttribute('aria-controls', 'replace-bar');
+    this.btnReplaceToggle.addEventListener('click', () => {
+      if (this.replaceBar.hidden) this.abrirReemplazo(); else this.cerrarReemplazo();
+    });
+
+    const bar = document.createElement('div');
+    bar.id = 'replace-bar';
+    bar.className = 'replace-bar';
+    bar.hidden = true;
+    bar.setAttribute('role', 'group');
+    bar.setAttribute('aria-label', 'Buscar y reemplazar');
+    this.replaceBar = bar;
+
+    this.replaceInput = document.createElement('input');
+    this.replaceInput.type = 'text';
+    this.replaceInput.id = 'replace-input';
+    this.replaceInput.placeholder = 'Reemplazar con…';
+    this.replaceInput.setAttribute('aria-label', 'Reemplazar con');
+    this.replaceInput.autocomplete = 'off';
+    this.replaceInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); void this.reemplazarActual(); }
+    });
+
+    const casilla = (id: string, etiqueta: string): [HTMLLabelElement, HTMLInputElement] => {
+      const l = document.createElement('label');
+      l.className = 'replace-opt';
+      const i = document.createElement('input');
+      i.type = 'checkbox'; i.id = id;
+      i.addEventListener('change', () => { this.cursorReemplazo = null; void this.search(); });
+      l.append(i, document.createTextNode(etiqueta));
+      return [l, i];
+    };
+    const [lblCase, optCase] = casilla('opt-case', 'Distinguir mayúsculas');
+    const [lblWord, optWord] = casilla('opt-word', 'Palabra completa');
+    this.optCase = optCase; this.optWord = optWord;
+
+    this.btnReplace = document.createElement('button');
+    this.btnReplace.type = 'button'; this.btnReplace.id = 'btn-replace'; this.btnReplace.className = 'replace-btn';
+    this.btnReplace.textContent = 'Reemplazar';
+    this.btnReplace.addEventListener('click', () => void this.reemplazarActual());
+    this.btnReplaceAll = document.createElement('button');
+    this.btnReplaceAll.type = 'button'; this.btnReplaceAll.id = 'btn-replace-all'; this.btnReplaceAll.className = 'replace-btn';
+    this.btnReplaceAll.textContent = 'Reemplazar todo';
+    this.btnReplaceAll.addEventListener('click', () => void this.reemplazarTodo());
+
+    const cerrar = document.createElement('button');
+    cerrar.type = 'button'; cerrar.id = 'btn-replace-close'; cerrar.className = 'replace-btn';
+    cerrar.textContent = '×';
+    cerrar.title = 'Cerrar buscar y reemplazar';
+    cerrar.setAttribute('aria-label', 'Cerrar buscar y reemplazar');
+    cerrar.addEventListener('click', () => this.cerrarReemplazo());
+
+    this.replaceResult = document.createElement('span');
+    this.replaceResult.id = 'replace-result';
+    this.replaceResult.className = 'replace-result';
+    this.replaceResult.setAttribute('role', 'status');
+    this.replaceResult.setAttribute('aria-live', 'polite');
+
+    bar.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); this.cerrarReemplazo(); } });
+    bar.append(this.replaceInput, lblCase, lblWord, this.btnReplace, this.btnReplaceAll, this.replaceResult, cerrar);
+  }
+
+  /** Ctrl/Cmd+H o el botón: muestra la barra y deja el foco donde falta algo (consulta vacía -> buscar; si no -> reemplazo). */
+  private abrirReemplazo(): void {
+    this.replaceBar.hidden = false;
+    this.btnReplaceToggle.setAttribute('aria-expanded', 'true');
+    if (!this.searchInput.value.trim()) { this.searchInput.focus(); this.searchInput.select(); }
+    else { this.replaceInput.focus(); this.replaceInput.select(); }
+  }
+
+  private cerrarReemplazo(): void {
+    this.replaceBar.hidden = true;
+    this.btnReplaceToggle.setAttribute('aria-expanded', 'false');
+    this.btnReplaceToggle.focus();
+  }
+
+  private opcionesBusqueda(): OpcionesBusqueda {
+    return { mayusculas: this.optCase.checked, palabraCompleta: this.optWord.checked };
+  }
+
+  private anunciarReemplazo(msg: string): void {
+    this.replaceResult.textContent = msg;
+    this.setStatus(msg);
+  }
+
+  private ocupadoReemplazo(ocupado: boolean): void {
+    this.reemplazando = ocupado;
+    this.btnReplace.disabled = ocupado;
+    this.btnReplaceAll.disabled = ocupado;
+  }
+
+  /**
+   * Recorre TODAS las páginas buscando `q` en el texto de sus runs (operación
+   * de documento completo: cede el hilo cada `PAGE_YIELD_CHUNK` páginas y
+   * muestra el avance — E-043). Devuelve los runs con coincidencias propias
+   * (reemplazables) y cuántas coincidencias cruzan runs (no reemplazables).
+   */
+  private async escanearReemplazo(q: string): Promise<EscaneoReemplazo | null> {
+    const s = this.session;
+    if (!s) return null;
+    const opts = this.opcionesBusqueda();
+    const out: EscaneoReemplazo['runs'] = [];
+    let cruzan = 0;
+    const total = s.model.pages.length;
+    for (let i = 0; i < total; i++) {
+      if (this.session !== s) return null; // se abrió otro documento mientras tanto
+      const runs = s.ensureText(i);
+      const r = buscarEnRuns(runs, q, opts);
+      cruzan += r.cruzan;
+      const porRun = new Map<number, Coincidencia[]>();
+      for (const c of r.dentro) {
+        let l = porRun.get(c.runId);
+        if (!l) { l = []; porRun.set(c.runId, l); }
+        l.push(c);
+      }
+      for (const run of runs) {
+        const l = porRun.get(run.runId);
+        if (l) out.push({ pageIndex: i, runId: run.runId, texto: run.text, coincidencias: l });
+      }
+      if ((i + 1) % PAGE_YIELD_CHUNK === 0 || i === total - 1) {
+        if (total > PAGE_YIELD_CHUNK) this.setStatus(`Buscando… ${i + 1}/${total}`);
+        await cederHilo();
+      }
+    }
+    return { runs: out, cruzan };
+  }
+
+  private textoAvisoCruces(n: number): string {
+    return n === 1
+      ? '1 coincidencia no reemplazada porque abarca varias líneas o tramos'
+      : `${n} coincidencias no reemplazadas porque abarcan varias líneas o tramos`;
+  }
+
+  /** Avisos del comando (fuente estándar / runs que ningún tipo de letra cubre) y de coincidencias entre runs. */
+  private avisosReemplazo(cmd: ReemplazarTextoCmd, cruzan: number): string {
+    const r = cmd.resumen;
+    const partes: string[] = [];
+    if (r.sustituidos > 0) partes.push(`${r.sustituidos} con fuente estándar (${r.fuentes.join(', ')}) porque la original no tenía algún carácter`);
+    if (r.fallidos > 0) partes.push(`${r.fallidos} sin cambiar porque ninguna fuente tiene esos caracteres`);
+    if (cruzan > 0) partes.push(this.textoAvisoCruces(cruzan));
+    return partes.join('; ');
+  }
+
+  /** "Reemplazar": cambia la PRÓXIMA coincidencia (desde la página actual o desde la última reemplazada) y avisa de las que no puede tocar. */
+  private async reemplazarActual(): Promise<void> {
+    const s = this.session;
+    if (!s || !this.bus || this.reemplazando) return;
+    const q = this.searchInput.value.trim();
+    if (!q) { this.anunciarReemplazo('Escribe primero qué buscar.'); this.searchInput.focus(); return; }
+    this.ocupadoReemplazo(true);
+    try {
+      const esc = await this.escanearReemplazo(q);
+      if (!esc) return;
+      const cur = this.cursorReemplazo ?? { pageIndex: this.currentPage, runId: -1, pos: 0 };
+      interface Hit { pageIndex: number; runId: number; texto: string; c: Coincidencia }
+      const hits: Hit[] = [];
+      for (const r of esc.runs) for (const c of r.coincidencias) hits.push({ pageIndex: r.pageIndex, runId: r.runId, texto: r.texto, c });
+      const despues = (h: Hit): boolean =>
+        h.pageIndex > cur.pageIndex ||
+        (h.pageIndex === cur.pageIndex && (h.runId > cur.runId || (h.runId === cur.runId && h.c.inicio >= cur.pos)));
+      const hit = hits.find(despues) ?? hits[0];
+      if (!hit) {
+        this.anunciarReemplazo(esc.cruzan > 0 ? `0 reemplazos; ${this.textoAvisoCruces(esc.cruzan)}.` : 'No hay coincidencias.');
+        return;
+      }
+      const reemplazo = this.replaceInput.value;
+      const cambio: CambioTexto = {
+        pageIndex: hit.pageIndex, runId: hit.runId, oldText: hit.texto,
+        newText: aplicarReemplazos(hit.texto, [hit.c], reemplazo)
+      };
+      const cmd = new ReemplazarTextoCmd([cambio], 'Reemplazar');
+      await this.bus.execute(cmd);
+      this.cursorReemplazo = cmd.resumen.sustituidos > 0
+        ? { pageIndex: hit.pageIndex, runId: -1, pos: 0 } // el run se recreó con otro runId
+        : { pageIndex: hit.pageIndex, runId: hit.runId, pos: hit.c.inicio + reemplazo.length };
+      this.goToPage(hit.pageIndex);
+      await this.search();
+      await this.marcarActual(q);
+      const avisos = this.avisosReemplazo(cmd, esc.cruzan);
+      this.anunciarReemplazo(cmd.resumen.fallidos > 0
+        ? `0 reemplazos; ${avisos}.`
+        : `1 reemplazo (quedan ${hits.length - 1})${avisos ? '; ' + avisos : ''}.`);
+    } finally {
+      this.ocupadoReemplazo(false);
+    }
+  }
+
+  /**
+   * Selecciona y resalta (naranja) la coincidencia ACTUAL: la siguiente a
+   * `cursorReemplazo`, la misma que cambiará el próximo "Reemplazar". Lleva
+   * la vista a su página. Su caja sale de `findText` (mismo criterio y mismas
+   * opciones que el resaltado): la k-ésima caja, de izquierda a derecha, dentro
+   * de la caja del run, siendo k el orden de la coincidencia dentro de su run.
+   */
+  private async marcarActual(q: string): Promise<void> {
+    const s = this.session;
+    if (!s || !this.viewer) return;
+    const esc = await this.escanearReemplazo(q);
+    if (!esc || this.session !== s) return;
+    const cur = this.cursorReemplazo ?? { pageIndex: this.currentPage, runId: -1, pos: 0 };
+    interface Cand { pageIndex: number; runId: number; k: number; inicio: number }
+    const cands: Cand[] = [];
+    for (const r of esc.runs) r.coincidencias.forEach((c, k) => cands.push({ pageIndex: r.pageIndex, runId: r.runId, k, inicio: c.inicio }));
+    const h = cands.find((c) => c.pageIndex > cur.pageIndex ||
+      (c.pageIndex === cur.pageIndex && (c.runId > cur.runId || (c.runId === cur.runId && c.inicio >= cur.pos)))) ?? cands[0];
+    if (!h) { this.viewer.setCurrentMatch(null); return; }
+    const run = s.ensureText(h.pageIndex).find((x) => x.runId === h.runId);
+    if (!run) return;
+    const b = run.boxPt;
+    const cajas = s.engine.findText(s.doc, h.pageIndex, q, this.opcionesBusqueda())
+      .filter((r) => {
+        const cx = r.xPt + r.wPt / 2, cy = r.yPt + r.hPt / 2;
+        return cx >= b.xPt && cx <= b.xPt + b.wPt && cy >= b.yPt && cy <= b.yPt + b.hPt;
+      })
+      .sort((p1, p2) => p1.xPt - p2.xPt);
+    this.goToPage(h.pageIndex);
+    this.selection = { pageIndex: h.pageIndex, runId: h.runId };
+    this.reflectPropsPanel();
+    this.viewer.setCurrentMatch({ pageIndex: h.pageIndex, rect: cajas[h.k] ?? b });
+  }
+
+  /** "Reemplazar todo": UN comando compuesto (un solo paso de deshacer) sobre todo el documento. */
+  private async reemplazarTodo(): Promise<void> {
+    const s = this.session;
+    if (!s || !this.bus || this.reemplazando) return;
+    const q = this.searchInput.value.trim();
+    if (!q) { this.anunciarReemplazo('Escribe primero qué buscar.'); this.searchInput.focus(); return; }
+    this.ocupadoReemplazo(true);
+    try {
+      const esc = await this.escanearReemplazo(q);
+      if (!esc) return;
+      const reemplazo = this.replaceInput.value;
+      const cambios: CambioTexto[] = [];
+      const coincidenciasPorRun = new Map<string, number>();
+      let n = 0;
+      for (const r of esc.runs) {
+        n += r.coincidencias.length;
+        coincidenciasPorRun.set(`${r.pageIndex}:${r.runId}`, r.coincidencias.length);
+        cambios.push({ pageIndex: r.pageIndex, runId: r.runId, oldText: r.texto, newText: aplicarReemplazos(r.texto, r.coincidencias, reemplazo) });
+      }
+      if (cambios.length === 0) {
+        this.anunciarReemplazo(esc.cruzan > 0 ? `0 reemplazos; ${this.textoAvisoCruces(esc.cruzan)}.` : 'No hay coincidencias.');
+        return;
+      }
+      const cmd = new ReemplazarTextoCmd(cambios, 'Reemplazar todo', {
+        onProgress: (hechas, t) => { if (t > PAGE_YIELD_CHUNK) this.setStatus(`Reemplazando… ${hechas}/${t}`); },
+        ceder: cederHilo,
+        paginasPorTanda: PAGE_YIELD_CHUNK
+      });
+      await this.bus.execute(cmd);
+      this.cursorReemplazo = null;
+      // Los runs que no se pudieron escribir quedaron intactos: no cuentan como reemplazos.
+      for (const f of cmd.fallidosCambios) n -= coincidenciasPorRun.get(`${f.pageIndex}:${f.runId}`) ?? 0;
+      await this.search();
+      const avisos = this.avisosReemplazo(cmd, esc.cruzan);
+      this.anunciarReemplazo(`${n} reemplazo${n === 1 ? '' : 's'}${avisos ? '; ' + avisos : ''}.`);
+    } finally {
+      this.ocupadoReemplazo(false);
+    }
   }
 
   private zoom(factor: number): void {

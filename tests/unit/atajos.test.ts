@@ -127,6 +127,16 @@ test('Ctrl+F SÍ dispara aunque el foco esté en un campo editable', () => {
   expect(resolverAtajo(ev({ key: 'f', ctrl: true, editable: true }))?.accion).toBe('buscar');
 });
 
+test('Ctrl/Cmd+H resuelve "reemplazar" y SÍ dispara con el foco en un campo editable', () => {
+  expect(resolverAtajo(ev({ key: 'h', ctrl: true }))?.accion).toBe('reemplazar');
+  expect(resolverAtajo(ev({ key: 'H', meta: true }))?.accion).toBe('reemplazar');
+  expect(resolverAtajo(ev({ key: 'h', ctrl: true, editable: true }))?.accion).toBe('reemplazar');
+});
+
+test('la tecla h sola (sin Ctrl/Cmd) no resuelve nada', () => {
+  expect(resolverAtajo(ev({ key: 'h' }))).toBeNull();
+});
+
 test('una tecla suelta sin ninguna combinación reconocida no resuelve nada', () => {
   expect(resolverAtajo(ev({ key: 'a' }))).toBeNull();
 });

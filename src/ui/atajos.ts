@@ -42,6 +42,7 @@ export type AccionAtajo =
   | 'abrir'
   | 'imprimir'
   | 'buscar'
+  | 'reemplazar'
   | 'zoom-in'
   | 'zoom-out'
   | 'zoom-ajustar'
@@ -124,6 +125,13 @@ export const TABLA_ATAJOS: DefinicionAtajo[] = [
     descripcion: 'Ir al buscador',
     bloqueaEnEditable: false,
     coincide: (e) => ctrlOMeta(e) && tecla(e) === 'f'
+  },
+  {
+    combinacion: 'Ctrl/Cmd + H',
+    accion: 'reemplazar',
+    descripcion: 'Buscar y reemplazar',
+    bloqueaEnEditable: false,
+    coincide: (e) => ctrlOMeta(e) && !e.shift && !e.alt && tecla(e) === 'h'
   },
   {
     combinacion: 'Ctrl/Cmd + "+"',

@@ -172,7 +172,7 @@ export interface PdfEngine {
   /** Renderiza la página a un bitmap RGBA a la escala dada. */
   renderPage(doc: DocHandle, pageIndex: number, scale: number): RenderResult;
   /** Busca `query` en la página (insensible a mayúsculas) y devuelve la caja de cada coincidencia. */
-  findText(doc: DocHandle, pageIndex: number, query: string): RectPt[];
+  findText(doc: DocHandle, pageIndex: number, query: string, opciones?: { mayusculas?: boolean; palabraCompleta?: boolean }): RectPt[];
   /** Runs de texto de la página, con su caja, fuente, tamaño y color. Vacío si no hay texto (escaneado). */
   getPageText(doc: DocHandle, pageIndex: number): TextRun[];
   /**
