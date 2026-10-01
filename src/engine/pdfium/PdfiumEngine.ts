@@ -264,13 +264,15 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
-  findText(doc: DocHandle, pageIndex: number, query: string): RectPt[] {
+  findText(doc: DocHandle, pageIndex: number, query: string, opciones?: { mayusculas?: boolean; palabraCompleta?: boolean }): RectPt[] {
     if (!query) return [];
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const textPage = this.p.FPDFText_LoadPage(page);
     const wq = this.mem.wide(query);
-    const sh = this.p.FPDFText_FindStart(textPage, wq, 0, 0); // flags 0 = insensible a mayúsculas
+    // flags: 0 = insensible a mayúsculas; FPDF_MATCHCASE=0x1, FPDF_MATCHWHOLEWORD=0x2
+    const flags = (opciones?.mayusculas ? 0x1 : 0) | (opciones?.palabraCompleta ? 0x2 : 0);
+    const sh = this.p.FPDFText_FindStart(textPage, wq, flags, 0);
     const matches: RectPt[] = [];
     try {
       while (this.p.FPDFText_FindNext(sh)) {

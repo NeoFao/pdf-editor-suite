@@ -30,7 +30,14 @@ export interface ResultadoBusqueda {
 }
 
 const ESCAPAR = /[.*+?^${}()|[\]\\]/g;
-const NO_PALABRA = '[\\p{L}\\p{N}_]';
+/**
+ * "Palabra" = ASCII alfanumérico y _, EXACTAMENTE como PDFium
+ * (la opción de palabra completa de su búsqueda, que usa el resaltado): una letra con
+ * tilde o ñ NO cuenta como parte de la palabra ("año" casa con "a" y con
+ * "o" completas). Se alinea con el motor para que buscar, resaltar, contar y
+ * reemplazar compartan el mismo criterio (verificado en findText.opciones.test.ts).
+ */
+const NO_PALABRA = '[A-Za-z0-9_]';
 
 function crearRegex(q: string, o: OpcionesBusqueda): RegExp {
   let src = q.replace(ESCAPAR, '\\$&');

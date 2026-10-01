@@ -2070,7 +2070,7 @@ export class App {
       for (let i = 0; i < pages.length; i++) {
         if (this.searchSeq !== token) return; // una búsqueda más reciente ya la reemplazó
         const page = pages[i]!;
-        const rects = this.session.engine.findText(this.session.doc, page.index, q);
+        const rects = this.session.engine.findText(this.session.doc, page.index, q, this.opcionesBusqueda());
         if (rects.length) { byPage.set(page.index, rects); total += rects.length; }
         if ((i + 1) % PAGE_YIELD_CHUNK === 0 || i === pages.length - 1) {
           if (pages.length > PAGE_YIELD_CHUNK) this.setStatus(`Buscando… ${i + 1}/${pages.length}`);
@@ -2121,7 +2121,7 @@ export class App {
       l.className = 'replace-opt';
       const i = document.createElement('input');
       i.type = 'checkbox'; i.id = id;
-      i.addEventListener('change', () => { this.cursorReemplazo = null; });
+      i.addEventListener('change', () => { this.cursorReemplazo = null; void this.search(); });
       l.append(i, document.createTextNode(etiqueta));
       return [l, i];
     };
@@ -2270,6 +2270,7 @@ export class App {
         : { pageIndex: hit.pageIndex, runId: hit.runId, pos: hit.c.inicio + reemplazo.length };
       this.goToPage(hit.pageIndex);
       await this.search();
+      await this.marcarActual(q);
       const avisos = this.avisosReemplazo(cmd, esc.cruzan);
       this.anunciarReemplazo(cmd.resumen.fallidos > 0
         ? `0 reemplazos; ${avisos}.`
@@ -2277,6 +2278,40 @@ export class App {
     } finally {
       this.ocupadoReemplazo(false);
     }
+  }
+
+  /**
+   * Selecciona y resalta (naranja) la coincidencia ACTUAL: la siguiente a
+   * `cursorReemplazo`, la misma que cambiará el próximo "Reemplazar". Lleva
+   * la vista a su página. Su caja sale de `findText` (mismo criterio y mismas
+   * opciones que el resaltado): la k-ésima caja, de izquierda a derecha, dentro
+   * de la caja del run, siendo k el orden de la coincidencia dentro de su run.
+   */
+  private async marcarActual(q: string): Promise<void> {
+    const s = this.session;
+    if (!s || !this.viewer) return;
+    const esc = await this.escanearReemplazo(q);
+    if (!esc || this.session !== s) return;
+    const cur = this.cursorReemplazo ?? { pageIndex: this.currentPage, runId: -1, pos: 0 };
+    interface Cand { pageIndex: number; runId: number; k: number; inicio: number }
+    const cands: Cand[] = [];
+    for (const r of esc.runs) r.coincidencias.forEach((c, k) => cands.push({ pageIndex: r.pageIndex, runId: r.runId, k, inicio: c.inicio }));
+    const h = cands.find((c) => c.pageIndex > cur.pageIndex ||
+      (c.pageIndex === cur.pageIndex && (c.runId > cur.runId || (c.runId === cur.runId && c.inicio >= cur.pos)))) ?? cands[0];
+    if (!h) { this.viewer.setCurrentMatch(null); return; }
+    const run = s.ensureText(h.pageIndex).find((x) => x.runId === h.runId);
+    if (!run) return;
+    const b = run.boxPt;
+    const cajas = s.engine.findText(s.doc, h.pageIndex, q, this.opcionesBusqueda())
+      .filter((r) => {
+        const cx = r.xPt + r.wPt / 2, cy = r.yPt + r.hPt / 2;
+        return cx >= b.xPt && cx <= b.xPt + b.wPt && cy >= b.yPt && cy <= b.yPt + b.hPt;
+      })
+      .sort((p1, p2) => p1.xPt - p2.xPt);
+    this.goToPage(h.pageIndex);
+    this.selection = { pageIndex: h.pageIndex, runId: h.runId };
+    this.reflectPropsPanel();
+    this.viewer.setCurrentMatch({ pageIndex: h.pageIndex, rect: cajas[h.k] ?? b });
   }
 
   /** "Reemplazar todo": UN comando compuesto (un solo paso de deshacer) sobre todo el documento. */

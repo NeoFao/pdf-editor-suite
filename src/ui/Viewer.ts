@@ -63,6 +63,8 @@ export class Viewer {
   private rendered = new Set<number>();
   private scale = 1;
   private highlights = new Map<number, RectPt[]>();
+  /** Coincidencia ACTUAL de buscar y reemplazar (la que reemplazará el próximo "Reemplazar"), en puntos PDF; se pinta más fuerte que el resto. */
+  private currentMatch: { pageIndex: number; rect: RectPt } | null = null;
   private observer: IntersectionObserver | null = null;
   private currentPage = 0;
   /**
@@ -385,15 +387,25 @@ export class Viewer {
   /** Fija las coincidencias de búsqueda a resaltar por página y las repinta. */
   setHighlights(byPage: Map<number, RectPt[]>): void {
     this.highlights = byPage;
+    this.currentMatch = null;
     for (let i = 0; i < this.wrappers.length; i++) this.drawHighlights(i);
+  }
+
+  /** Marca (o, con null, desmarca) la coincidencia actual: caja naranja encima del resto de resaltados. */
+  setCurrentMatch(m: { pageIndex: number; rect: RectPt } | null): void {
+    const previa = this.currentMatch?.pageIndex;
+    this.currentMatch = m;
+    if (previa !== undefined && previa !== m?.pageIndex) this.drawHighlights(previa);
+    if (m) this.drawHighlights(m.pageIndex);
   }
 
   private drawHighlights(i: number): void {
     const wrapper = this.wrappers[i];
     if (!wrapper) return;
     wrapper.querySelector('.hl-layer')?.remove();
-    const rects = this.highlights.get(i);
-    if (!rects || rects.length === 0) return;
+    const rects = this.highlights.get(i) ?? [];
+    const actual = this.currentMatch && this.currentMatch.pageIndex === i ? this.currentMatch.rect : null;
+    if (rects.length === 0 && !actual) return;
     const geom = this.geoms[i]!;
     const layer = document.createElement('div');
     layer.className = 'hl-layer';
@@ -406,6 +418,17 @@ export class Viewer {
         position: 'absolute', left: `${c.left}px`, top: `${c.top}px`,
         width: `${c.width}px`, height: `${c.height}px`,
         background: 'rgba(250, 204, 21, .45)', outline: '1px solid #eab308'
+      });
+      layer.appendChild(box);
+    }
+    if (actual) {
+      const c = geom.rectPtToCss(actual);
+      const box = document.createElement('div');
+      box.className = 'search-hl search-hl-current';
+      Object.assign(box.style, {
+        position: 'absolute', left: `${c.left}px`, top: `${c.top}px`,
+        width: `${c.width}px`, height: `${c.height}px`,
+        background: 'rgba(249, 115, 22, .5)', outline: '2px solid #c2410c'
       });
       layer.appendChild(box);
     }

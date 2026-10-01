@@ -143,3 +143,39 @@ test('Reemplazar todo con una sola coincidencia dice "1 reemplazo" (singular) y 
   await expect(page.locator('#replace-result')).toHaveText('1 reemplazo.');
   await expect(page.locator('.run', { hasText: 'Sexta linea final' })).toBeVisible();
 });
+
+test('los resaltados respetan "Distinguir mayúsculas" y "Palabra completa" (mismo criterio que el reemplazo)', async ({ page }) => {
+  await abrir(page);
+  await page.locator('#btn-search').fill('linea');
+  await expect(page.locator('.search-hl')).toHaveCount(5);
+
+  await page.getByLabel('Distinguir mayúsculas').check();
+  await expect(page.locator('.search-hl')).toHaveCount(4); // sin la "Linea" de la página 2
+  await expect(page.locator('#status')).toContainText('4 coincidencia');
+
+  await page.getByLabel('Distinguir mayúsculas').uncheck();
+  await page.locator('#btn-search').fill('on');
+  await expect(page.locator('.search-hl').first()).toBeVisible();
+  await page.getByLabel('Palabra completa').check();
+  await expect(page.locator('.search-hl')).toHaveCount(0);
+});
+
+test('Reemplazar deja marcada (naranja) la coincidencia ACTUAL: la siguiente a la reemplazada', async ({ page }) => {
+  await abrir(page);
+  await page.locator('#btn-search').fill('linea');
+  await page.locator('#replace-input').fill('fila');
+  await page.locator('#btn-replace').click();
+  await expect(page.locator('#replace-result')).toContainText('quedan 4');
+  const actual = page.locator('.search-hl-current');
+  await expect(actual).toHaveCount(1);
+  const caja = (await actual.boundingBox())!;
+  // La reemplazada era la de la línea 2 ("La segunda..."); la actual debe estar más abajo (línea 3).
+  const linea2 = (await page.locator('.run', { hasText: 'La segunda fila' }).boundingBox())!;
+  const linea3 = (await page.locator('.run', { hasText: 'Tercera linea' }).boundingBox())!;
+  expect(caja.y).toBeGreaterThan(linea2.y + linea2.height / 2);
+  expect(Math.abs(caja.y + caja.height / 2 - (linea3.y + linea3.height / 2))).toBeLessThan(linea3.height);
+
+  await page.locator('#btn-replace').click();
+  await expect(page.locator('#replace-result')).toContainText('quedan 3');
+  await expect(page.locator('.search-hl-current')).toHaveCount(1);
+});

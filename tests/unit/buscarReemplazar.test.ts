@@ -17,12 +17,12 @@ test('por defecto no distingue mayúsculas; con la opción, sí', () => {
 
 test('palabra completa: no casa dentro de otra palabra, sí con signos de puntuación alrededor', () => {
   const r = buscarEnRuns(runs('casa casado (casa), casas_ ñcasa'), 'casa', { ...O, palabraCompleta: true });
-  expect(r.dentro.map((c) => c.inicio)).toEqual([0, 13]);
+  expect(r.dentro.map((c) => c.inicio)).toEqual([0, 13, 28]);
 });
 
-test('palabra completa respeta letras acentuadas y dígitos', () => {
+test('palabra completa: como PDFium, solo ASCII alfanumérico y _ cuentan como palabra (ñ y tildes no)', () => {
   const r = buscarEnRuns(runs('año años 1a a1 a'), 'a', { ...O, palabraCompleta: true });
-  expect(r.dentro.map((c) => c.inicio)).toEqual([15]);
+  expect(r.dentro.map((c) => c.inicio)).toEqual([0, 4, 15]);
 });
 
 test('las coincidencias no se solapan: "aa" en "aaaa" son 2', () => {
