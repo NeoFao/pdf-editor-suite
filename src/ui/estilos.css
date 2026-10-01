@@ -22,9 +22,10 @@
   --ed-surface-2: #ffffff;
   --ed-border: #d3d7dc;
   --ed-border-strong: #b7bcc4;
+  --ed-control-border: #7b8290;
   --ed-text: #20242c;
-  --ed-text-muted: #5b6472;
-  --ed-text-faint: #8a92a0;
+  --ed-text-muted: #4a5260;
+  --ed-text-faint: #596170;
   --ed-accent: #6366f1;
   --ed-accent-strong: #4338ca;
   --ed-accent-soft: #e6e6fd;
@@ -63,9 +64,11 @@
     --ed-surface-2: #24272e;
     --ed-border: #34383f;
     --ed-border-strong: #454a53;
+    --ed-control-border: #6f7684;
+    --ed-focus-ring: #60a5fa;
     --ed-text: #e7e9ee;
     --ed-text-muted: #a7adb8;
-    --ed-text-faint: #767c88;
+    --ed-text-faint: #8d93a0;
     --ed-accent: #818cf8;
     --ed-accent-strong: #a5b4fc;
     --ed-accent-soft: #302f5e;
@@ -82,9 +85,11 @@
   --ed-surface-2: #24272e;
   --ed-border: #34383f;
   --ed-border-strong: #454a53;
+  --ed-control-border: #6f7684;
+  --ed-focus-ring: #60a5fa;
   --ed-text: #e7e9ee;
   --ed-text-muted: #a7adb8;
-  --ed-text-faint: #767c88;
+  --ed-text-faint: #8d93a0;
   --ed-accent: #818cf8;
   --ed-accent-strong: #a5b4fc;
   --ed-accent-soft: #302f5e;
@@ -187,7 +192,7 @@ button { font-family: inherit; }
   align-items: center;
   gap: 4px;
   background: var(--ed-surface-2);
-  border: 1px solid var(--ed-border);
+  border: 1px solid var(--ed-control-border);
   border-radius: var(--ed-radius-md);
   padding: 0 var(--ed-sp-2);
   height: 30px;
@@ -299,7 +304,7 @@ button:focus-visible {
 #props-panel label { display: flex; align-items: center; gap: 4px; font-size: var(--ed-font-xs); color: var(--ed-text-muted); }
 #props-panel select, #props-panel input[type="number"] {
   font-size: var(--ed-font-sm);
-  border: 1px solid var(--ed-border);
+  border: 1px solid var(--ed-control-border);
   border-radius: var(--ed-radius-sm);
   background: var(--ed-surface-2);
   color: var(--ed-text);
@@ -588,11 +593,11 @@ select, input[type="text"], input[type="search"], input[type="number"] {
    * Excepción deliberada: la paleta de 8 muestras de color (§2/#18 de la
    * tabla de paridad) es un grupo denso y contiguo de swatches, no botones
    * de acción independientes — a 40px cada una desborda un viewport de
-   * 390px. Se mantiene su tamaño de diseño (18px) en vez del mínimo
-   * general; `#tool-color` (el selector personalizado, justo al lado)
-   * sigue en 40px.
+   * 390px. A-07: área clicable de 24px (mínimo WCAG 2.5.8) con el cuadro
+   * visible de 18px (padding + background-clip); `#tool-color` (el
+   * selector personalizado, justo al lado) sigue en 40px.
    */
-  #swatches button.swatch { min-width: 18px; min-height: 18px; }
+  #swatches button.swatch { min-width: 24px; min-height: 24px; }
 
   /*
    * Hermanos normales de `.topbar-scroll` (ver `topbarScroll` en App.ts), no
@@ -629,3 +634,6 @@ select, input[type="text"], input[type="search"], input[type="number"] {
     z-index: 40;
   }
 }
+
+/* A-05: el panel de compresión es un <dialog>; solo es flex mientras está abierto. */
+dialog.compress-panel[open] { display: flex; }

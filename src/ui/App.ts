@@ -339,8 +339,10 @@ export class App {
       swatch.setAttribute('aria-label', label);
       swatch.setAttribute('aria-pressed', 'false'); // reflectSwatches() lo corrige justo debajo
       Object.assign(swatch.style, {
-        width: '18px', height: '18px', padding: '0', borderRadius: '3px', cursor: 'pointer',
-        background: color, border: '2px solid transparent'
+        // A-07 (WCAG 2.5.8): área clicable de 24x24 px CSS; el cuadro de color que se
+        // ve sigue siendo de 18x18 (24 - 2*3 de padding, `background-clip: content-box`).
+        width: '24px', height: '24px', padding: '3px', boxSizing: 'border-box', borderRadius: '3px', cursor: 'pointer',
+        background: color, backgroundClip: 'content-box', border: '0'
       });
       swatch.addEventListener('click', () => this.setToolColor(hexToRgb(color)));
       swatchesEl.appendChild(swatch);
@@ -430,6 +432,9 @@ export class App {
 
     this.status = document.createElement('span');
     this.status.id = 'status';
+    // A-01 (WCAG 4.1.3): los cambios de estado se anuncian a los lectores de pantalla.
+    this.status.setAttribute('role', 'status');
+    this.status.setAttribute('aria-live', 'polite');
 
     const btnShortcuts = document.createElement('button');
     btnShortcuts.type = 'button'; btnShortcuts.id = 'btn-shortcuts'; btnShortcuts.className = 'icon-btn';
@@ -584,6 +589,7 @@ export class App {
     this.avisoConversionEl.className = 'conversion-warnings';
     this.avisoConversionEl.hidden = true;
     this.avisoConversionEl.setAttribute('role', 'status');
+    this.avisoConversionEl.setAttribute('aria-live', 'polite'); // A-08
     const avisoCabecera = document.createElement('div');
     avisoCabecera.className = 'conversion-warnings-header';
     const avisoTitulo = document.createElement('strong');

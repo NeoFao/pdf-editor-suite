@@ -20,6 +20,7 @@
  * interpolado en una plantilla.
  */
 import { descargarArchivo } from './descargarArchivo';
+import { mostrarModal } from './dialogo';
 
 export class TextPanel {
   static open(texto: string, nombreBase: string): void {
@@ -28,6 +29,7 @@ export class TextPanel {
     Object.assign(dialog.style, { padding: '16px', borderRadius: '8px', border: '1px solid #ccc', maxWidth: '640px', width: '90vw' });
 
     const titulo = document.createElement('div');
+    titulo.id = 'text-dialog-titulo';
     titulo.textContent = 'Texto del documento';
     titulo.style.fontWeight = 'bold';
     titulo.style.marginBottom = '8px';
@@ -73,9 +75,7 @@ export class TextPanel {
     barra.append(btnCopiar, btnDescargar, btnCerrar, aviso);
     dialog.append(titulo, textarea, barra);
 
-    dialog.addEventListener('close', () => dialog.remove());
-    document.body.appendChild(dialog);
-    dialog.showModal();
+    mostrarModal(dialog, { tituloId: 'text-dialog-titulo' });
   }
 }
 
