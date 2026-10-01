@@ -17,12 +17,12 @@ test('por defecto no distingue mayúsculas; con la opción, sí', () => {
 
 test('palabra completa: no casa dentro de otra palabra, sí con signos de puntuación alrededor', () => {
   const r = buscarEnRuns(runs('casa casado (casa), casas_ ñcasa'), 'casa', { ...O, palabraCompleta: true });
-  expect(r.dentro.map((c) => c.inicio)).toEqual([0, 13, 28]);
+  expect(r.dentro.map((c) => c.inicio)).toEqual([0, 13]);
 });
 
-test('palabra completa: como PDFium, solo ASCII alfanumérico y _ cuentan como palabra (ñ y tildes no)', () => {
+test('palabra completa: ñ, tildes y dígitos cuentan como parte de la palabra ("a" no casa en "año")', () => {
   const r = buscarEnRuns(runs('año años 1a a1 a'), 'a', { ...O, palabraCompleta: true });
-  expect(r.dentro.map((c) => c.inicio)).toEqual([0, 4, 15]);
+  expect(r.dentro.map((c) => c.inicio)).toEqual([15]);
 });
 
 test('las coincidencias no se solapan: "aa" en "aaaa" son 2', () => {
@@ -64,4 +64,19 @@ test('aplicarReemplazos sustituye de derecha a izquierda y el reemplazo es liter
   expect(aplicarReemplazos(t, m, 'piso')).toBe('piso y piso');
   expect(aplicarReemplazos(t, m, '$&$1')).toBe('$&$1 y $&$1');
   expect(aplicarReemplazos(t, m, '')).toBe(' y ');
+});
+
+test('palabra completa en español: "año" sí como palabra; "a" no dentro de "año"; "o" no dentro de "acción"', () => {
+  const o = { ...O, palabraCompleta: true };
+  expect(buscarEnRuns(runs('el año pasado'), 'año', o).dentro).toHaveLength(1);
+  expect(buscarEnRuns(runs('el año pasado'), 'a', o).dentro).toHaveLength(0);
+  expect(buscarEnRuns(runs('una acción'), 'o', o).dentro).toHaveLength(0);
+  expect(buscarEnRuns(runs('una acción'), 'acción', o).dentro).toHaveLength(1);
+  expect(buscarEnRuns(runs('pingüino ü'), 'ü', o).dentro).toHaveLength(1);
+});
+
+test('palabra completa: letras griegas y cirílicas también son letras', () => {
+  const o = { ...O, palabraCompleta: true };
+  expect(buscarEnRuns(runs('αβγ β'), 'β', o).dentro).toEqual([{ runId: 0, inicio: 4, fin: 5 }]);
+  expect(buscarEnRuns(runs('привет вет'), 'вет', o).dentro).toEqual([{ runId: 0, inicio: 7, fin: 10 }]);
 });

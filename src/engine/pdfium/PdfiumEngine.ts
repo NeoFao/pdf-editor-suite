@@ -1,6 +1,7 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
+import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
 import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
@@ -270,14 +271,25 @@ export class PdfiumEngine implements PdfEngine {
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const textPage = this.p.FPDFText_LoadPage(page);
     const wq = this.mem.wide(query);
-    // flags: 0 = insensible a mayúsculas; FPDF_MATCHCASE=0x1, FPDF_MATCHWHOLEWORD=0x2
-    const flags = (opciones?.mayusculas ? 0x1 : 0) | (opciones?.palabraCompleta ? 0x2 : 0);
+    // flags: 0 = insensible a mayúsculas; FPDF_MATCHCASE=0x1. NO se usa
+    // FPDF_MATCHWHOLEWORD (0x2): PDFium solo trata como letras el ASCII y '_',
+    // así que "a" casaría dentro de "año". La palabra completa se filtra abajo
+    // con `esCaracterDePalabra` (Unicode), el mismo criterio que buscarReemplazar.ts.
+    const flags = opciones?.mayusculas ? 0x1 : 0;
+    const palabraCompleta = !!opciones?.palabraCompleta;
     const sh = this.p.FPDFText_FindStart(textPage, wq, flags, 0);
     const matches: RectPt[] = [];
     try {
       while (this.p.FPDFText_FindNext(sh)) {
         const start = this.p.FPDFText_GetSchResultIndex(sh);
         const count = this.p.FPDFText_GetSchCount(sh);
+        if (palabraCompleta) {
+          // Índices de carácter de la página de texto; fuera de rango = sin vecino.
+          const total = this.p.FPDFText_CountChars(textPage);
+          const antes = start > 0 ? this.p.FPDFText_GetUnicode(textPage, start - 1) : 0;
+          const despues = start + count < total ? this.p.FPDFText_GetUnicode(textPage, start + count) : 0;
+          if (esCaracterDePalabra(antes) || esCaracterDePalabra(despues)) continue;
+        }
         let minL = Infinity, minB = Infinity, maxR = -Infinity, maxT = -Infinity;
         for (let k = 0; k < count; k++) {
           const l = this.mem.malloc(8), r = this.mem.malloc(8), b = this.mem.malloc(8), t = this.mem.malloc(8);

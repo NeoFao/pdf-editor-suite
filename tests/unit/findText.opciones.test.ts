@@ -55,3 +55,23 @@ test('findText sin opciones sigue siendo insensible a mayúsculas (compatibilida
   expect(eng.findText(doc, 0, 'casa', { mayusculas: true }).length).toBeLessThan(base);
   eng.close(doc);
 });
+
+test('español: "a" con palabra completa NO casa dentro de "año"; "año" y "acción" sí como palabras', async () => {
+  const d = await PDFDocument.create();
+  const f = await d.embedFont(StandardFonts.Helvetica);
+  const p = d.addPage([400, 200]);
+  p.drawText('el año pasado', { x: 20, y: 150, size: 14, font: f });
+  p.drawText('una acción', { x: 20, y: 120, size: 14, font: f });
+  p.drawText('pingüino ü', { x: 20, y: 90, size: 14, font: f });
+  const eng = await PdfiumEngine.create();
+  const doc = await eng.open(await d.save());
+  const runs = eng.getPageText(doc, 0).map((r) => ({ runId: r.runId, text: r.text }));
+  const esperado: [string, number][] = [['a', 0], ['año', 1], ['o', 0], ['acción', 1], ['ü', 1], ['ing', 0]];
+  for (const [q, n] of esperado) {
+    const motor = eng.findText(doc, 0, q, { palabraCompleta: true }).length;
+    const puro = buscarEnRuns(runs, q, { mayusculas: false, palabraCompleta: true }).dentro.length;
+    expect({ q, motor }).toEqual({ q, motor: n });
+    expect({ q, puro }).toEqual({ q, puro: n });
+  }
+  eng.close(doc);
+});
