@@ -198,14 +198,13 @@ export type DocHandle = number;
 /**
  * Una operación de dibujo/texto sobre una página, para `applyPageOps` (E-037).
  * Cada variante corresponde 1:1 a los argumentos de su método unitario
- * homónimo (`insertText`, `fillRect`, `highlightRect`, `drawStroke`,
+ * homónimo (`insertText`, `fillRect`, `drawStroke`,
  * `drawRect`): `applyPageOps` es la única implementación real de cada una,
  * y esos métodos delegan en ella con un solo op en el array.
  */
 export type PageOp =
   | { type: 'insertText'; spec: InsertTextSpec }
   | { type: 'fillRect'; rect: RectPt; color: [number, number, number] }
-  | { type: 'highlightRect'; rect: RectPt; color: [number, number, number] }
   | { type: 'drawStroke'; points: { xPt: number; yPt: number }[]; color: [number, number, number]; widthPt: number }
   | { type: 'drawRect'; rect: RectPt; color: [number, number, number]; widthPt: number }
   | { type: 'insertImage'; spec: InsertImageSpec }
@@ -215,7 +214,6 @@ export type PageOp =
 export type PageOpResult =
   | { type: 'insertText'; runId: number }
   | { type: 'fillRect'; ok: boolean }
-  | { type: 'highlightRect'; ok: boolean }
   | { type: 'drawStroke'; ok: boolean }
   | { type: 'drawRect'; ok: boolean }
   | { type: 'insertImage'; ok: boolean }
@@ -362,8 +360,6 @@ export interface PdfEngine {
    * posteriores, igual que `deleteRun`. `false` si el índice no existe.
    */
   deleteObject(doc: DocHandle, pageIndex: number, objIndex: number): boolean;
-  /** Añade un resaltado (rectángulo de color, blend Multiply) sobre la caja dada. */
-  highlightRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean;
   /**
    * Crea una anotación `/Link` real (acción `/URI`) sobre `rectPt` (puntos
    * PDF). Solo `http:`, `https:` y `mailto:` se aceptan
@@ -452,7 +448,7 @@ export interface PdfEngine {
    * Objetos de página de tipo PATH (`FPDF_PAGEOBJ_PATH`), con su caja actual
    * (puntos PDF, de `FPDFPageObj_GetBounds`). OJO: un trazo de pluma
    * (`drawStroke`) y un rectángulo (`drawRect`) son PATH, pero un resaltado
-   * (`highlightRect`) y un subrayado/tachado (`fillRect`) TAMBIÉN lo son —
+   * y los rectángulos de `fillRect` TAMBIÉN lo son —
    * son rectángulos rellenos sin trazo. `hasStroke` (de
    * `FPDFPath_GetDrawMode`) distingue unos de otros: `true` solo para los
    * paths con el trazo activo (pluma y rectángulo), `false` para los de solo
@@ -498,7 +494,7 @@ export interface PdfEngine {
    * y un solo `FPDF_ClosePage()` — en vez de ese trío por operación. Cada
    * `GenerateContent()` reserializa TODO el contenido ya insertado en la
    * página, así que N llamadas sueltas cuestan O(N²); esta es la ruta que
-   * usan internamente `insertText`/`fillRect`/`highlightRect`/`drawStroke`/
+   * usan internamente `insertText`/`fillRect`/`drawStroke`/
    * `drawRect` cuando se llaman sueltas (con un solo op), y la que debe usar
    * cualquier llamador que vaya a insertar/dibujar VARIAS cosas en la misma
    * página de una vez (E-037: visto con OCR de una página densa y con la

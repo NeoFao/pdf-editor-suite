@@ -5,7 +5,7 @@ import { mapOcrLines } from '../ocr/mapOcrLines';
 /**
  * Hace buscable una página escaneada: reconoce su texto con `provider` y lo
  * inserta como texto invisible (no cambia el aspecto). Deshacer por snapshot,
- * igual que InsertImageCmd/HighlightRunCmd.
+ * igual que InsertImageCmd.
  */
 export class OcrPageCmd implements Command {
   readonly id = 'ocr-page';

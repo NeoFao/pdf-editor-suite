@@ -1235,11 +1235,6 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
-  highlightRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean {
-    const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'highlightRect', rect, color }]);
-    return (res as Extract<PageOpResult, { type: 'highlightRect' }>).ok;
-  }
-
   addLink(doc: DocHandle, pageIndex: number, rectPt: RectPt, url: string): boolean {
     const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'addLink', rect: rectPt, url }]);
     return (res as Extract<PageOpResult, { type: 'addLink' }>).ok;
@@ -1752,7 +1747,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   /**
-   * Núcleo compartido de `insertText`, `fillRect`, `highlightRect`,
+   * Núcleo compartido de `insertText`, `fillRect`,
    * `drawStroke` y `drawRect` (E-037, docs/ERRORES-CONOCIDOS.md): carga la
    * página UNA vez, crea el objeto de cada op sin regenerar el contenido
    * entre medias, y solo al final —si al menos una op mutó de verdad la
@@ -1807,18 +1802,6 @@ export class PdfiumEngine implements PdfEngine {
             this.p.FPDFPage_InsertObject(page, obj);
             mutado = true;
             results.push({ type: 'fillRect', ok: true });
-            break;
-          }
-          case 'highlightRect': {
-            const obj = this.p.FPDFPageObj_CreateNewRect(op.rect.xPt, op.rect.yPt, op.rect.wPt, op.rect.hPt);
-            this.p.FPDFPath_SetDrawMode(obj, 2, false);
-            const [r, g, b] = op.color;
-            this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
-            // Multiply: amarillo * blanco = amarillo; el texto negro sigue negro (marcador real).
-            this.p.FPDFPageObj_SetBlendMode(obj, 'Multiply');
-            this.p.FPDFPage_InsertObject(page, obj);
-            mutado = true;
-            results.push({ type: 'highlightRect', ok: true });
             break;
           }
           case 'drawStroke': {

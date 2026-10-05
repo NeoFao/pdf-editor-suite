@@ -156,7 +156,7 @@ export class App {
    * Acrobat el resaltador es amarillo por defecto y cada herramienta
    * recuerda el suyo, cambiar el color de la pluma no debe teñir el
    * resaltador (ni al revés). `pen`/`rect` conservan el rojo que ya traía la
-   * pluma; `highlight` conserva el amarillo que ya traía `HighlightRunCmd`
+   * pluma; `highlight` conserva el amarillo que ya traía el resaltador
    * antes de este PR — ningún color por defecto cambia respecto a `main`,
    * solo se hacen elegibles desde la paleta. Subrayar/tachar NO están aquí:
    * conservan el color fijo que ya traían sus comandos, sin tocar.
