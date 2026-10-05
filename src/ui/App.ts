@@ -45,6 +45,9 @@ import { ConversorDocxNavegador } from '../convert/ConversorDocxNavegador';
 import { DocxError } from '../convert/docx/DocxError';
 import { descargarArchivo } from './descargarArchivo';
 import { quitarFondo } from './quitarFondo';
+import { AlmacenFirmas, mensajeFalloGuardar, type FirmaGuardada } from './firmasGuardadas';
+import { rgbaAPngDataUrl, pngDataUrlARgba } from './firmasImagen';
+import { MisFirmasPanel } from './MisFirmasPanel';
 import { formatoBytes } from './formatoBytes';
 import { registrarGesto } from './gesto';
 import { resolverAtajo, esCampoEditable, type AccionAtajo } from './atajos';
@@ -308,6 +311,18 @@ export class App {
     });
     const btnSignUpload = this.campoArchivo(signUpload, 'firma-imagen', 'Firma desde imagen', 'btn-sign-upload-trigger', { mostrarEtiqueta: true });
     btnSignUpload.title = 'Firma desde imagen (quita el fondo blanco automáticamente)';
+    const btnMisFirmas = this.iconBoton('firmar', 'Mis firmas', 'btn-mis-firmas', () => this.abrirMisFirmas(), { mostrarEtiqueta: true });
+    // T10: casilla (desmarcada) para guardar la firma que se sube desde imagen.
+    const guardarSubidaFila = document.createElement('label');
+    guardarSubidaFila.className = 'firma-guardar-subida';
+    const chkSub = document.createElement('input');
+    chkSub.type = 'checkbox'; chkSub.id = 'sig-upload-guardar'; chkSub.checked = false;
+    const nomSub = document.createElement('input');
+    nomSub.type = 'text'; nomSub.id = 'sig-upload-nombre'; nomSub.maxLength = 40;
+    nomSub.placeholder = 'Nombre'; nomSub.setAttribute('aria-label', 'Nombre de la firma a guardar'); nomSub.disabled = true;
+    chkSub.addEventListener('change', () => { nomSub.disabled = !chkSub.checked; });
+    guardarSubidaFila.append(chkSub, document.createTextNode('Guardar la firma desde imagen'), nomSub);
+    this.chkGuardarSubida = chkSub; this.inputNombreSubida = nomSub;
     this.btnPen = this.iconBoton('pluma', 'Pluma', 'btn-pen', () => this.setTool(this.tool === 'pen' ? 'none' : 'pen'), { mostrarEtiqueta: true });
     this.btnNote = this.iconBoton('nota', 'Nota', 'btn-note', () => this.setTool(this.tool === 'note' ? 'none' : 'note'), { mostrarEtiqueta: true });
     this.btnRect = this.iconBoton('rectangulo', 'Rectángulo', 'btn-rect', () => this.setTool(this.tool === 'rect' ? 'none' : 'rect'), { mostrarEtiqueta: true });
@@ -601,7 +616,7 @@ export class App {
       insertPdf, btnInsertPdf, btnExtract,
       this.separador(), this.rangeInput, btnSplit
     ]);
-    const barraFirmar = crearBarraContextual('firmar', [btnSign, signUpload, btnSignUpload]);
+    const barraFirmar = crearBarraContextual('firmar', [btnSign, signUpload, btnSignUpload, guardarSubidaFila, btnMisFirmas]);
     const barraConvertir = crearBarraContextual('convertir', [
       btnExtractText, btnExportMd, this.separador(), this.filterSelect, this.btnFilter, this.btnCompress
     ]);
@@ -1536,15 +1551,38 @@ export class App {
   private openSignature(): void {
     const s = this.session;
     if (!s || !this.bus) { this.setStatus('Abre un documento antes de firmar.'); return; }
-    SignaturePad.open((rgba, imgWidth, imgHeight) => {
+    SignaturePad.open((rgba, imgWidth, imgHeight, guardar) => {
+      const aviso = guardar ? this.guardarFirma(guardar.nombre, rgba, imgWidth, imgHeight) : null;
       const page = s.model.pages[this.currentPage]!;
       const wPt = Math.min(page.sizePt.widthPt * 0.4, 180);
       const hPt = wPt * (imgHeight / imgWidth);
       const xPt = (page.sizePt.widthPt - wPt) / 2;
       const yPt = page.sizePt.heightPt * 0.15;
       void this.bus!.execute(new InsertImageCmd(this.currentPage, { rgba, imgWidth, imgHeight, xPt, yPt, wPt, hPt }));
-      this.setStatus('Firma insertada.');
+      this.setStatus(aviso ? `Firma insertada. ${aviso}` : 'Firma insertada.');
     });
+  }
+
+  /** Guarda la firma en el almacén local (T10). Devuelve un aviso si falla, o null si se guardó. */
+  private guardarFirma(nombre: string, rgba: Uint8Array | Uint8ClampedArray, w: number, h: number): string | null {
+    try {
+      const png = rgbaAPngDataUrl(rgba, w, h);
+      const r = this.almacenFirmas.guardar(nombre, png.dataUrl, png.ancho, png.alto);
+      return r.ok ? null : mensajeFalloGuardar(r.motivo);
+    } catch { return mensajeFalloGuardar('invalida'); }
+  }
+
+  private abrirMisFirmas(): void {
+    MisFirmasPanel.open(this.almacenFirmas, (f) => void this.insertarFirmaGuardada(f), (m) => this.setStatus(m));
+  }
+
+  /** Inserta una firma guardada en la página actual; queda seleccionada para colocarla. */
+  private async insertarFirmaGuardada(f: FirmaGuardada): Promise<void> {
+    if (!this.session || !this.bus) { this.setStatus('Abre un documento antes de firmar.'); return; }
+    try {
+      const { rgba, width, height } = await pngDataUrlARgba(f.dataUrl);
+      await this.colocarFirmaSeleccionada(rgba, width, height, `Firma «${f.nombre}» insertada.`);
+    } catch { this.setStatus('No se pudo leer la firma guardada.'); }
   }
 
   /**
@@ -1561,22 +1599,28 @@ export class App {
     if (!s || !this.bus) return;
     const { rgba, width, height } = await this.decodeImage(file);
     const limpio = quitarFondo(new Uint8ClampedArray(rgba.buffer, rgba.byteOffset, rgba.byteLength));
+    const datos = new Uint8Array(limpio.buffer, limpio.byteOffset, limpio.byteLength);
+    const aviso = this.chkGuardarSubida?.checked ? this.guardarFirma(this.inputNombreSubida?.value ?? '', datos, width, height) : null;
+    await this.colocarFirmaSeleccionada(datos, width, height, 'Firma insertada desde imagen (fondo quitado).' + (aviso ? ` ${aviso}` : ''));
+  }
+
+  /** Inserta una firma RGBA centrada (ancho <= 180 pt) y la deja seleccionada para reposicionarla. */
+  private async colocarFirmaSeleccionada(rgba: Uint8Array, width: number, height: number, estado: string): Promise<void> {
+    const s = this.session;
+    if (!s || !this.bus) return;
     const page = s.model.pages[this.currentPage]!;
     const wPt = Math.min(page.sizePt.widthPt * 0.4, 180);
     const hPt = wPt * (height / width);
     const xPt = (page.sizePt.widthPt - wPt) / 2;
     const yPt = page.sizePt.heightPt * 0.15;
-    await this.bus.execute(new InsertImageCmd(this.currentPage, {
-      rgba: new Uint8Array(limpio.buffer, limpio.byteOffset, limpio.byteLength),
-      imgWidth: width, imgHeight: height, xPt, yPt, wPt, hPt
-    }));
+    await this.bus.execute(new InsertImageCmd(this.currentPage, { rgba, imgWidth: width, imgHeight: height, xPt, yPt, wPt, hPt }));
     const imagenes = s.engine.listImageObjects(s.doc, this.currentPage);
     const insertada = imagenes.reduce((max, im) => (im.objIndex > max.objIndex ? im : max), imagenes[0]!);
     this.selectedImage = { pageIndex: this.currentPage, objIndex: insertada.objIndex };
     this.selection = null;
     this.reflectPropsPanel();
     this.viewer?.selectImage(this.currentPage, insertada.objIndex);
-    this.setStatus('Firma insertada desde imagen (fondo quitado).');
+    this.setStatus(estado);
   }
 
   /**
@@ -2620,6 +2664,10 @@ export class App {
     this.download(md, `${this.docName.replace(/\.pdf$/i, '')}.md`, 'text/markdown;charset=utf-8');
     this.setStatus('Markdown exportado.');
   }
+
+  private readonly almacenFirmas = new AlmacenFirmas();
+  private chkGuardarSubida: HTMLInputElement | null = null;
+  private inputNombreSubida: HTMLInputElement | null = null;
 
   private setStatus(msg: string): void { this.status.textContent = msg; }
 }
