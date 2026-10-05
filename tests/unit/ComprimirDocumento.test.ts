@@ -3,7 +3,7 @@ import { PDFDocument } from 'pdf-lib';
 import { PdfiumEngine } from '../../src/engine/pdfium/PdfiumEngine';
 import { EditSession } from '../../src/model/EditSession';
 import { CommandBus } from '../../src/commands/Command';
-import { ComprimirDocumentoCmd } from '../../src/commands/ComprimirDocumento';
+import { ComprimirDocumentoCmd, CompresionCancelada } from '../../src/commands/ComprimirDocumento';
 import type { AdaptadorImagen } from '../../src/ui/adaptadorImagenNavegador';
 import { JPEG_4X4_GRIS as JPEG_PEQUENO } from './_jpegsFijos';
 
@@ -135,4 +135,61 @@ test('ComprimirDocumentoCmd conserva la imagen original si el JPEG recodificado 
   expect(cmd.informe.imagenes).toBe(0); // no se tocó: ni reescalado (no hacía falta) ni JPEG (salía más pesado)
   const despues = engine.getImagePixels(s.doc, 0, engine.listImageObjects(s.doc, 0)[0]!.objIndex)!;
   expect(despues.rgba).toEqual(antes.rgba);
+});
+
+/** Documento de `paginas` páginas con una imagen ruidosa de 300x300 px (300 dpi) en cada una. */
+async function docConImagenes(paginas: number) {
+  const d = await PDFDocument.create();
+  for (let i = 0; i < paginas; i++) d.addPage([72, 72]);
+  const engine = await PdfiumEngine.create();
+  const s = await EditSession.open(engine, await d.save());
+  for (let i = 0; i < paginas; i++) {
+    engine.insertImage(s.doc, i, { rgba: imagenRuidosa(300, 300), imgWidth: 300, imgHeight: 300, xPt: 0, yPt: 0, wPt: 72, hPt: 72 });
+  }
+  return { engine, s, bus: new CommandBus(s) };
+}
+
+test('T9: cede el hilo una vez por imagen y emite progreso imagen N/total y página M/total', async () => {
+  const { s, bus } = await docConImagenes(3);
+  let cesiones = 0;
+  const progreso: Array<[number, number, number, number]> = [];
+  const cmd = new ComprimirDocumentoCmd({ calidad: 0.5, dpiMax: 150 }, fakeAdaptador(), {
+    ceder: async () => { cesiones++; },
+    alProgreso: (p) => progreso.push([p.imagen, p.totalImagenes, p.pagina, p.totalPaginas])
+  });
+  await bus.execute(cmd);
+  expect(cesiones).toBe(3);
+  expect(progreso).toEqual([[1, 3, 1, 3], [2, 3, 2, 3], [3, 3, 3, 3]]);
+  expect(cmd.informe.imagenes).toBe(3);
+  expect(s.model.pages.length).toBe(3);
+});
+
+test('T9: cancelar a mitad restaura el documento byte a byte, no registra el comando y no deja nada a medias', async () => {
+  const { engine, s, bus } = await docConImagenes(4);
+  const antes = engine.save(s.doc);
+  // Referencia: el documento tal y como lo reconstruye el motor desde el snapshot previo.
+  const ref = await engine.open(antes);
+  const refBytes = engine.save(ref);
+  const ctl = new AbortController();
+  const cmd = new ComprimirDocumentoCmd({ calidad: 0.5, dpiMax: 150 }, fakeAdaptador(), {
+    ceder: async () => {},
+    // Se cancela al empezar la 3.ª imagen: las dos primeras YA estaban sustituidas en el motor.
+    alProgreso: (p) => { if (p.imagen === 3) ctl.abort(); },
+    signal: ctl.signal
+  });
+  await expect(bus.execute(cmd)).rejects.toBeInstanceOf(CompresionCancelada);
+  const despues = engine.save(s.doc);
+  expect(Buffer.from(despues).equals(Buffer.from(refBytes))).toBe(true);
+  expect(bus.canUndo()).toBe(false);
+  for (let p = 0; p < 4; p++) {
+    expect(engine.getImagePixels(s.doc, p, engine.listImageObjects(s.doc, p)[0]!.objIndex)!.width).toBe(300);
+  }
+});
+
+test('T9: una señal ya abortada antes de empezar tampoco toca el documento', async () => {
+  const { engine, s, bus } = await docConImagenes(2);
+  const antes = engine.save(s.doc);
+  const ctl = new AbortController(); ctl.abort();
+  await expect(bus.execute(new ComprimirDocumentoCmd({ calidad: 0.5, dpiMax: 150 }, fakeAdaptador(), { signal: ctl.signal }))).rejects.toBeInstanceOf(CompresionCancelada);
+  expect(Buffer.from(engine.save(s.doc)).equals(Buffer.from(antes))).toBe(true);
 });

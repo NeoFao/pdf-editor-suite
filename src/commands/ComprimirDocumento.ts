@@ -4,6 +4,23 @@ import { adaptadorImagenNavegador, type AdaptadorImagen } from '../ui/adaptadorI
 
 export interface InformeCompresion { antesBytes: number; despuesBytes: number; imagenes: number }
 
+/** Avance de la compresión: `imagen` es la que se está procesando (1..totalImagenes), `pagina` su página (1..totalPaginas). */
+export interface ProgresoCompresion { imagen: number; totalImagenes: number; pagina: number; totalPaginas: number }
+
+/** Ganchos opcionales para no congelar la interfaz (E-055) y poder cancelar. */
+export interface GanchosCompresion {
+  /** Cede el hilo al bucle de eventos; se llama tras cada imagen. */
+  ceder?: () => Promise<void>;
+  alProgreso?: (p: ProgresoCompresion) => void;
+  /** Si se aborta, el comando restaura el documento previo y lanza `CompresionCancelada`. */
+  signal?: AbortSignal;
+}
+
+/** Lanzada por `execute` al cancelar: el documento ya está restaurado byte a byte y el bus NO registra el comando. */
+export class CompresionCancelada extends Error {
+  constructor() { super('Compresión cancelada'); this.name = 'CompresionCancelada'; }
+}
+
 /**
  * Comprime el documento entero (#29 de la tabla de paridad, §9) actuando
  * SOLO sobre los objetos imagen de cada página — a diferencia de la app
@@ -30,20 +47,56 @@ export class ComprimirDocumentoCmd implements Command {
   readonly id = 'comprimir-documento';
   readonly label = 'Comprimir documento';
   private before: Uint8Array<ArrayBuffer> | null = null;
+  /** true en cuanto una imagen se sustituye en el motor: a partir de ahí, cancelar exige restaurar el snapshot. */
+  private tocado = false;
   /** Informe de la última ejecución: bytes del documento antes/después y nº de imágenes tocadas. */
   informe: InformeCompresion = { antesBytes: 0, despuesBytes: 0, imagenes: 0 };
 
-  constructor(readonly opciones: OpcionesCompresion, private readonly adaptador: AdaptadorImagen = adaptadorImagenNavegador) {}
+  constructor(
+    readonly opciones: OpcionesCompresion,
+    private readonly adaptador: AdaptadorImagen = adaptadorImagenNavegador,
+    private readonly ganchos: GanchosCompresion = {}
+  ) {}
 
   async execute(c: Ctx): Promise<void> {
     const before = c.engine.save(c.doc);
     this.before = before;
+    this.tocado = false;
+    try {
+      await this.comprimir(c, before);
+    } catch (e) {
+      // Cancelación o fallo a mitad: si el motor ya tiene imágenes sustituidas, el documento
+      // nunca se queda a medias: vuelve al snapshot previo. Si no se tocó nada, no hay
+      // nada que restaurar y el documento vivo queda intacto (ni siquiera se reserializa).
+      if (this.tocado) await c.reload(before);
+      throw e;
+    }
+  }
+
+  private async comprimir(c: Ctx, before: Uint8Array<ArrayBuffer>): Promise<void> {
+    const { ceder, alProgreso, signal } = this.ganchos;
+    const cancelar = (): void => { if (signal?.aborted) throw new CompresionCancelada(); };
     let tocadas = 0;
     const totalPaginas = c.engine.pageCount(c.doc);
 
+    // Pasada previa: nº total de imágenes para informar "imagen 12/80". Cede cada 20 páginas.
+    const porPagina: ReturnType<typeof c.engine.listImageObjects>[] = [];
+    let totalImagenes = 0;
+    for (let p = 0; p < totalPaginas; p++) {
+      const l = c.engine.listImageObjects(c.doc, p);
+      porPagina.push(l); totalImagenes += l.length;
+      if ((p + 1) % 20 === 0) { await ceder?.(); cancelar(); }
+    }
+    let hechas = 0;
+
     for (let pageIndex = 0; pageIndex < totalPaginas; pageIndex++) {
-      const imgs = c.engine.listImageObjects(c.doc, pageIndex);
+      const imgs = porPagina[pageIndex]!;
       for (const img of imgs) {
+        cancelar();
+        hechas++;
+        alProgreso?.({ imagen: hechas, totalImagenes, pagina: pageIndex + 1, totalPaginas });
+        await ceder?.();
+        cancelar();
         const pix = c.engine.getImagePixels(c.doc, pageIndex, img.objIndex);
         if (!pix) continue; // formato de bitmap no soportado: se deja tal cual
 
@@ -66,7 +119,7 @@ export class ComprimirDocumentoCmd implements Command {
           // como bitmap; si no, no hay nada más que hacer con esta imagen.
           if (plan!.reescalar) {
             const rgbaU8 = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
-            if (c.engine.replaceImagePixels(c.doc, pageIndex, img.objIndex, rgbaU8, width, height)) tocadas++;
+            if (c.engine.replaceImagePixels(c.doc, pageIndex, img.objIndex, rgbaU8, width, height)) { tocadas++; this.tocado = true; }
           }
           continue;
         }
@@ -74,15 +127,16 @@ export class ComprimirDocumentoCmd implements Command {
         const jpegBytes = await this.adaptador.codificarJpeg(rgba, width, height, this.opciones.calidad);
         const original = c.engine.getImageRawSize(c.doc, pageIndex, img.objIndex) ?? Infinity;
         if (jpegBytes.length < original) {
-          if (c.engine.replaceImageJpeg(c.doc, pageIndex, img.objIndex, jpegBytes)) tocadas++;
+          if (c.engine.replaceImageJpeg(c.doc, pageIndex, img.objIndex, jpegBytes)) { tocadas++; this.tocado = true; }
         } else if (plan!.reescalar) {
           // El JPEG no ayudó, pero el reescalado (menos píxeles) sigue reduciendo el peso.
           const rgbaU8 = new Uint8Array(rgba.buffer, rgba.byteOffset, rgba.byteLength);
-          if (c.engine.replaceImagePixels(c.doc, pageIndex, img.objIndex, rgbaU8, width, height)) tocadas++;
+          if (c.engine.replaceImagePixels(c.doc, pageIndex, img.objIndex, rgbaU8, width, height)) { tocadas++; this.tocado = true; }
         }
         // Si no hacía falta reescalar y el JPEG salía más pesado: se conserva la imagen tal cual.
       }
     }
+    cancelar();
 
     if (tocadas > 0) {
       // Compactar: sustituir el bitmap/JPEG de una imagen (motor) deja el
