@@ -4,7 +4,8 @@
  * insertarlos como imagen. No depende del motor.
  */
 export class SignaturePad {
-  static open(onConfirm: (rgba: Uint8Array, width: number, height: number) => void): void {
+  /** `guardar` es null salvo que el usuario marque la casilla (por defecto desmarcada: nada se guarda sin pedirlo). */
+  static open(onConfirm: (rgba: Uint8Array, width: number, height: number, guardar: { nombre: string } | null) => void): void {
     const overlay = document.createElement('div');
     overlay.id = 'signature-pad';
     Object.assign(overlay.style, {
@@ -42,6 +43,21 @@ export class SignaturePad {
     // así que no hay fuga de listeners que limpiar, solo este estado.
     canvas.addEventListener('pointercancel', stop);
 
+    const guardarFila = document.createElement('label');
+    Object.assign(guardarFila.style, { display: 'flex', gap: '6px', alignItems: 'center', marginTop: '8px' });
+    const chkGuardar = document.createElement('input');
+    chkGuardar.type = 'checkbox'; chkGuardar.id = 'sig-guardar'; chkGuardar.checked = false;
+    guardarFila.append(chkGuardar, document.createTextNode('Guardar esta firma para usarla después'));
+    const nombreFila = document.createElement('label');
+    Object.assign(nombreFila.style, { display: 'flex', gap: '6px', alignItems: 'center', marginTop: '6px' });
+    const nombre = document.createElement('input');
+    nombre.type = 'text'; nombre.id = 'sig-nombre'; nombre.maxLength = 40; nombre.disabled = true;
+    nombreFila.append(document.createTextNode('Nombre'), nombre);
+    chkGuardar.addEventListener('change', () => { nombre.disabled = !chkGuardar.checked; if (chkGuardar.checked) nombre.focus(); });
+    const privacidad = document.createElement('div');
+    privacidad.textContent = 'Se guarda solo en este navegador.';
+    Object.assign(privacidad.style, { fontSize: '12px', color: '#475569', marginTop: '4px' });
+
     const barra = document.createElement('div');
     Object.assign(barra.style, { display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'flex-end' });
     const btnCancel = document.createElement('button'); btnCancel.id = 'sig-cancel'; btnCancel.textContent = 'Cancelar';
@@ -53,12 +69,12 @@ export class SignaturePad {
     btnClear.addEventListener('click', () => ctx.clearRect(0, 0, canvas.width, canvas.height));
     btnOk.addEventListener('click', () => {
       const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      onConfirm(new Uint8Array(data), canvas.width, canvas.height);
+      onConfirm(new Uint8Array(data), canvas.width, canvas.height, chkGuardar.checked ? { nombre: nombre.value } : null);
       close();
     });
 
     barra.append(btnClear, btnCancel, btnOk);
-    panel.append(title, canvas, barra);
+    panel.append(title, canvas, guardarFila, nombreFila, privacidad, barra);
     overlay.appendChild(panel);
     document.body.appendChild(overlay);
   }
