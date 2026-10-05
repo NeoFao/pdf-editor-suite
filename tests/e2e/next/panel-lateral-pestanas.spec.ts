@@ -14,6 +14,10 @@ const NATIVO = path.resolve(AQUI, '../../fixtures/generados/nativo.pdf');
 test('las tres pestañas del panel lateral caben dentro del panel, sin recorte ni desplazamiento', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/index.next.html');
+  // Reproduce la condición del CI (Ubuntu): allí `system-ui` resuelve a una fuente
+  // más ancha que Segoe UI. Se fuerza una ancha para que el test no dependa de la
+  // fuente instalada en la máquina (E-051).
+  await page.addStyleTag({ content: '#app, #app * { font-family: "DejaVu Sans", Verdana, "Arial Black", sans-serif !important; letter-spacing: 0.04em !important; }' });
   await page.locator('#file-input').setInputFiles(NATIVO);
   await expect(page.locator('.run').first()).toBeVisible();
 

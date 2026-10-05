@@ -2085,9 +2085,21 @@ de comentarios sobre una barra distinta) pasaba su verify.
 `estilos.css`) sin que ninguna viera el resultado conjunto: el ancho del panel
 se dimensionó para dos pestañas. Los tests unitarios no calculan maquetación.
 
-**Arreglo.** Ancho del panel 208 px, pestañas `flex: 1 1 auto; min-width: 0;
-white-space: nowrap`. Test: `tests/e2e/next/panel-lateral-pestanas.spec.ts`
-(cada pestaña dentro del panel, sin truncar, sin `scrollLeft`).
+**Segunda causa (CI en Ubuntu).** El arreglo a 208 px pasaba en Windows y falló en
+CI: `system-ui` resuelve allí a una fuente más ancha (DejaVu Sans o similar) y
+«Páginas» seguía recortada. Un ancho fijo en px para texto de UI depende de la
+fuente del sistema, que no controlamos.
+
+**Arreglo.** El panel conserva 208 px como valor base pero lleva
+`min-width: min-content`: crece hasta el ancho mínimo de sus pestañas (nowrap),
+sea cual sea la fuente. Test: `tests/e2e/next/panel-lateral-pestanas.spec.ts`
+(cada pestaña dentro del panel, `scrollWidth <= clientWidth`, sin `scrollLeft`),
+forzando una fuente ancha para reproducir en local la condición del CI; falla sin
+el arreglo y pasa con él.
+
+**Lección.** No fijar anchos en px para texto de UI; medir desbordamiento
+(`scrollWidth > clientWidth`) y dejar que el contenedor crezca con el contenido.
+Los tests de maquetación deben forzar una fuente ancha, no confiar en la del equipo.
 
 **Cómo se detecta ahora.** Ese test e2e y la revisión visual obligatoria
 (AGENTS.md §2.8) tras integrar ramas que añaden controles al mismo contenedor.

@@ -324,7 +324,10 @@ select, input[type="text"], input[type="search"], input[type="number"] {
 
 #sidebar {
   width: var(--ed-sidebar-w);
-  flex: 0 0 var(--ed-sidebar-w);
+  /* El panel crece hasta el ancho mínimo de contenido (las 3 pestañas sin partir):
+     el ancho en px es solo el valor base, no un límite (E-051). */
+  min-width: min-content;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   overflow: hidden;
