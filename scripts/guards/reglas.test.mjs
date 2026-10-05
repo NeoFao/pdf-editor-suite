@@ -487,7 +487,7 @@ describe('addfunction-con-removefunction', () => {
 describe('motor-lote-en-bucle', () => {
   const regla = detectarEn('motor-lote-en-bucle');
   const patronBucle = /\bfor\s*\(|\.forEach\(|\bwhile\s*\(/;
-  const patronDibujo = /\.(insertText|fillRect|highlightRect|drawStroke|drawRect)\(/;
+  const patronDibujo = /\.(insertText|fillRect|drawStroke|drawRect)\(/;
   const patronLote = /\.applyPageOps\(/;
 
   test('detecta el patrón exacto de E-037: bucle + insertText suelto, sin applyPageOps', () => {

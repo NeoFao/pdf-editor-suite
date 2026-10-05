@@ -32,11 +32,11 @@ import { DrawRectCmd } from '../commands/DrawRect';
 import { OcrPageCmd } from '../commands/OcrPage';
 import { TesseractOcr } from '../ocr/TesseractOcr';
 import { FiltrarPaginaCmd, type TipoFiltro } from '../commands/FiltrarPagina';
-import { ComprimirDocumentoCmd } from '../commands/ComprimirDocumento';
+import { ComprimirDocumentoCmd, CompresionCancelada } from '../commands/ComprimirDocumento';
 import { AnadirEncabezadoMarcaCmd, QuitarEncabezadosMarcasCmd } from '../commands/EncabezadoMarcaAgua';
 import { EncabezadoPanel } from './EncabezadoPanel';
 import { SignaturePad } from './SignaturePad';
-import { CompressPanel } from './CompressPanel';
+import { CompressPanel, type ControlCompresion } from './CompressPanel';
 import { TextPanel } from './TextPanel';
 import { agruparLineas, aTextoPlano, aMarkdown, type Linea } from '../texto/estructura';
 import { conversorPara, registrarConversor } from '../convert/ConversorDocumento';
@@ -1675,7 +1675,7 @@ export class App {
   /** `#btn-compress`: abre el panel de calidad/dpi (`CompressPanel`) y lanza la compresión al confirmar. */
   private openCompressPanel(): void {
     if (!this.session || !this.bus) { this.setStatus('Abre un documento antes de comprimir.'); return; }
-    CompressPanel.open(async ({ calidad, dpiMax }) => { await this.runCompress(calidad, dpiMax); });
+    CompressPanel.open(async ({ calidad, dpiMax }, control) => { await this.runCompress(calidad, dpiMax, control); });
   }
 
   /**
@@ -1684,18 +1684,27 @@ export class App {
    * se tocan). Puede tardar (recodifica JPEG en el navegador por cada
    * imagen): `#btn-compress` se deshabilita mientras corre.
    */
-  private async runCompress(calidad: number, dpiMax: number): Promise<void> {
+  private async runCompress(calidad: number, dpiMax: number, control: ControlCompresion): Promise<void> {
     if (!this.bus) return;
     this.btnCompress.disabled = true;
-    this.setStatus('Comprimiendo… (puede tardar)');
+    this.setStatus('Comprimiendo…');
     try {
-      const cmd = new ComprimirDocumentoCmd({ calidad, dpiMax });
+      // Cede el hilo tras cada imagen (cederHilo, E-043/E-055) y avisa del avance en #status y en el panel.
+      const cmd = new ComprimirDocumentoCmd({ calidad, dpiMax }, undefined, {
+        ceder: cederHilo,
+        signal: control.signal,
+        alProgreso: (p) => {
+          const texto = `Comprimiendo… imagen ${p.imagen}/${p.totalImagenes} (página ${p.pagina}/${p.totalPaginas})`;
+          this.setStatus(texto);
+          control.progreso(texto, (p.imagen - 1) / p.totalImagenes);
+        }
+      });
       await this.bus.execute(cmd);
       const { antesBytes, despuesBytes } = cmd.informe;
       const pct = antesBytes > 0 ? Math.round((1 - despuesBytes / antesBytes) * 100) : 0;
       this.setStatus(`Comprimido: ${formatoBytes(antesBytes)} → ${formatoBytes(despuesBytes)} (−${pct}%)`);
-    } catch {
-      this.setStatus('Error al comprimir.');
+    } catch (e) {
+      this.setStatus(e instanceof CompresionCancelada ? 'Compresión cancelada: el documento no ha cambiado.' : 'Error al comprimir.');
     } finally {
       this.btnCompress.disabled = false;
     }

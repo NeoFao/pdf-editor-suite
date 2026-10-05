@@ -2189,3 +2189,39 @@ tras guardar y reabrir de subtipo, QuadPoints, color y Contents; píxeles con la
 `tests/unit/AddMarkup.test.ts` y `tests/e2e/next/markup-anotaciones.spec.ts`
 (Comentarios, deshacer, borrar y el quad sobre el texto en `rotada.pdf` con
 /Rotate 90, 270 y 180). Sin regla guard: no hay patrón de código textual.
+
+### E-055 · "Comprimir documento" congelaba la interfaz y no se podía cancelar (T9)
+
+**Síntoma.** En un documento con muchas imágenes, `ComprimirDocumentoCmd`
+recorría todas las páginas e imágenes de forma síncrona (decodifica, reescala y
+codifica JPEG por imagen): la pestaña dejaba de responder hasta el final, sin
+avance visible y sin forma de abortar. Era la excepción pendiente que dejó
+anotada E-043 ("Comprimir documento no cede el hilo").
+
+**Causa raíz.** Ningún punto del bucle devolvía el control al bucle de eventos
+(no había `cederHilo`) ni comprobaba una señal de cancelación; además, abortar
+sin más habría dejado el documento a medias (imágenes ya sustituidas en el
+motor).
+
+**Arreglo.** El comando recibe ganchos opcionales (`ceder`, `alProgreso`,
+`signal`). Cede el hilo tras cada imagen y emite "imagen N/total (página M/total)"
+a `#status` y a una barra `role="progressbar"` (`aria-valuenow`) del panel. El
+panel tiene "Cancelar" activo mientras comprime y Escape también cancela (antes
+solo se vetaba). Al cancelar —o fallar— a mitad, `execute` restaura el snapshot
+previo con `reload` y lanza `CompresionCancelada`, así que el bus no registra el
+comando. Si no se había tocado ninguna imagen, ni siquiera se reserializa.
+
+**Decisión sobre Worker/OffscreenCanvas.** No se hace en este cambio: la CSP
+actual (`worker-src 'self' blob:`) lo permitiría sin tocarla, pero exige empaquetar
+un worker, pasar los píxeles por transferibles y reescribir `adaptadorImagenNavegador`
+(hoy usa canvas del DOM); es una mejora aparte. Mientras tanto la decodificación y
+la codificación de UNA imagen siguen bloqueando el hilo durante lo que cueste esa
+imagen; entre imágenes la interfaz responde.
+
+**Cómo se detecta ahora.** `tests/unit/ComprimirDocumento.test.ts` (cede una vez
+por imagen, progreso exacto, cancelar a mitad deja los mismos bytes que reabrir el
+snapshot, señal ya abortada no toca nada) y
+`tests/e2e/next/comprimir-sin-bloquear.spec.ts` (frames de `requestAnimationFrame`
+durante la compresión, barra que avanza, Cancelar y Escape con la compresión
+retenida de forma determinista en la 3.ª imagen y bytes de `#btn-save` idénticos
+a los previos). Sin regla guard: no hay patrón textual fiable.
