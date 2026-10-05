@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { wrapAtoms, lineToFlowLine, paginar, type Atom, type Medir, type FlowItem, type PageGeometry } from '../../src/convert/flujo/layout';
+import { wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona, type Atom, type Medir, type FlowItem, type PageGeometry } from '../../src/convert/flujo/layout';
 
 /** medir falso EXACTO: 6pt por carácter, igual para toda fuente/tamaño — dimensiones predecibles a mano. */
 const medir: Medir = (_font, _sizePt, text) => text.length * 6;
@@ -220,4 +220,99 @@ test('paginar respeta márgenes distintos de un documento con geometría propia 
   // Área útil: 300pt de alto. 3 líneas de 100pt = 300pt exactos -> caben todas en 1 página.
   expect(totalPaginas).toBe(1);
   for (const t of trazos) { expect(t.yPt).toBeGreaterThanOrEqual(geo.marginBottomPt - 1); expect(t.yPt).toBeLessThanOrEqual(geo.heightPt - geo.marginTopPt); }
+});
+
+// ---------------------------------------------------------------------------
+// Fase 2b: grupos "mantener juntos" (keepNext/keepLines), imágenes flotantes y zonas de encabezado/pie
+// ---------------------------------------------------------------------------
+
+/** Página de 100pt de alto con márgenes 10: 80pt útiles. */
+const GEO_80: PageGeometry = { widthPt: 200, heightPt: 100, marginTopPt: 10, marginBottomPt: 10, marginLeftPt: 10, marginRightPt: 10 };
+
+function lineaTexto(texto: string, height = 20): FlowItem {
+  return { kind: 'line', height, segs: [{ xPt: 10, text: texto, font: 'Helvetica', sizePt: 11, color: [0, 0, 0] }], bars: [] };
+}
+function paginaDe(res: ReturnType<typeof paginar>, texto: string): number {
+  return res.trazos.find((t) => t.text === texto)!.page;
+}
+
+test('keepStart/keepEnd: un grupo que no cabe en lo que queda de página pasa ENTERO a la siguiente', () => {
+  // 3 líneas sueltas (60pt) + grupo de 2 líneas (40pt): queda 20pt, el grupo no cabe entero.
+  const items: FlowItem[] = [
+    lineaTexto('a'), lineaTexto('b'), lineaTexto('c'),
+    { kind: 'keepStart' }, lineaTexto('titulo'), lineaTexto('siguiente'), { kind: 'keepEnd' }
+  ];
+  const res = paginar(items, GEO_80, 0.28);
+  expect(paginaDe(res, 'titulo')).toBe(1);
+  expect(paginaDe(res, 'siguiente')).toBe(1);
+  expect(paginaDe(res, 'c')).toBe(0);
+});
+
+test('keepStart/keepEnd: si el grupo cabe, no se mueve nada', () => {
+  const items: FlowItem[] = [lineaTexto('a'), { kind: 'keepStart' }, lineaTexto('titulo'), lineaTexto('siguiente'), { kind: 'keepEnd' }];
+  const res = paginar(items, GEO_80, 0.28);
+  expect(res.totalPaginas).toBe(1);
+});
+
+test('keepStart/keepEnd: un grupo más alto que una página entera no provoca un salto inútil', () => {
+  const items: FlowItem[] = [
+    lineaTexto('a'),
+    { kind: 'keepStart' }, lineaTexto('g1'), lineaTexto('g2'), lineaTexto('g3'), lineaTexto('g4'), lineaTexto('g5'), { kind: 'keepEnd' }
+  ];
+  const res = paginar(items, GEO_80, 0.28);
+  expect(paginaDe(res, 'g1')).toBe(0); // imposible mantenerlo junto: fluye normal
+});
+
+test('imagen flotante: se coloca en coordenadas de página (origen arriba-izquierda, offset en pt) en la página del párrafo siguiente', () => {
+  const items: FlowItem[] = [
+    lineaTexto('a'),
+    { kind: 'floatImage', imgId: 'word/media/i.png', wPt: 40, hPt: 30, h: { rel: 'page', offsetPt: 50 }, v: { rel: 'page', offsetPt: 20 } },
+    lineaTexto('b')
+  ];
+  const res = paginar(items, { ...GEO_80, heightPt: 200 }, 0.28);
+  expect(res.imagenes).toHaveLength(1);
+  const im = res.imagenes[0]!;
+  expect(im.page).toBe(0);
+  expect(im.xPt).toBe(50);
+  expect(im.yPt).toBe(200 - 20 - 30); // y PDF (abajo-izquierda) = alto - offset arriba - alto imagen
+});
+
+test('imagen flotante: relativa al margen, alineada a la derecha y abajo', () => {
+  const items: FlowItem[] = [{ kind: 'floatImage', imgId: 'x', wPt: 40, hPt: 30, h: { rel: 'margin', align: 'right' }, v: { rel: 'margin', align: 'bottom' } }, lineaTexto('a')];
+  const res = paginar(items, GEO_80, 0.28);
+  const im = res.imagenes[0]!;
+  expect(im.xPt).toBe(200 - 10 - 40);
+  expect(im.yPt).toBe(10); // borde inferior del área útil
+});
+
+test('imagen flotante relativa al párrafo: y = tope del párrafo (cursor) menos el offset', () => {
+  const items: FlowItem[] = [lineaTexto('a'), { kind: 'floatImage', imgId: 'x', wPt: 10, hPt: 10, h: { rel: 'margin', offsetPt: 0 }, v: { rel: 'paragraph', offsetPt: 5 } }, lineaTexto('b')];
+  const res = paginar(items, GEO_80, 0.28);
+  // tras 'a' el cursor está a 100-10-20 = 70; imagen: 70 - 5 (offset) - 10 (alto) = 55
+  expect(res.imagenes[0]!.yPt).toBe(55);
+});
+
+test('imagen flotante seguida de un salto de página va a la página del contenido siguiente, no a la anterior', () => {
+  const items: FlowItem[] = [
+    lineaTexto('a'), lineaTexto('b'), lineaTexto('c'), lineaTexto('d'),
+    { kind: 'floatImage', imgId: 'x', wPt: 10, hPt: 10, h: { rel: 'page', offsetPt: 0 }, v: { rel: 'page', offsetPt: 0 } },
+    lineaTexto('e')
+  ];
+  const res = paginar(items, GEO_80, 0.28);
+  expect(paginaDe(res, 'e')).toBe(1);
+  expect(res.imagenes[0]!.page).toBe(1);
+});
+
+test('colocarZona: el encabezado se ancla bajo `distanciaPt` del borde superior; el pie sube desde `distanciaPt` del inferior', () => {
+  const cab = colocarZona([lineaTexto('cab', 20)], { widthPt: 200, heightPt: 300 }, 'arriba', 30, 2, 0.28);
+  expect(cab.trazos[0]!.page).toBe(2);
+  // línea de 20pt: su caja va de y=270 a y=250; línea base a 250 + 20*0.28
+  expect(cab.trazos[0]!.yPt).toBeCloseTo(250 + 20 * 0.28, 6);
+  const pie = colocarZona([lineaTexto('pie', 20)], { widthPt: 200, heightPt: 300 }, 'abajo', 30, 0, 0.28);
+  // caja del pie: de y=30 a y=50
+  expect(pie.trazos[0]!.yPt).toBeCloseTo(30 + 20 * 0.28, 6);
+});
+
+test('altoZona suma las alturas de líneas, huecos y reglas', () => {
+  expect(altoZona([lineaTexto('a', 20), { kind: 'gap', height: 5, bars: [] }, lineaTexto('b', 10)])).toBe(35);
 });

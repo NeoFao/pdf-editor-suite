@@ -3,6 +3,7 @@ import { parseXml, hijosElemento, primerHijo, textoDirecto, buscarDescendiente, 
 import { classifyFont } from '../../engine/fontClassify';
 import { leerRelaciones, rutaMediaDesdeWord, type Relacion } from './rels';
 import { validarUrlEnlace } from '../../engine/validarUrlEnlace';
+import type { PosFlotanteH, PosFlotanteV } from '../flujo/layout';
 
 /**
  * Modelo del documento DOCX (§9 fila #4): de `word/document.xml` +
@@ -43,21 +44,25 @@ import { validarUrlEnlace } from '../../engine/validarUrlEnlace';
  * - El texto de control de cambios (`w:ins`/`w:del`) se resuelve aceptando
  *   las inserciones y descartando las eliminaciones (no hay UI de revisión
  *   en esta fase); se avisa en `advertencias` si aparece alguno.
- * - Sin protección de "encabezado huérfano" (si el título Markdown no la
- *   tuviera tampoco sería difícil de justificar, pero aquí se omite para
- *   acotar el alcance): un `Heading1` puede quedar solo al pie de página.
+ * - Fase 2b: `w:keepNext`/`w:keepLines` se respetan (un título mantiene con el
+ *   párrafo siguiente aunque su estilo no lo diga, salvo `keepNext w:val="0"`);
+ *   sin control de viudas y huérfanas de línea suelta (`w:widowControl`).
  * - Los saltos de columna (`w:br` sin `w:type` o `w:type="column"`, fuera de
  *   `w:type="page"`) se tratan como saltos de línea simples (esta fase no
  *   admite columnas).
- * - Tablas: bordes a nivel de TABLA únicamente (`w:tblBorders`), nunca por
- *   celda (`w:tcBorders`); una celda es un único flujo lógico (varios `w:p`
- *   se unen con salto de línea); `w:vMerge` "continue" se renderiza en
- *   blanco (no se reconstruye el contenido combinado verticalmente a través
- *   de varias filas, ver `CeldaTabla`); sin tablas anidadas.
- * - Imágenes: solo `wp:inline` (en el flujo de texto) — `wp:anchor`
- *   (flotante, con ajuste de texto) se cuenta en advertencias, igual que
- *   EMF/WMF y cualquier formato que ni el decodificador PNG propio
- *   (`decodificarPng.ts`) ni `createImageBitmap` del navegador entiendan.
+ * - Tablas: bordes POR LADO de tabla (`w:tblBorders`, o los de su `w:tblStyle`)
+ *   y por celda (`w:tcBorders`, fase 2b; precedencia celda > tabla; `w:sz` en
+ *   octavos de punto; estilos no continuos se dibujan continuos con aviso);
+ *   una celda es un único flujo lógico (varios `w:p` se unen con salto de
+ *   línea); `w:vMerge` se dibuja como UNA celda; sin tablas anidadas.
+ * - Imágenes: `wp:inline` (en el flujo) y, fase 2b, `wp:anchor` (flotante)
+ *   colocada en su posición de página/margen/párrafo SIN ajuste de texto y con
+ *   aviso; EMF/WMF y cualquier formato que ni el decodificador PNG propio
+ *   (`decodificarPng.ts`) ni `createImageBitmap` entiendan se avisan.
+ * - Encabezados y pies (fase 2b): `default`/`first` (`w:titlePg`)/`even`
+ *   (`w:evenAndOddHeaders`), solo párrafos con `PAGE`/`NUMPAGES`; sin imágenes,
+ *   tablas ni enlaces dentro de la zona (avisan); una geometría para todo el
+ *   documento (la última sección manda, hereda lo que no define).
  * - Enlaces: solo `w:hyperlink` EXTERNO (`r:id` con `TargetMode="External"`);
  *   un enlace interno a un marcador del propio documento (`w:anchor`) se
  *   trata como texto plano, sin aviso (navegación interna fuera de alcance).
@@ -74,6 +79,9 @@ export interface RunFormato {
   underline: boolean;
 }
 
+/** Posición de una imagen flotante (`wp:anchor`), ya convertida a pt: ver `PosFlotanteH/V` del maquetador (mismo tipo, mismas unidades). */
+export interface PosicionFlotante { h: PosFlotanteH; v: PosFlotanteV }
+
 export type ParteParrafo =
   /** `url`, cuando está presente, es la URL YA VALIDADA (`validarUrlEnlace`) de un `w:hyperlink` que envuelve este texto. */
   | { tipo: 'texto'; texto: string; formato: RunFormato; url?: string }
@@ -81,7 +89,11 @@ export type ParteParrafo =
   | { tipo: 'saltoLinea' }
   | { tipo: 'saltoPagina' }
   /** Imagen inline (`w:drawing > wp:inline`, fase 2a). `refId` es la ruta dentro del ZIP del .docx (p. ej. `word/media/image1.png`); `wPt`/`hPt` son el tamaño DECLARADO por Word (`wp:extent`, EMU → pt), sin clampar todavía al ancho útil de página — eso lo hace `render.ts`, que conoce la geometría. */
-  | { tipo: 'imagen'; refId: string; wPt: number; hPt: number };
+  | { tipo: 'imagen'; refId: string; wPt: number; hPt: number;
+    /** Fase 2b: presente si es una imagen FLOTANTE (`wp:anchor`) — se coloca en su posición sin ajuste de texto. Sin esto, es inline. */
+    flotante?: PosicionFlotante }
+  /** Campo de número de página (fase 2b, solo en encabezados/pies): `PAGE` = página actual, `NUMPAGES` = total. `formato` es el del run, para pintar el número con el mismo estilo. */
+  | { tipo: 'campo'; campo: 'PAGE' | 'NUMPAGES'; formato: RunFormato };
 
 export interface InfoLista { textoMarcador: string }
 
@@ -105,7 +117,18 @@ export interface Parrafo {
   lista: InfoLista | null;
   /** Tamaño de fuente de referencia del párrafo (primer run, o el de la marca de párrafo si no hay texto) — usado para la altura de las líneas en blanco. */
   tamanoBasePt: number;
+  /** `w:keepNext` (o un título sin `keepNext` explícito): la última línea del párrafo no puede quedar sola al pie de una página, sin la primera línea del siguiente. */
+  mantenerConSiguiente: boolean;
+  /** `w:keepLines` (o un título sin `keepLines` explícito): todas las líneas del párrafo en la misma página. */
+  mantenerLineasJuntas: boolean;
 }
+
+/** Un borde: color + grosor en PUNTOS PDF (`w:sz` está en OCTAVOS de punto: 24 → 3 pt). */
+export interface Borde { color: RGB; grosorPt: number }
+/** Bordes por lado de una celda (`w:tcBorders`): `undefined` = no definido (hereda de la tabla), `null` = `nil`/`none` explícito (sin borde, gana a la tabla). */
+export interface BordesCelda { top?: Borde | null; bottom?: Borde | null; left?: Borde | null; right?: Borde | null }
+/** Bordes de tabla por lado (`w:tblBorders`), con los interiores `insideH`/`insideV`. */
+export interface BordesTabla extends BordesCelda { insideH?: Borde | null; insideV?: Borde | null }
 
 /**
  * Celda de tabla (fase 2a). Simplificación deliberada: el contenido de una
@@ -125,6 +148,8 @@ export interface CeldaTabla {
   /** Color de sombreado (`w:shd w:fill`), o `null` sin sombreado. */
   colorFondo: RGB | null;
   alineacion: Alineacion;
+  /** Fase 2b: `w:tcBorders` de la celda (precedencia celda > tabla). `undefined` si la celda no declara ninguno. */
+  bordes?: BordesCelda;
 }
 
 export interface FilaTabla {
@@ -141,7 +166,12 @@ export interface Tabla {
   /** `null` = sin bordes visibles. Un único color/grosor para TODA la tabla (simplificación de fase 2a, ver comentario de `CeldaTabla`). */
   bordeColor: RGB | null;
   bordeGrosorPt: number;
+  /** Fase 2b: bordes de tabla POR LADO (`w:tblBorders`, o los del estilo de tabla `w:tblStyle`). Si falta (modelo construido a mano), `render.ts` usa `bordeColor`/`bordeGrosorPt` para todos los lados. */
+  bordesTabla?: BordesTabla;
 }
+
+/** Contenido de un encabezado o pie: párrafos (las tablas dentro de una zona se avisan y no se pintan). `null` = el tipo no está definido. */
+export interface ZonaPaginaModelo { default: Parrafo[] | null; first: Parrafo[] | null; even: Parrafo[] | null }
 
 /** Bloque de nivel superior del documento: párrafo o tabla, en el orden en que aparecen. */
 export type BloqueDocx = Parrafo | Tabla;
@@ -158,7 +188,20 @@ export interface ModeloDocx {
   margenDerPt: number;
   bloques: BloqueDocx[];
   advertencias: string[];
+  /** Distancia del borde superior de la página al encabezado (`w:pgMar w:header`), en pt. */
+  margenEncabezadoPt: number;
+  /** Distancia del borde inferior de la página al pie (`w:pgMar w:footer`), en pt. */
+  margenPiePt: number;
+  /** `w:titlePg`: la primera página usa el encabezado/pie `first` (aunque esté vacío). */
+  tituloPagina: boolean;
+  /** `w:evenAndOddHeaders` (settings.xml): las páginas pares usan el encabezado/pie `even`. */
+  paresImpares: boolean;
+  encabezados: ZonaPaginaModelo;
+  pies: ZonaPaginaModelo;
 }
+
+/** Partes adicionales del paquete que `construirModeloDocx` necesita ya decodificadas: `partes` se indexa por ruta dentro del ZIP (`word/header1.xml`). */
+export interface ExtrasDocx { settingsXml?: string | null; partes?: Record<string, string> }
 
 function twipsAPt(v: number): number { return v / 20; }
 function mediosPuntosAPt(v: number): number { return v / 2; }
@@ -208,6 +251,8 @@ interface EstiloDef {
   basedOn: string | null;
   pPr: XmlElemento | null;
   rPr: XmlElemento | null;
+  /** `w:tblPr` del estilo (estilos de TABLA: de ahí vienen los bordes de "Table Grid"). */
+  tblPr: XmlElemento | null;
 }
 
 /** Cadena de estilos de RAÍZ (más base) a HOJA (`styleId`), siguiendo `w:basedOn`. Cota anti-ciclo: 50 saltos. */
@@ -268,7 +313,7 @@ function leerEstilos(root: XmlElemento): {
     estilos.set(styleId, {
       styleId, name: nameEl?.atributos['w:val'] ?? null, type,
       basedOn: basedOnEl?.atributos['w:val'] ?? null,
-      pPr: primerHijo(est, 'w:pPr'), rPr: primerHijo(est, 'w:rPr')
+      pPr: primerHijo(est, 'w:pPr'), rPr: primerHijo(est, 'w:rPr'), tblPr: primerHijo(est, 'w:tblPr')
     });
     if (type === 'paragraph' && (est.atributos['w:default'] === '1' || est.atributos['w:default'] === 'true')) {
       estiloParrafoPorDefecto = styleId;
@@ -390,13 +435,15 @@ interface PPrAcum {
   saltoPaginaAntes: boolean;
   numId: string | null; ilvl: number;
   outlineLvl: number | null;
+  /** `null` = no declarado (un título lo activa por defecto, como los estilos Heading de Word). */
+  keepNext: boolean | null; keepLines: boolean | null;
 }
 
 function pPrPorDefecto(): PPrAcum {
   return {
     alineacion: 'left', sangriaIzqPt: 0, sangriaDerPt: 0, sangriaPrimeraLineaPt: 0,
     espacioAntesPt: 0, espacioDespuesPt: 8, interlineadoFactor: 1.15, interlineadoExactoPt: null,
-    saltoPaginaAntes: false, numId: null, ilvl: 0, outlineLvl: null
+    saltoPaginaAntes: false, numId: null, ilvl: 0, outlineLvl: null, keepNext: null, keepLines: null
   };
 }
 
@@ -432,6 +479,8 @@ function aplicarPPr(acc: PPrAcum, el: XmlElemento): void {
     }
   }
   const pbb = primerHijo(el, 'w:pageBreakBefore'); if (pbb) acc.saltoPaginaAntes = leerToggle(pbb);
+  const kn = primerHijo(el, 'w:keepNext'); if (kn) acc.keepNext = leerToggle(kn);
+  const kl = primerHijo(el, 'w:keepLines'); if (kl) acc.keepLines = leerToggle(kl);
   const outlineLvl = primerHijo(el, 'w:outlineLvl'); if (outlineLvl?.atributos['w:val'] !== undefined) acc.outlineLvl = Number(outlineLvl.atributos['w:val']);
   const numPr = primerHijo(el, 'w:numPr');
   if (numPr) {
@@ -465,6 +514,12 @@ interface Contexto {
   advertenciasExtra: string[];
   /** Descartes/degradaciones contados por tipo (`anotar`); se convierten en avisos al final (`MENSAJES_PERDIDAS`). */
   perdidas: Map<string, number>;
+  /** `true` mientras se procesa un encabezado o pie: ahí `PAGE`/`NUMPAGES` son campos reales y las imágenes se omiten con aviso. */
+  zona: boolean;
+  /** `true` mientras se procesa una celda de tabla: ahí una imagen se omite con aviso (`imagenEnCelda`). */
+  enCelda: boolean;
+  /** Campos complejos (`w:fldChar`) abiertos, el más interno al final. `suprimir`: el resultado cacheado se descarta porque ya se emitió un `campo`. */
+  camposAbiertos: { instr: string; separado: boolean; suprimir: boolean; emitido: boolean }[];
 }
 
 function anotar(ctx: Contexto, clave: string): void { ctx.perdidas.set(clave, (ctx.perdidas.get(clave) ?? 0) + 1); }
@@ -483,6 +538,14 @@ const MENSAJES_PERDIDAS: [string, (c: number) => string][] = [
   ['tablaAnidada', (c) => cuenta(c, 'Una tabla anidada dentro de otra se aplanó a texto (celdas separadas por tabulador).', '{n} tablas anidadas se aplanaron a texto (celdas separadas por tabulador).')],
   ['imagenEnCelda', (c) => cuenta(c, 'Se omitió una imagen dentro de una celda de tabla (aún no soportado).', 'Se omitieron {n} imágenes dentro de celdas de tabla (aún no soportado).')],
   ['saltoPaginaEnCelda', (c) => cuenta(c, 'Un salto de página dentro de una celda de tabla se trató como salto de línea.', '{n} saltos de página dentro de celdas de tabla se trataron como saltos de línea.')],
+  ['flotante', (c) => cuenta(c, 'Imagen flotante colocada sin ajuste de texto (el texto no la rodea y puede quedar debajo o encima de ella).', '{n} imágenes flotantes colocadas sin ajuste de texto (el texto no las rodea y puede quedar debajo o encima de ellas).')],
+  ['imagenEnZona', (c) => cuenta(c, 'Se omitió una imagen dentro de un encabezado o pie de página (aún no soportado).', 'Se omitieron {n} imágenes dentro de encabezados o pies de página (aún no soportado).')],
+  ['tablaEnZona', (c) => cuenta(c, 'Se omitió una tabla dentro de un encabezado o pie de página (aún no soportada).', 'Se omitieron {n} tablas dentro de encabezados o pies de página (aún no soportadas).')],
+  ['campo', (c) => cuenta(c, 'Un campo no soportado (fecha, índice, referencia...) se dejó con el último valor que Word guardó.', '{n} campos no soportados (fecha, índice, referencia...) se dejaron con el último valor que Word guardó.')],
+  ['bordeEstilo', (c) => cuenta(c, 'Un borde de tabla con estilo no continuo (doble, punteado...) se dibujó como línea continua.', '{n} bordes de tabla con estilo no continuo (doble, punteado...) se dibujaron como línea continua.')],
+  ['encabezadoFaltante', (c) => cuenta(c, 'Se omitió un encabezado de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} encabezados de página (no se encontró o no se pudo leer su contenido en el paquete).')],
+  ['pieFaltante', (c) => cuenta(c, 'Se omitió un pie de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} pies de página (no se encontró o no se pudo leer su contenido en el paquete).')],
+  ['zonaDeSeccionAnterior', (c) => cuenta(c, 'Se omitió un encabezado o pie de una sección anterior (se usan los de la última sección).', 'Se omitieron {n} encabezados o pies de secciones anteriores (se usan los de la última sección).')],
   ['vMergeConTexto', (c) => cuenta(c, 'Una celda de continuación de una combinación vertical traía texto propio, que no se muestra (como hace Word).', '{n} celdas de continuación de combinaciones verticales traían texto propio, que no se muestra (como hace Word).')]
 ];
 
@@ -519,10 +582,14 @@ function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, parte
     if (rStyleId) for (const est of cadenaEstilo(rStyleId, ctx.estilos)) if (est.rPr) aplicarRPr(acc, est.rPr);
     aplicarRPr(acc, rPrEl);
   }
-  const formato: RunFormato = { font: fuenteEstandarPara(acc.fontName, acc.bold, acc.italic), sizePt: acc.sizePt, color: acc.color, underline: acc.underline };
+  const formato = formatoDeAcc(acc);
 
   for (const h of runEl.hijos) {
     if (h.tipo !== 'elemento') continue;
+    if (h.nombre === 'w:fldChar') { procesarFldChar(h, formato, ctx, partes); continue; }
+    if (h.nombre === 'w:instrText') { const abierto = ctx.camposAbiertos[ctx.camposAbiertos.length - 1]; if (abierto && !abierto.separado) abierto.instr += textoDirecto(h); continue; }
+    // Resultado cacheado de un campo ya sustituido (PAGE/NUMPAGES): se descarta, el número real se pinta al maquetar.
+    if (ctx.camposAbiertos.some((c) => c.suprimir) && (h.nombre === 'w:t' || h.nombre === 'w:tab' || h.nombre === 'w:br' || h.nombre === 'w:cr' || h.nombre === 'w:noBreakHyphen')) continue;
     if (h.nombre === 'w:t') { const t = textoDirecto(h); if (t.length > 0) partes.push({ tipo: 'texto', texto: t, formato }); }
     else if (h.nombre === 'w:tab') partes.push({ tipo: 'tab' });
     else if (h.nombre === 'w:br') {
@@ -547,19 +614,51 @@ function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, parte
   }
 }
 
+function formatoDeAcc(acc: RPrAcum): RunFormato {
+  return { font: fuenteEstandarPara(acc.fontName, acc.bold, acc.italic), sizePt: acc.sizePt, color: acc.color, underline: acc.underline };
+}
+
+/**
+ * Campo de número de página reconocido en una instrucción (`PAGE`, `NUMPAGES`), o `null`. Un campo con formato
+ * numérico distinto del arábigo (switch de formato ROMAN/ALPHABETIC) NO se reconoce: se dejaría el número en otro formato.
+ */
+function campoDePagina(instr: string): 'PAGE' | 'NUMPAGES' | null {
+  const m = /^\s*(PAGE|NUMPAGES)\b/i.exec(instr);
+  if (!m) return null;
+  if (/\\\*\s*(roman|alphabetic)/i.test(instr)) return null;
+  return m[1]!.toUpperCase() as 'PAGE' | 'NUMPAGES';
+}
+
+/** `w:fldChar` (campo complejo): begin → abre; separate → decide (PAGE/NUMPAGES: emite el campo y suprime el resultado cacheado); end → cierra. */
+function procesarFldChar(el: XmlElemento, formato: RunFormato, ctx: Contexto, partes: ParteParrafo[]): void {
+  const tipo = el.atributos['w:fldCharType'];
+  if (tipo === 'begin') { ctx.camposAbiertos.push({ instr: '', separado: false, suprimir: false, emitido: false }); return; }
+  const actual = ctx.camposAbiertos[ctx.camposAbiertos.length - 1];
+  if (!actual) return;
+  const resolver = (): void => {
+    if (actual.emitido) return;
+    actual.emitido = true;
+    const campo = ctx.zona ? campoDePagina(actual.instr) : null;
+    if (campo) { partes.push({ tipo: 'campo', campo, formato }); actual.suprimir = true; }
+    else anotar(ctx, 'campo');
+  };
+  if (tipo === 'separate') { actual.separado = true; resolver(); }
+  else if (tipo === 'end') { resolver(); ctx.camposAbiertos.pop(); }
+}
+
 /**
  * Resuelve un `w:drawing` a su `ParteParrafo` de imagen, o `null` si no se
  * pudo (con la advertencia correspondiente ya empujada a
  * `ctx.advertenciasExtra` — nunca se pierde en silencio, AGENTS.md §3).
- * Solo `wp:inline` (imagen en el flujo de texto): `wp:anchor` (imagen
- * flotante, con ajuste de texto) queda fuera de esta fase.
+ * `wp:inline` (imagen en el flujo de texto) y, desde la fase 2b, `wp:anchor`
+ * (imagen flotante): se coloca en su posición (página/margen/párrafo) SIN
+ * ajuste de texto y se avisa (`flotante`). Dentro de un encabezado o pie, se
+ * omite con aviso (aún no soportado ahí).
  */
 function resolverImagenDrawing(drawing: XmlElemento, ctx: Contexto): ParteParrafo | null {
-  if (primerHijo(drawing, 'wp:anchor')) {
-    ctx.advertenciasExtra.push('Se omitió una imagen flotante (con ajuste de texto); aún no soportada.');
-    return null;
-  }
-  const inline = primerHijo(drawing, 'wp:inline');
+  if (ctx.zona) { anotar(ctx, 'imagenEnZona'); return null; }
+  const anchor = primerHijo(drawing, 'wp:anchor');
+  const inline = anchor ?? primerHijo(drawing, 'wp:inline');
   if (!inline) {
     ctx.advertenciasExtra.push('No se pudo insertar una imagen del documento (formato de dibujo no reconocido).');
     return null;
@@ -582,7 +681,43 @@ function resolverImagenDrawing(drawing: XmlElemento, ctx: Contexto): ParteParraf
     ctx.advertenciasExtra.push('No se pudo insertar una imagen del documento (tamaño declarado inválido).');
     return null;
   }
-  return { tipo: 'imagen', refId: rutaMediaDesdeWord(rel.target), wPt: cx / EMU_POR_PUNTO, hPt: cy / EMU_POR_PUNTO };
+  const base = { tipo: 'imagen' as const, refId: rutaMediaDesdeWord(rel.target), wPt: cx / EMU_POR_PUNTO, hPt: cy / EMU_POR_PUNTO };
+  if (!anchor) return base;
+  if (!ctx.enCelda) anotar(ctx, 'flotante'); // dentro de una celda se omitirá con su propio aviso (`imagenEnCelda`)
+  return { ...base, flotante: leerPosicionAnchor(anchor) };
+}
+
+/** Texto de un `wp:posOffset`/`wp:align`: EMU → pt. */
+function leerPosicion(el: XmlElemento | null): { offsetPt: number; align: string | null } {
+  if (!el) return { offsetPt: 0, align: null };
+  const offset = primerHijo(el, 'wp:posOffset');
+  const align = primerHijo(el, 'wp:align');
+  const emu = offset ? Number(textoDirecto(offset).trim()) : 0;
+  return { offsetPt: Number.isFinite(emu) ? emu / EMU_POR_PUNTO : 0, align: align ? textoDirecto(align).trim() : null };
+}
+
+/**
+ * `wp:positionH`/`wp:positionV` de un `wp:anchor`. `posOffset` va en EMU (→ pt). `relativeFrom` se agrupa: horizontal
+ * `column`/`character`/`insideMargin`/`outsideMargin`/desconocido → margen; vertical `line` → párrafo, desconocido → margen.
+ */
+function leerPosicionAnchor(anchor: XmlElemento): PosicionFlotante {
+  const ph = primerHijo(anchor, 'wp:positionH');
+  const pv = primerHijo(anchor, 'wp:positionV');
+  const hp = leerPosicion(ph);
+  const vp = leerPosicion(pv);
+  const relH = ph?.atributos['relativeFrom'];
+  const relV = pv?.atributos['relativeFrom'];
+  const h: PosFlotanteH = { rel: relH === 'page' ? 'page' : relH === 'leftMargin' ? 'leftMargin' : relH === 'rightMargin' ? 'rightMargin' : 'margin' };
+  if (hp.align === 'left' || hp.align === 'inside') h.align = 'left';
+  else if (hp.align === 'center') h.align = 'center';
+  else if (hp.align === 'right' || hp.align === 'outside') h.align = 'right';
+  else h.offsetPt = hp.offsetPt;
+  const v: PosFlotanteV = { rel: relV === 'page' ? 'page' : relV === 'topMargin' ? 'topMargin' : relV === 'bottomMargin' ? 'bottomMargin' : relV === 'paragraph' || relV === 'line' || relV === undefined ? 'paragraph' : 'margin' };
+  if (vp.align === 'top' || vp.align === 'inside') v.align = 'top';
+  else if (vp.align === 'center') v.align = 'center';
+  else if (vp.align === 'bottom' || vp.align === 'outside') v.align = 'bottom';
+  else v.offsetPt = vp.offsetPt;
+  return { h, v };
 }
 
 function recorrerContenidoParrafo(contenedor: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, partes: ParteParrafo[]): void {
@@ -592,7 +727,8 @@ function recorrerContenidoParrafo(contenedor: XmlElemento, baseRuns: RPrAcum, ct
       case 'w:r': procesarRun(h, baseRuns, ctx, partes); break;
       case 'w:hyperlink': procesarHyperlink(h, baseRuns, ctx, partes); break;
       case 'w:ins': recorrerContenidoParrafo(h, baseRuns, ctx, partes); break; // inserción de control de cambios: se acepta
-      case 'w:smartTag': case 'w:fldSimple': case 'w:customXml': case 'w:dir': case 'w:bdo': case 'w:moveTo':
+      case 'w:fldSimple': procesarFldSimple(h, baseRuns, ctx, partes); break;
+      case 'w:smartTag': case 'w:customXml': case 'w:dir': case 'w:bdo': case 'w:moveTo':
         recorrerContenidoParrafo(h, baseRuns, ctx, partes); break; // envoltorios: su contenido se conserva
       case 'w:sdt': { const c = primerHijo(h, 'w:sdtContent'); if (c) recorrerContenidoParrafo(c, baseRuns, ctx, partes); break; } // control de contenido en línea
       case 'm:oMath': case 'm:oMathPara': anotar(ctx, 'ecuacion'); break;
@@ -601,6 +737,16 @@ function recorrerContenidoParrafo(contenedor: XmlElemento, baseRuns: RPrAcum, ct
       default: if (!RUIDO_PARRAFO.has(h.nombre) && buscarDescendiente(h, 'w:t')) anotar(ctx, 'desconocido'); break; // bookmarkStart/End, proofErr...: ruido estructural sin texto
     }
   }
+}
+
+/** `w:fldSimple`: PAGE/NUMPAGES en un encabezado/pie → `campo` (con el formato de su run, sin el texto cacheado); cualquier otro conserva su resultado y avisa. */
+function procesarFldSimple(h: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, partes: ParteParrafo[]): void {
+  const campo = ctx.zona ? campoDePagina(h.atributos['w:instr'] ?? '') : null;
+  const tmp: ParteParrafo[] = [];
+  recorrerContenidoParrafo(h, baseRuns, ctx, tmp);
+  if (!campo) { anotar(ctx, 'campo'); partes.push(...tmp); return; }
+  const t = tmp.find((x) => x.tipo === 'texto');
+  partes.push({ tipo: 'campo', campo, formato: t && t.tipo === 'texto' ? t.formato : formatoDeAcc(baseRuns) });
 }
 
 /**
@@ -680,7 +826,9 @@ function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
     sangriaIzqPt: acc.sangriaIzqPt, sangriaDerPt: acc.sangriaDerPt, sangriaPrimeraLineaPt: acc.sangriaPrimeraLineaPt,
     espacioAntesPt: acc.espacioAntesPt, espacioDespuesPt: acc.espacioDespuesPt,
     interlineadoFactor: acc.interlineadoFactor, interlineadoExactoPt: acc.interlineadoExactoPt,
-    saltoPaginaAntes: acc.saltoPaginaAntes, nivelEncabezado, lista, tamanoBasePt
+    saltoPaginaAntes: acc.saltoPaginaAntes, nivelEncabezado, lista, tamanoBasePt,
+    mantenerConSiguiente: acc.keepNext ?? nivelEncabezado !== null,
+    mantenerLineasJuntas: acc.keepLines ?? nivelEncabezado !== null
   };
 }
 
@@ -711,6 +859,42 @@ function leerBordesTabla(tblBorders: XmlElemento | null): { color: RGB | null; g
   return { color: null, grosorPt: 0 };
 }
 
+const LADOS_BORDE_CELDA: [keyof BordesCelda, string[]][] = [['top', ['w:top']], ['bottom', ['w:bottom']], ['left', ['w:left', 'w:start']], ['right', ['w:right', 'w:end']]];
+
+/**
+ * Un borde (`w:top`...): `null` si es `nil`/`none` (sin borde), `undefined` si el elemento no existe. `w:sz` está en OCTAVOS de
+ * punto (no medios, como la fuente): 24 → 3 pt; sin `w:sz`, 0,5 pt. Cualquier estilo distinto de `single`/`thick` (doble,
+ * punteado...) se dibuja continuo y se avisa (`bordeEstilo`).
+ */
+function leerBorde(el: XmlElemento | null, ctx: Contexto): Borde | null | undefined {
+  if (!el) return undefined;
+  const val = el.atributos['w:val'];
+  if (!val || val === 'nil' || val === 'none') return null;
+  if (val !== 'single' && val !== 'thick') anotar(ctx, 'bordeEstilo');
+  const sz = el.atributos['w:sz'];
+  const colorRaw = el.atributos['w:color'];
+  return { color: colorRaw && colorRaw !== 'auto' ? hexAColor(colorRaw) : [0, 0, 0], grosorPt: sz !== undefined ? Math.max(0.5, Number(sz) / 8) : 0.5 };
+}
+
+function leerBordesLados(el: XmlElemento, ctx: Contexto): BordesCelda {
+  const out: BordesCelda = {};
+  for (const [lado, nombres] of LADOS_BORDE_CELDA) {
+    for (const nombre of nombres) {
+      const b = leerBorde(primerHijo(el, nombre), ctx);
+      if (b !== undefined) { out[lado] = b; break; }
+    }
+  }
+  return out;
+}
+
+function leerBordesTablaPorLado(tblBorders: XmlElemento | null, ctx: Contexto): BordesTabla | undefined {
+  if (!tblBorders) return undefined;
+  const out: BordesTabla = leerBordesLados(tblBorders, ctx);
+  const h = leerBorde(primerHijo(tblBorders, 'w:insideH'), ctx); if (h !== undefined) out.insideH = h;
+  const v = leerBorde(primerHijo(tblBorders, 'w:insideV'), ctx); if (v !== undefined) out.insideV = v;
+  return out;
+}
+
 /** Contenido de una celda: varios `w:p` se unen en un único flujo lógico con `saltoLinea` entre medias (ver el comentario de `CeldaTabla`). */
 function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
   const tcPr = primerHijo(tc, 'w:tcPr');
@@ -721,9 +905,14 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
   const fill = tcPr ? primerHijo(tcPr, 'w:shd')?.atributos['w:fill'] : undefined;
   const colorFondo: RGB | null = fill && fill !== 'auto' && /^[0-9a-fA-F]{6}$/.test(fill) ? hexAColor(fill) : null;
 
+  const tcBorders = tcPr ? primerHijo(tcPr, 'w:tcBorders') : null;
+  const bordes = tcBorders ? leerBordesLados(tcBorders, ctx) : undefined;
+
   const partes: ParteParrafo[] = [];
   let alineacion: Alineacion = 'left';
   let bloquesVistos = 0;
+  const enCeldaAntes = ctx.enCelda;
+  ctx.enCelda = true;
   // `aplanarCuerpo` también abre `w:sdt` (control de contenido a nivel de bloque): nada dentro de la celda se pierde.
   for (const hijo of aplanarCuerpo(tc)) {
     if (hijo.nombre === 'w:p') {
@@ -751,6 +940,7 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
     }
   }
 
+  ctx.enCelda = enCeldaAntes;
   // Lo que una celda no puede pintar en esta fase se degrada CON aviso, nunca en silencio.
   for (let k = partes.length - 1; k >= 0; k--) {
     const parte = partes[k]!;
@@ -759,7 +949,7 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
   }
   if (vMerge === 'continue' && partes.some((x) => x.tipo === 'texto')) { anotar(ctx, 'vMergeConTexto'); partes.length = 0; }
 
-  return { partes, gridSpan, vMerge, colorFondo, alineacion };
+  return { partes, gridSpan, vMerge, colorFondo, alineacion, ...(bordes && Object.keys(bordes).length > 0 ? { bordes } : {}) };
 }
 
 function procesarFila(fila: XmlElemento, ctx: Contexto): FilaTabla {
@@ -773,7 +963,17 @@ function procesarTablaReal(tbl: XmlElemento, ctx: Contexto): Tabla {
   const tblGrid = primerHijo(tbl, 'w:tblGrid');
   let anchosColPt = tblGrid ? hijosElemento(tblGrid, 'w:gridCol').map((gc) => twipsAPt(Number(gc.atributos['w:w'] ?? '0'))) : [];
   const tblPr = primerHijo(tbl, 'w:tblPr');
-  const { color: bordeColor, grosorPt: bordeGrosorPt } = leerBordesTabla(tblPr ? primerHijo(tblPr, 'w:tblBorders') : null);
+  // Bordes: los propios de la tabla; si no declara `w:tblBorders`, los de su estilo de tabla (`w:tblStyle`, p. ej. "Table Grid"), de la hoja a la raíz.
+  let tblBorders = tblPr ? primerHijo(tblPr, 'w:tblBorders') : null;
+  const estiloTabla = tblPr ? primerHijo(tblPr, 'w:tblStyle')?.atributos['w:val'] : undefined;
+  if (!tblBorders && estiloTabla) {
+    for (const est of cadenaEstilo(estiloTabla, ctx.estilos).reverse()) {
+      const b = est.tblPr ? primerHijo(est.tblPr, 'w:tblBorders') : null;
+      if (b) { tblBorders = b; break; }
+    }
+  }
+  const { color: bordeColor, grosorPt: bordeGrosorPt } = leerBordesTabla(tblBorders);
+  const bordesTabla = leerBordesTablaPorLado(tblBorders, ctx);
   const filas = hijosElemento(tbl, 'w:tr').map((fila) => procesarFila(fila, ctx));
   if (anchosColPt.length === 0) {
     // Sin w:tblGrid (raro en un .docx real: Word siempre lo escribe): ancho
@@ -781,14 +981,15 @@ function procesarTablaReal(tbl: XmlElemento, ctx: Contexto): Tabla {
     const numCols = filas.reduce((max, f) => Math.max(max, f.celdas.reduce((s, c) => s + c.gridSpan, 0)), 1);
     anchosColPt = new Array(numCols).fill(72);
   }
-  return { tipo: 'tabla', anchosColPt, filas, bordeColor, bordeGrosorPt };
+  return { tipo: 'tabla', anchosColPt, filas, bordeColor, bordeGrosorPt, ...(bordesTabla ? { bordesTabla } : {}) };
 }
 
-function leerGeometriaPagina(sectPr: XmlElemento | null): { anchoPt: number; altoPt: number; margenSup: number; margenInf: number; margenIzq: number; margenDer: number } {
+function leerGeometriaPagina(sectPr: XmlElemento | null): { anchoPt: number; altoPt: number; margenSup: number; margenInf: number; margenIzq: number; margenDer: number; margenCab: number; margenPie: number } {
   // Sin w:sectPr (o sin w:pgSz/w:pgMar): tamaño Carta US con 1" de margen —
   // el valor por defecto que usa el propio Word cuando faltan.
   let anchoPt = 612, altoPt = 792;
   let margenSup = 72, margenInf = 72, margenIzq = 72, margenDer = 72;
+  let margenCab = 36, margenPie = 36; // 0,5": el valor por defecto de Word para `w:pgMar w:header`/`w:footer`
   if (sectPr) {
     const pgSz = primerHijo(sectPr, 'w:pgSz');
     if (pgSz) {
@@ -804,20 +1005,17 @@ function leerGeometriaPagina(sectPr: XmlElemento | null): { anchoPt: number; alt
       if (bottom !== undefined) margenInf = twipsAPt(Number(bottom));
       if (left !== undefined) margenIzq = twipsAPt(Number(left));
       if (right !== undefined) margenDer = twipsAPt(Number(right));
+      const header = pgMar.atributos['w:header']; const footer = pgMar.atributos['w:footer'];
+      if (header !== undefined) margenCab = twipsAPt(Number(header));
+      if (footer !== undefined) margenPie = twipsAPt(Number(footer));
     }
   }
-  return { anchoPt, altoPt, margenSup, margenInf, margenIzq, margenDer };
+  return { anchoPt, altoPt, margenSup, margenInf, margenIzq, margenDer, margenCab, margenPie };
 }
 
 function contarElementos(nodo: XmlElemento, nombre: string): number {
   let c = nodo.nombre === nombre ? 1 : 0;
   for (const h of nodo.hijos) if (h.tipo === 'elemento') c += contarElementos(h, nombre);
-  return c;
-}
-
-function contarConAtributo(nodo: XmlElemento, nombre: string, attr: string, valor: string): number {
-  let c = nodo.nombre === nombre && nodo.atributos[attr] === valor ? 1 : 0;
-  for (const h of nodo.hijos) if (h.tipo === 'elemento') c += contarConAtributo(h, nombre, attr, valor);
   return c;
 }
 
@@ -844,24 +1042,18 @@ function pluralizar(n: number, singular: string, plural: string): string { retur
 function construirAdvertencias(docRoot: XmlElemento): string[] {
   const advertencias: string[] = [];
   const imagenesVml = contarElementos(docRoot, 'w:pict');
-  const encabezados = contarElementos(docRoot, 'w:headerReference');
-  const pies = contarElementos(docRoot, 'w:footerReference');
   const cuadros = contarElementos(docRoot, 'w:txbxContent');
   const notas = contarElementos(docRoot, 'w:footnoteReference') + contarElementos(docRoot, 'w:endnoteReference');
   const comentarios = contarElementos(docRoot, 'w:commentReference');
-  const campos = contarConAtributo(docRoot, 'w:fldChar', 'w:fldCharType', 'begin') + contarElementos(docRoot, 'w:fldSimple');
   const cambios = contarElementos(docRoot, 'w:ins') + contarElementos(docRoot, 'w:del') + contarElementos(docRoot, 'w:moveFrom') + contarElementos(docRoot, 'w:moveTo');
   const secciones = contarElementos(docRoot, 'w:sectPr');
   const conColumnas = contarColumnasMultiples(docRoot);
   const objetos = contarElementos(docRoot, 'w:object');
 
   if (imagenesVml > 0) advertencias.push(`Se omitieron ${imagenesVml} ${pluralizar(imagenesVml, 'imagen', 'imágenes')} en formato antiguo (VML, aún no soportado).`);
-  if (encabezados > 0) advertencias.push(`Se omitieron ${encabezados} ${pluralizar(encabezados, 'encabezado', 'encabezados')} de página (aún no soportados).`);
-  if (pies > 0) advertencias.push(`Se omitieron ${pies} ${pluralizar(pies, 'pie', 'pies')} de página (aún no soportados).`);
   if (cuadros > 0) advertencias.push(`Se omitieron ${cuadros} ${pluralizar(cuadros, 'cuadro de texto', 'cuadros de texto')} (aún no soportados).`);
   if (notas > 0) advertencias.push(`Se omitieron ${notas} ${pluralizar(notas, 'nota al pie', 'notas al pie')} (aún no soportadas).`);
   if (comentarios > 0) advertencias.push(`Se omitieron ${comentarios} ${pluralizar(comentarios, 'comentario', 'comentarios')} (aún no soportados).`);
-  if (campos > 0) advertencias.push(`Se omitieron ${campos} ${pluralizar(campos, 'campo', 'campos')} (aún no soportados).`);
   if (cambios > 0) advertencias.push(`El documento tiene ${cambios} ${pluralizar(cambios, 'cambio', 'cambios')} de control de cambios sin resolver; se aceptaron las inserciones y se descartaron las eliminaciones.`);
 
   if (objetos > 0) advertencias.push(`Se omitieron ${objetos} ${pluralizar(objetos, 'objeto incrustado', 'objetos incrustados')} (OLE; aún no soportados).`);
@@ -869,6 +1061,61 @@ function construirAdvertencias(docRoot: XmlElemento): string[] {
   if (conColumnas > 0) advertencias.push(`Se omitió la distribución en columnas de ${conColumnas} ${pluralizar(conColumnas, 'sección', 'secciones')}; el texto se maqueta a una sola columna.`);
 
   return advertencias;
+}
+
+const TIPOS_ZONA = ['default', 'first', 'even'] as const;
+
+/**
+ * Encabezados y pies (`w:headerReference`/`w:footerReference` de las secciones → `word/header*.xml`/`footer*.xml` vía rels).
+ * Para cada tipo (default/first/even) manda la ÚLTIMA sección que lo define (una sección sin referencia hereda la de la
+ * anterior, como en Word). Las referencias que no se usan (de secciones anteriores) y las que no se pueden resolver se
+ * AVISAN. Solo párrafos: una tabla dentro de la zona se omite con aviso. Las imágenes y enlaces de una zona no se
+ * resuelven (sus rels son los del propio header/footer): se avisa.
+ */
+function leerZonasDePagina(
+  sectPrs: XmlElemento[], sectPrFinal: XmlElemento | null, rels: Map<string, Relacion> | null, partes: Record<string, string>, ctx: Contexto
+): { encabezados: ZonaPaginaModelo; pies: ZonaPaginaModelo } {
+  const vacia = (): ZonaPaginaModelo => ({ default: null, first: null, even: null });
+  const salida = { encabezados: vacia(), pies: vacia() };
+  const total = sectPrs.reduce((s, sp) => s + hijosElemento(sp, 'w:headerReference').length + hijosElemento(sp, 'w:footerReference').length, 0)
+    + (sectPrFinal && !sectPrs.includes(sectPrFinal) ? hijosElemento(sectPrFinal, 'w:headerReference').length + hijosElemento(sectPrFinal, 'w:footerReference').length : 0);
+  let usadas = 0;
+  for (const [refNombre, clave, falta] of [['w:headerReference', 'encabezados', 'encabezadoFaltante'], ['w:footerReference', 'pies', 'pieFaltante']] as const) {
+    for (const tipo of TIPOS_ZONA) {
+      let rId: string | undefined;
+      for (const sp of sectPrs) {
+        const ref = hijosElemento(sp, refNombre).find((r) => (r.atributos['w:type'] ?? 'default') === tipo);
+        if (ref) rId = ref.atributos['r:id'];
+      }
+      if (rId === undefined) continue;
+      usadas++;
+      const ruta = rels?.get(rId) ? rutaMediaDesdeWord(rels.get(rId)!.target) : null;
+      const xml = ruta ? partes[ruta] : undefined;
+      if (xml === undefined) { anotar(ctx, falta); continue; }
+      try {
+        salida[clave][tipo] = procesarZona(xml, ctx);
+      } catch {
+        anotar(ctx, falta);
+      }
+    }
+  }
+  if (total > usadas) for (let i = 0; i < total - usadas; i++) anotar(ctx, 'zonaDeSeccionAnterior');
+  return salida;
+}
+
+/** Párrafos de un `w:hdr`/`w:ftr`, con `ctx.zona` activo (ahí PAGE/NUMPAGES son campos y las imágenes se omiten con aviso). */
+function procesarZona(xml: string, ctx: Contexto): Parrafo[] {
+  const raiz = parseXml(xml);
+  const ps: Parrafo[] = [];
+  ctx.zona = true;
+  try {
+    for (const hijo of aplanarCuerpo(raiz)) {
+      if (hijo.nombre === 'w:p') ps.push(procesarParrafo(hijo, ctx));
+      else if (hijo.nombre === 'w:tbl') anotar(ctx, 'tablaEnZona');
+      else if (!['w:bookmarkStart', 'w:bookmarkEnd', 'w:proofErr', 'w:permStart', 'w:permEnd', 'w:sectPr'].includes(hijo.nombre) && buscarDescendiente(hijo, 'w:t')) anotar(ctx, 'desconocido');
+    }
+  } finally { ctx.zona = false; ctx.camposAbiertos.length = 0; }
+  return ps;
 }
 
 /**
@@ -879,7 +1126,7 @@ function construirAdvertencias(docRoot: XmlElemento): string[] {
  * y llama aquí) ni decodifica píxeles de imagen (eso lo hace
  * `decodificarImagenDocx`, después, sobre los `refId` que deja este modelo).
  */
-export function construirModeloDocx(documentXml: string, stylesXml: string | null, numberingXml: string | null, relsXml: string | null = null): ModeloDocx {
+export function construirModeloDocx(documentXml: string, stylesXml: string | null, numberingXml: string | null, relsXml: string | null = null, extras: ExtrasDocx = {}): ModeloDocx {
   const docRoot = parseXml(documentXml);
   const body = primerHijo(docRoot, 'w:body');
   if (!body) throw new DocxError('El documento .docx no tiene contenido (falta <w:body> en document.xml).');
@@ -892,21 +1139,22 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
     : { numMap: new Map<string, string>(), abstractNums: new Map<string, AbstractNumDef>() };
   const rels = relsXml ? leerRelaciones(relsXml) : null;
 
-  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), rels, advertenciasExtra: [], perdidas: new Map() };
+  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, camposAbiertos: [] };
 
   const bloques: BloqueDocx[] = [];
   let sectPrFinal: XmlElemento | null = null;
+  const sectPrs: XmlElemento[] = []; // todas las secciones, en orden de documento (la última es la que manda para geometría)
 
   for (const hijo of aplanarCuerpo(body)) {
     if (hijo.nombre === 'w:p') {
       const pPr = primerHijo(hijo, 'w:pPr');
       const sectPrParrafo = pPr ? primerHijo(pPr, 'w:sectPr') : null;
-      if (sectPrParrafo) sectPrFinal = sectPrParrafo;
+      if (sectPrParrafo) { sectPrFinal = sectPrParrafo; sectPrs.push(sectPrParrafo); }
       bloques.push(procesarParrafo(hijo, ctx));
     } else if (hijo.nombre === 'w:tbl') {
       bloques.push(procesarTablaReal(hijo, ctx));
     } else if (hijo.nombre === 'w:sectPr') {
-      sectPrFinal = hijo;
+      sectPrFinal = hijo; sectPrs.push(hijo);
     } else if (hijo.nombre === 'm:oMathPara' || hijo.nombre === 'm:oMath') {
       anotar(ctx, 'ecuacion');
     } else if (!['w:bookmarkStart', 'w:bookmarkEnd', 'w:proofErr', 'w:permStart', 'w:permEnd'].includes(hijo.nombre) && buscarDescendiente(hijo, 'w:t')) {
@@ -915,12 +1163,21 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
   }
 
   const geo = leerGeometriaPagina(sectPrFinal);
+  const zonas = leerZonasDePagina(sectPrs, sectPrFinal, rels, extras.partes ?? {}, ctx);
+  let paresImpares = false;
+  if (extras.settingsXml) {
+    try { const ev = primerHijo(parseXml(extras.settingsXml), 'w:evenAndOddHeaders'); paresImpares = !!ev && leerToggle(ev); } catch { /* settings ilegible: sin encabezados pares/impares distintos */ }
+  }
   const perdidas = MENSAJES_PERDIDAS.filter(([clave]) => (ctx.perdidas.get(clave) ?? 0) > 0).map(([clave, msg]) => msg(ctx.perdidas.get(clave)!));
   const advertencias = [...construirAdvertencias(docRoot), ...ctx.advertenciasExtra, ...perdidas];
 
   return {
     paginaAnchoPt: geo.anchoPt, paginaAltoPt: geo.altoPt,
     margenSupPt: geo.margenSup, margenInfPt: geo.margenInf, margenIzqPt: geo.margenIzq, margenDerPt: geo.margenDer,
-    bloques, advertencias
+    bloques, advertencias,
+    margenEncabezadoPt: geo.margenCab, margenPiePt: geo.margenPie,
+    tituloPagina: !!sectPrFinal && !!primerHijo(sectPrFinal, 'w:titlePg') && leerToggle(primerHijo(sectPrFinal, 'w:titlePg')!),
+    paresImpares,
+    encabezados: zonas.encabezados, pies: zonas.pies
   };
 }

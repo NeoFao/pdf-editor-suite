@@ -2225,3 +2225,27 @@ snapshot, señal ya abortada no toca nada) y
 durante la compresión, barra que avanza, Cancelar y Escape con la compresión
 retenida de forma determinista en la 3.ª imagen y bytes de `#btn-save` idénticos
 a los previos). Sin regla guard: no hay patrón textual fiable.
+
+### E-056 · Word → PDF: títulos huérfanos al pie, encabezados/pies descartados y un solo lado de borde aplicado a toda la tabla · encontrado al planificar la fase 2b (T6)
+
+**Síntoma.** Un `.docx` con un título al final de la página 1 salía con el
+título solo al pie y su párrafo en la página 2; los encabezados y pies de página
+desaparecían (solo se avisaba); una tabla que declaraba `w:tblBorders` solo en
+el lado superior se dibujaba con los cuatro lados y la rejilla interior, y
+`w:tcBorders` (bordes por celda) se ignoraba; una imagen flotante (`wp:anchor`)
+se omitía en vez de colocarse.
+
+**Causa raíz.** Simplificaciones de la fase 2a que nadie había convertido en
+defecto: `leerBordesTabla` tomaba el PRIMER lado visible y lo extendía a toda la
+tabla (la precedencia celda > tabla no existía); el maquetador común no tenía
+noción de "mantener junto" (`keepNext`/`keepLines`) ni de zonas repetidas por
+página; `wp:anchor` se trataba igual que un dibujo no reconocido.
+
+**Cómo se detecta ahora.** `tests/unit/flujo-layout.test.ts` (grupos
+`keepStart/keepEnd`, `floatImage`, `colocarZona`), `docx-modelo-2b.test.ts`
+(encabezados, campos, keep, `tcBorders`, `wp:anchor`), `docx-render-2b.test.ts`
+(PAGE/NUMPAGES por página, first/even, título no huérfano, precedencia de bordes,
+bordes por lado, flotante), `ConversorDocxNavegador.test.ts` con el motor real
+(`word-encabezados.docx`, `word-flotante.docx`) y `tests/e2e/next/word-a-pdf.spec.ts`.
+Dos tests antiguos asumían "un lado = toda la tabla" y se corrigieron (no se
+borró cobertura). Regla determinista: no se añade (no hay firma sintáctica única).
