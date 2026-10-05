@@ -49,7 +49,7 @@ test('listPathObjects devuelve los objetos PATH de la página con su caja y si t
 
   eng.drawStroke(doc, 0, [{ xPt: 10, yPt: 10 }, { xPt: 50, yPt: 50 }], [0, 0, 0], 2);
   eng.drawRect(doc, 0, { xPt: 60, yPt: 60, wPt: 40, hPt: 30 }, [0, 0, 0], 2);
-  eng.highlightRect(doc, 0, { xPt: 0, yPt: 0, wPt: 20, hPt: 20 }, [255, 235, 0]); // relleno, sin trazo
+  eng.fillRect(doc, 0, { xPt: 0, yPt: 0, wPt: 20, hPt: 20 }, [255, 235, 0]); // relleno, sin trazo
 
   const paths = eng.listPathObjects(doc, 0);
   expect(paths).toHaveLength(3);

@@ -3,7 +3,8 @@ import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
 import { validarUrlEnlace } from '../validarUrlEnlace';
 import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
+import type { QuadPt } from '../../coords/quads';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_PAGEOBJ_PATH = 2;
@@ -63,6 +64,12 @@ const PDFACTION_LAUNCH = 4; // FPDFAction_GetType: acción "ir a" (destino dentr
  */
 /** Clave de las propiedades de `/Artifact` con la que este editor marca lo que inserta. */
 const CLAVE_MARCA_EDITOR = 'PDFEditor';
+
+/** Fecha en formato PDF (`D:AAAAMMDDHHmmSS`, hora local sin zona; /M de las anotaciones). */
+function fechaPdf(d: Date): string {
+  const z = (n: number, w = 2): string => String(n).padStart(w, '0');
+  return `D:${z(d.getFullYear(), 4)}${z(d.getMonth() + 1)}${z(d.getDate())}${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`;
+}
 
 export class PdfiumEngine implements PdfEngine {
   private readonly srcPtr = new Map<DocHandle, number>();
@@ -1228,11 +1235,6 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
-  highlightRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean {
-    const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'highlightRect', rect, color }]);
-    return (res as Extract<PageOpResult, { type: 'highlightRect' }>).ok;
-  }
-
   addLink(doc: DocHandle, pageIndex: number, rectPt: RectPt, url: string): boolean {
     const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'addLink', rect: rectPt, url }]);
     return (res as Extract<PageOpResult, { type: 'addLink' }>).ok;
@@ -1265,6 +1267,97 @@ export class PdfiumEngine implements PdfEngine {
         this.p.FPDFPage_CloseAnnot(annot);
       }
       return this.p.FPDFPage_GetAnnotCount(page) - 1; // la anotación creada es la última
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  addMarkup(doc: DocHandle, pageIndex: number, tipo: MarkupKind, quads: readonly QuadPt[], color: [number, number, number], contenido = '', autor = ''): number {
+    if (quads.length === 0) return -1;
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const subtipo = tipo === 'highlight' ? FPDF_ANNOT_HIGHLIGHT : tipo === 'underline' ? FPDF_ANNOT_UNDERLINE : FPDF_ANNOT_STRIKEOUT;
+      const annot = this.p.FPDFPage_CreateAnnot(page, subtipo);
+      if (!annot) return -1;
+      try {
+        // FS_QUADPOINTSF = 8 floats (x1,y1 .. x4,y4) en pt PDF de usuario; se añade uno por línea.
+        const qptr = this.mem.malloc(32);
+        try {
+          for (const q of quads) {
+            q.forEach((v, i) => this.mem.setValue(qptr + i * 4, v, 'float'));
+            if (!this.p.FPDFAnnot_AppendAttachmentPoints(annot, qptr)) return -1;
+          }
+        } finally {
+          this.mem.free(qptr);
+        }
+        // /Rect = envolvente de todos los quads (FS_RECTF {left, top, right, bottom}, pt PDF).
+        const xs = quads.flatMap((q) => [q[0], q[2], q[4], q[6]]);
+        const ys = quads.flatMap((q) => [q[1], q[3], q[5], q[7]]);
+        const rptr = this.mem.malloc(16);
+        this.mem.setValue(rptr, Math.min(...xs), 'float');
+        this.mem.setValue(rptr + 4, Math.max(...ys), 'float');
+        this.mem.setValue(rptr + 8, Math.max(...xs), 'float');
+        this.mem.setValue(rptr + 12, Math.min(...ys), 'float');
+        this.p.FPDFAnnot_SetRect(annot, rptr);
+        this.mem.free(rptr);
+        this.p.FPDFAnnot_SetColor(annot, FPDFANNOT_COLORTYPE_Color, color[0], color[1], color[2], 255);
+        const poner = (clave: string, valor: string): void => {
+          const w = this.mem.wide(valor);
+          try { this.p.FPDFAnnot_SetStringValue(annot, clave, w); } finally { this.mem.free(w); }
+        };
+        if (contenido) poner('Contents', contenido);
+        if (autor) poner('T', autor);
+        poner('M', fechaPdf(new Date()));
+        // Sin /AP PDFium no pinta el marcado (verificado en la investigación T11).
+        this.p.EPDFAnnot_GenerateAppearance(annot);
+      } finally {
+        this.p.FPDFPage_CloseAnnot(annot);
+      }
+      return this.p.FPDFPage_GetAnnotCount(page) - 1; // la anotación creada es la última
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  getMarkupQuads(doc: DocHandle, pageIndex: number, index: number): QuadPt[] {
+    return this.conAnotacion(doc, pageIndex, index, (annot) => {
+      const out: QuadPt[] = [];
+      const n = this.p.FPDFAnnot_CountAttachmentPoints(annot);
+      const qptr = this.mem.malloc(32);
+      try {
+        for (let i = 0; i < n; i++) {
+          if (!this.p.FPDFAnnot_GetAttachmentPoints(annot, i, qptr)) continue;
+          out.push(Array.from({ length: 8 }, (_, k) => this.mem.getValue(qptr + k * 4, 'float')) as unknown as QuadPt);
+        }
+      } finally {
+        this.mem.free(qptr);
+      }
+      return out;
+    }) ?? [];
+  }
+
+  getMarkupColor(doc: DocHandle, pageIndex: number, index: number): [number, number, number] | null {
+    return this.conAnotacion(doc, pageIndex, index, (annot) => {
+      const ptr = this.mem.malloc(12); // 3 unsigned int: R, G, B (EPDFAnnot_GetColor; FPDFAnnot_GetColor falla con /AP generada)
+      try {
+        if (!this.p.EPDFAnnot_GetColor(annot, FPDFANNOT_COLORTYPE_Color, ptr, ptr + 4, ptr + 8)) return null;
+        return [this.mem.getValue(ptr, 'i32'), this.mem.getValue(ptr + 4, 'i32'), this.mem.getValue(ptr + 8, 'i32')] as [number, number, number];
+      } finally {
+        this.mem.free(ptr);
+      }
+    }) ?? null;
+  }
+
+  /** Abre la anotación `index` de la página, ejecuta `fn` y la cierra siempre; null si no existe. */
+  private conAnotacion<T>(doc: DocHandle, pageIndex: number, index: number, fn: (annot: number) => T): T | null {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      if (index < 0 || index >= this.p.FPDFPage_GetAnnotCount(page)) return null;
+      const annot = this.p.FPDFPage_GetAnnot(page, index);
+      if (!annot) return null;
+      try { return fn(annot); } finally { this.p.FPDFPage_CloseAnnot(annot); }
     } finally {
       this.p.FPDF_ClosePage(page);
     }
@@ -1323,7 +1416,8 @@ export class PdfiumEngine implements PdfEngine {
           const leer = (clave: string): string =>
             leerCadenaPdfium(this.mem, (buf, len) => this.p.FPDFAnnot_GetStringValue(annot, clave, buf, len), (ptr) => this.mem.readU16(ptr));
           const text = leer('Contents');
-          if (sub !== FPDF_ANNOT_TEXT && text === '') continue;
+          const esMarcado = sub === FPDF_ANNOT_HIGHLIGHT || sub === FPDF_ANNOT_UNDERLINE || sub === FPDF_ANNOT_STRIKEOUT;
+          if (sub !== FPDF_ANNOT_TEXT && !esMarcado && text === '') continue;
           const rectPtr = this.mem.malloc(16);
           this.p.FPDFAnnot_GetRect(annot, rectPtr);
           const left = this.mem.getValue(rectPtr, 'float');
@@ -1653,7 +1747,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   /**
-   * Núcleo compartido de `insertText`, `fillRect`, `highlightRect`,
+   * Núcleo compartido de `insertText`, `fillRect`,
    * `drawStroke` y `drawRect` (E-037, docs/ERRORES-CONOCIDOS.md): carga la
    * página UNA vez, crea el objeto de cada op sin regenerar el contenido
    * entre medias, y solo al final —si al menos una op mutó de verdad la
@@ -1708,18 +1802,6 @@ export class PdfiumEngine implements PdfEngine {
             this.p.FPDFPage_InsertObject(page, obj);
             mutado = true;
             results.push({ type: 'fillRect', ok: true });
-            break;
-          }
-          case 'highlightRect': {
-            const obj = this.p.FPDFPageObj_CreateNewRect(op.rect.xPt, op.rect.yPt, op.rect.wPt, op.rect.hPt);
-            this.p.FPDFPath_SetDrawMode(obj, 2, false);
-            const [r, g, b] = op.color;
-            this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
-            // Multiply: amarillo * blanco = amarillo; el texto negro sigue negro (marcador real).
-            this.p.FPDFPageObj_SetBlendMode(obj, 'Multiply');
-            this.p.FPDFPage_InsertObject(page, obj);
-            mutado = true;
-            results.push({ type: 'highlightRect', ok: true });
             break;
           }
           case 'drawStroke': {

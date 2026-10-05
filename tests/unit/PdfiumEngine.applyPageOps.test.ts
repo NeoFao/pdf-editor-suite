@@ -12,7 +12,7 @@ async function nuevoDoc(): Promise<Uint8Array> {
 
 /**
  * E-037 (docs/ERRORES-CONOCIDOS.md): cada método unitario del motor que
- * dibuja/inserta texto (`insertText`, `fillRect`, `highlightRect`,
+ * dibuja/inserta texto (`insertText`, `fillRect`,
  * `drawStroke`, `drawRect`) hacía `FPDF_LoadPage` → mutar →
  * `FPDFPage_GenerateContent` → `FPDF_ClosePage` POR LLAMADA.
  * `FPDFPage_GenerateContent` reserializa TODO el contenido ya insertado en
@@ -75,23 +75,22 @@ test('E-037: applyPageOps en lote produce el MISMO contenido que aplicar cada op
   eng.close(docUnaAUna);
 });
 
-test('E-037: applyPageOps mezcla fillRect/highlightRect/drawStroke/drawRect/insertText en un solo lote', async () => {
+test('E-037: applyPageOps mezcla fillRect/drawStroke/drawRect/insertText en un solo lote', async () => {
   const eng = await PdfiumEngine.create();
   const doc = await eng.open(await nuevoDoc());
 
   const ops: PageOp[] = [
     { type: 'fillRect', rect: { xPt: 10, yPt: 10, wPt: 40, hPt: 8 }, color: [255, 0, 0] },
-    { type: 'highlightRect', rect: { xPt: 10, yPt: 30, wPt: 40, hPt: 8 }, color: [255, 255, 0] },
     { type: 'drawStroke', points: [{ xPt: 0, yPt: 0 }, { xPt: 50, yPt: 50 }], color: [0, 0, 255], widthPt: 1 },
     { type: 'drawRect', rect: { xPt: 60, yPt: 60, wPt: 20, hPt: 20 }, color: [0, 128, 0], widthPt: 1 },
     { type: 'insertText', spec: { xPt: 20, yPt: 700, text: 'hola', sizePt: 12 } }
   ];
 
   const results = eng.applyPageOps(doc, 0, ops);
-  expect(results.map((r) => r.type)).toEqual(['fillRect', 'highlightRect', 'drawStroke', 'drawRect', 'insertText']);
+  expect(results.map((r) => r.type)).toEqual(['fillRect', 'drawStroke', 'drawRect', 'insertText']);
   expect(results.every((r) => (r.type === 'insertText' ? r.runId >= 0 : r.ok))).toBe(true);
 
-  expect(eng.listPathObjects(doc, 0)).toHaveLength(4); // fillRect + highlightRect + drawStroke + drawRect, todos son PATH
+  expect(eng.listPathObjects(doc, 0)).toHaveLength(3); // fillRect + drawStroke + drawRect, todos son PATH
   expect(eng.getPageText(doc, 0)).toHaveLength(1);
   eng.close(doc);
 });

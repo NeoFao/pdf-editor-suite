@@ -2149,3 +2149,43 @@ altoVisual, escala, rotación)`, que hace el intercambio. `Viewer` y
 `rotada.pdf`, 3 páginas con /Rotate 90/270/180: caja del run contra píxeles del
 canvas, inserción y nota contra el punto visual del clic), los tests de 270 en
 `PageGeometry.test.ts` y la regla guard `pagegeometry-solo-con-fabrica`.
+
+### E-054 · Resaltar, subrayar y tachar quemaban paths en la página en vez de crear anotaciones (T11)
+
+**Síntoma.** Un resaltado hecho en la app no aparecía en el panel de Comentarios,
+no se podía borrar desde allí, otros lectores (Acrobat, el panel de anotaciones
+del navegador) no lo trataban como anotación, y modificaba el CONTENIDO de la
+página (un rectángulo más en el flujo de dibujo).
+
+**Causa raíz.** `HighlightRunCmd`, `UnderlineRunCmd` y `StrikethroughRunCmd`
+usaban `highlightRect`/`fillRect` (objetos de contenido) por ser lo más barato de
+reutilizar. Al pasarlas a anotaciones reales aparecieron tres trampas de PDFium
+que conviene no volver a pisar: (1) sin `/AP` PDFium NO pinta un `/Highlight`,
+`/Underline` ni `/StrikeOut`: hay que llamar SIEMPRE a
+`EPDFAnnot_GenerateAppearance`; (2) `FPDFAnnot_AppendAttachmentPoints` no fija
+`/Rect`: hay que escribir la envolvente de los quads con `FPDFAnnot_SetRect` o la
+anotación mide 0×0; (3) `FPDFAnnot_GetColor` devuelve `false` con la `/AP`
+generada, se lee con `EPDFAnnot_GetColor`.
+
+**Arreglo.** `engine.addMarkup(doc, page, tipo, quads, color, contenido?, autor?)`
+y `AddMarkupCmd` (deshacer por snapshot). Los quads se calculan UNO POR LÍNEA
+VISUAL con `quadsPorLinea` (`src/coords/quads.ts`), que trabaja en el espacio
+visual de `PageGeometry.desdeTamanoVisual` (E-053) y vuelve a pt de usuario, de
+modo que `/Rotate` queda resuelto en un único sitio. `getComments` lista siempre
+el marcado de texto aunque no tenga `/Contents` (como Acrobat). Borrar = el
+botón Borrar del panel de Comentarios (`removeNote`, vale para cualquier
+anotación); no toca el contenido de la página.
+
+**Comportamiento a conocer.** Los resaltados/subrayados/tachados antiguos (paths
+de PDFs ya editados con versiones previas) se quedan como están, son contenido de
+la página y no se migran. El borrador de dibujo solo toca objetos de contenido,
+así que no borra las anotaciones nuevas: se quitan desde el panel. `/T` (autor)
+queda vacío mientras no exista un nombre de usuario configurable; `/M` se
+escribe siempre.
+
+**Cómo se detecta ahora.** `tests/unit/PdfiumEngine.markup.test.ts` (persistencia
+tras guardar y reabrir de subtipo, QuadPoints, color y Contents; píxeles con la
+`/AP`; texto intacto y píxeles idénticos tras borrar), `tests/unit/quads.test.ts`,
+`tests/unit/AddMarkup.test.ts` y `tests/e2e/next/markup-anotaciones.spec.ts`
+(Comentarios, deshacer, borrar y el quad sobre el texto en `rotada.pdf` con
+/Rotate 90, 270 y 180). Sin regla guard: no hay patrón de código textual.

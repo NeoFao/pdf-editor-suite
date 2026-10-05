@@ -29,4 +29,11 @@ if [ "$(printf '%s' "$PRIMERA" | wc -c)" -gt 100 ]; then
   exit 1
 fi
 
+# El dueno prohibe la atribucion de IA en commits (AGENTS.md seccion 4).
+if grep -v '^#' "$1" | grep -Eiq '^[[:space:]]*(co-authored-by:|claude-session:)|generated with .*claude'; then
+  echo "[commit-msg] BLOQUEADO: el mensaje contiene atribucion de IA (Co-Authored-By, Claude-Session o"
+  echo "  'Generated with Claude'). Quitala del mensaje."
+  exit 1
+fi
+
 exit 0
