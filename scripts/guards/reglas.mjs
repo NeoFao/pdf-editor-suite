@@ -783,7 +783,7 @@ export const conMotorLoteEnBucle = {
   titulo: 'un fichero que dibuja/inserta texto del motor DENTRO de un bucle usa applyPageOps',
   comoArreglar:
     'Si el fichero recorre una lista y por cada elemento llama a insertText/fillRect/' +
-    'highlightRect/drawStroke/drawRect del motor, agrupa esas operaciones en un array ' +
+    'drawStroke/drawRect del motor, agrupa esas operaciones en un array ' +
     'de PageOp y pásalas juntas a engine.applyPageOps(doc, pageIndex, ops) — una sola ' +
     'llamada por página, en vez de una por elemento. Cada uno de esos métodos hace ' +
     'FPDF_LoadPage → mutar → FPDFPage_GenerateContent → FPDF_ClosePage POR LLAMADA, y ' +
@@ -797,7 +797,7 @@ export const conMotorLoteEnBucle = {
     if (!fs.existsSync(raizSrc)) return [];
     const hallazgos = [];
     const patronBucle = /\bfor\s*\(|\.forEach\(|\bwhile\s*\(/;
-    const patronDibujo = /\.(insertText|fillRect|highlightRect|drawStroke|drawRect)\(/;
+    const patronDibujo = /\.(insertText|fillRect|drawStroke|drawRect)\(/;
     const patronLote = /\.applyPageOps\(/;
     // Heurística por FICHERO (mismo estilo que addfunction-con-removefunction,
     // E-036): comprobar si una llamada de dibujo cae textualmente DENTRO de
