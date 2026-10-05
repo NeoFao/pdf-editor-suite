@@ -2092,3 +2092,22 @@ white-space: nowrap`. Test: `tests/e2e/next/panel-lateral-pestanas.spec.ts`
 **Cómo se detecta ahora.** Ese test e2e y la revisión visual obligatoria
 (AGENTS.md §2.8) tras integrar ramas que añaden controles al mismo contenedor.
 No hay regla guard: no existe un patrón de código fiable.
+
+### E-052 · `npm run verify` en local podía fallar en falso: vitest leía fixtures no versionados desactualizados · encontrado al integrar ramas en paralelo
+
+**Síntoma.** Tras cambiar el generador de fixtures (p. ej. al integrar ramas),
+`npm run test:unit:src` fallaba en local con PDF/DOCX viejos de
+`tests/fixtures/generados/`, y pasaba tras regenerarlos a mano. En un clon
+limpio fallaba por ficheros inexistentes.
+
+**Causa raíz.** `tests/fixtures/generados/` no se versiona y solo `test:e2e`
+ejecutaba `test:fixtures`. En `verify`, `test:unit:src` corre antes que
+`test:e2e`, así que usaba lo que hubiera en disco. El CI lo ocultaba porque el
+job `app-nueva` genera los fixtures explícitamente antes.
+
+**Arreglo.** `vitest.config.ts` declara un `globalSetup`
+(`tests/unit/_setup/generar-fixtures.ts`) que ejecuta el generador antes de los
+unitarios. Es determinista e idempotente; en CI repite un paso barato.
+
+**Cómo se detecta ahora.** Borrar `tests/fixtures/generados/` y ejecutar solo
+`npm run test:unit:src` debe pasar. Sin regla guard: no hay patrón de código.
