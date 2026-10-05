@@ -33,6 +33,8 @@ import { OcrPageCmd } from '../commands/OcrPage';
 import { TesseractOcr } from '../ocr/TesseractOcr';
 import { FiltrarPaginaCmd, type TipoFiltro } from '../commands/FiltrarPagina';
 import { ComprimirDocumentoCmd } from '../commands/ComprimirDocumento';
+import { AnadirEncabezadoMarcaCmd, QuitarEncabezadosMarcasCmd } from '../commands/EncabezadoMarcaAgua';
+import { EncabezadoPanel } from './EncabezadoPanel';
 import { SignaturePad } from './SignaturePad';
 import { CompressPanel } from './CompressPanel';
 import { TextPanel } from './TextPanel';
@@ -434,6 +436,9 @@ export class App {
     const btnPageUp = this.iconBoton('subir', 'Subir', 'btn-page-up', () => this.moveCurrentPage(-1), { mostrarEtiqueta: true });
     const btnPageDown = this.iconBoton('bajar', 'Bajar', 'btn-page-down', () => this.moveCurrentPage(1), { mostrarEtiqueta: true });
 
+    const btnEncabezado = this.iconBoton('encabezado', 'Encabezado y marca', 'btn-encabezado', () => this.abrirEncabezado(), { mostrarEtiqueta: true });
+    btnEncabezado.title = 'Encabezado, pie, numeración y marca de agua';
+
     const insertPdf = document.createElement('input');
     insertPdf.type = 'file'; insertPdf.accept = 'application/pdf'; insertPdf.id = 'btn-insert-pdf';
     insertPdf.addEventListener('change', () => { const f = insertPdf.files?.[0]; if (f) void this.handleInsertPdf(f).finally(() => { insertPdf.value = ''; }); });
@@ -592,7 +597,7 @@ export class App {
       this.separador(), swatchesEl
     ]);
     const barraOrganizar = crearBarraContextual('organizar', [
-      btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown,
+      btnEncabezado, btnRotate, btnDeletePage, btnDuplicate, btnPageUp, btnPageDown,
       insertPdf, btnInsertPdf, btnExtract,
       this.separador(), this.rangeInput, btnSplit
     ]);
@@ -1635,6 +1640,35 @@ export class App {
     } finally {
       this.btnFilter.disabled = false;
     }
+  }
+
+  /** `#btn-encabezado`: diálogo de encabezado/pie/numeración y marca de agua, con vista previa sobre la página actual. */
+  private abrirEncabezado(): void {
+    const s = this.session, bus = this.bus;
+    if (!s || !bus) { this.setStatus('Abre un documento antes de añadir encabezados o marcas de agua.'); return; }
+    const actual = this.currentPage;
+    const total = s.engine.pageCount(s.doc);
+    EncabezadoPanel.abrir({
+      totalPaginas: total,
+      paginaActual: actual,
+      pagina: () => {
+        const d = this.viewer?.paginaDom(actual);
+        const sz = s.model.pages[actual]?.sizePt;
+        return d && sz ? { el: d.el, escala: d.escala, anchoPt: sz.widthPt, altoPt: sz.heightPt } : null;
+      },
+      medir: (fuente, sizePt, texto) => s.engine.measureText(fuente, sizePt, texto),
+      onAplicar: async (op, progreso) => {
+        const cmd = new AnadirEncabezadoMarcaCmd(op, progreso);
+        await bus.execute(cmd);
+        this.setStatus('encabezado' in op ? 'Encabezado y pie añadidos.' : 'Marca de agua añadida.');
+      },
+      onQuitar: async (progreso) => {
+        const cmd = new QuitarEncabezadosMarcasCmd(progreso);
+        await bus.execute(cmd);
+        this.setStatus(cmd.quitados === 0 ? 'No había encabezados ni marcas de agua añadidos por este editor.' : `Quitados ${cmd.quitados} objeto(s) añadidos por este editor.`);
+        return cmd.quitados;
+      }
+    });
   }
 
   /** `#btn-compress`: abre el panel de calidad/dpi (`CompressPanel`) y lanza la compresión al confirmar. */
