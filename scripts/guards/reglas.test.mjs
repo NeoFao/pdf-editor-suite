@@ -695,6 +695,24 @@ describe('texto-perezoso-via-editsession', () => {
   });
 });
 
+describe('pagegeometry-solo-con-fabrica', () => {
+  const regla = detectarEn('pagegeometry-solo-con-fabrica');
+  const patron = /new\s+PageGeometry\s*\(/;
+
+  test('detecta un new PageGeometry(...) directo', () => {
+    assert.match('const g = new PageGeometry(w, h, 1, rot);', patron);
+    assert.ok(regla.comoArreglar.includes('desdeTamanoVisual'));
+  });
+
+  test('no señala la fábrica', () => {
+    assert.doesNotMatch('const g = PageGeometry.desdeTamanoVisual(w, h, 1, rot);', patron);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('cobertura de las reglas', () => {
   test('cada regla aparece en docs/ERRORES-CONOCIDOS.md', () => {
     // fileURLToPath, no manipular la URL a mano: una ruta con espacios llega

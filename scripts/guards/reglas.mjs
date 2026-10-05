@@ -1044,6 +1044,44 @@ export const conTextoPerezosoViaEditSession = {
   }
 };
 
+/* ── E-053 · PageGeometry solo se construye con su fábrica ─────────────── */
+export const geometriaSoloConFabrica = {
+  id: 'pagegeometry-solo-con-fabrica',
+  titulo: 'PageGeometry se construye con PageGeometry.desdeTamanoVisual, nunca con new',
+  comoArreglar:
+    'Usa PageGeometry.desdeTamanoVisual(anchoVisualPt, altoVisualPt, escala, rotacion) con el ' +
+    'tamaño que da engine.pageSize (visual, ya girado). El constructor espera el tamaño SIN ' +
+    'girar; pasarle el visual con /Rotate 90/270 descoloca texto, inserciones y notas (E-053).',
+  ejecutar() {
+    const raizSrc = path.join(RAIZ, 'src');
+    if (!fs.existsSync(raizSrc)) return [];
+    const hallazgos = [];
+    const permitido = 'src/coords/PageGeometry.ts';
+    const recorrer = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { recorrer(full); continue; }
+        if (!e.name.endsWith('.ts')) continue;
+        const rel = path.relative(RAIZ, full).replace(/\\/g, '/');
+        if (rel === permitido) continue;
+        if (tieneDeuda(rel, this.id)) continue;
+        const contenido = leer(rel);
+        const exentas = lineasExentas(contenido, this.id);
+        contenido.split('\n').forEach((linea, i) => {
+          const n = i + 1;
+          if (exentas.has(n)) return;
+          if (/^\s*(\/\/|\/?\*)/.test(linea)) return;
+          if (/new\s+PageGeometry\s*\(/.test(linea)) {
+            hallazgos.push(hallazgo(rel, n, 'construye PageGeometry con new — usa PageGeometry.desdeTamanoVisual()'));
+          }
+        });
+      }
+    };
+    recorrer(raizSrc);
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -1071,5 +1109,6 @@ export const TODAS = [
   sinCronometrajeEnUnit,
   sinPlaywrightEnUnit,
   conDescompresionAcotada,
-  conTextoPerezosoViaEditSession
+  conTextoPerezosoViaEditSession,
+  geometriaSoloConFabrica
 ];

@@ -58,10 +58,8 @@ const DESCENDENTE = 0.2;
 
 /** Punto VISUAL (origen abajo-izq, pt) a punto de usuario (pt). */
 export function visualAUsuario(p: PaginaVisual, vx: number, vy: number): { xPt: number; yPt: number } {
-  const gira = p.rotation === 90 || p.rotation === 270;
-  const anchoUsuario = gira ? p.altoPt : p.anchoPt;
-  const altoUsuario = gira ? p.anchoPt : p.altoPt;
-  const geo = new PageGeometry(anchoUsuario, altoUsuario, 1, p.rotation);
+  // Escala 1: px CSS = pt. El tamaño visual -> de usuario lo hace la fábrica (E-053).
+  const geo = PageGeometry.desdeTamanoVisual(p.anchoPt, p.altoPt, 1, p.rotation);
   // visual (Y arriba) -> css (Y abajo, escala 1) -> usuario.
   return geo.cssToPt(vx, p.altoPt - vy);
 }

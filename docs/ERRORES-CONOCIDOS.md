@@ -2123,3 +2123,29 @@ unitarios. Es determinista e idempotente; en CI repite un paso barato.
 
 **Cómo se detecta ahora.** Borrar `tests/fixtures/generados/` y ejecutar solo
 `npm run test:unit:src` debe pasar. Sin regla guard: no hay patrón de código.
+
+### E-053 · En páginas con `/Rotate` 270 el texto, la inserción y las notas quedaban fuera de su sitio
+
+**Síntoma.** Abrir un PDF con la página girada 270 grados: las líneas editables
+(`.run`) salían fuera de la página (p. ej. `left: -291`), y un clic para insertar
+texto o una nota guardaba el objeto en otro punto del PDF (a ~250 pt del clic).
+Con 90 y 180 todo cuadraba, y por eso nadie lo vio.
+
+**Causa raíz.** `Viewer` construía `PageGeometry` con `engine.pageSize`
+(`FPDF_GetPageWidthF/HeightF`), que es el tamaño VISUAL ya girado, pero las
+fórmulas de `PageGeometry` para 90/270 trabajan sobre el tamaño SIN girar. Solo
+la de 270 usa ambas dimensiones (la de 90 no; la de 180 no intercambia), así que
+solo 270 se rompía. `encabezadoPie.ts` lo parcheó en local intercambiando ejes y
+el test unitario construía la geometría ya intercambiada: pasaba por tener la
+misma suposición que el código. (El análisis estático inicial sospechaba también
+de 90; el test e2e demostró que 90 es correcto.)
+
+**Arreglo.** Contrato único: `PageGeometry` guarda el tamaño sin girar y su
+constructor es privado; se entra por `PageGeometry.desdeTamanoVisual(anchoVisual,
+altoVisual, escala, rotación)`, que hace el intercambio. `Viewer` y
+`encabezadoPie` usan la fábrica.
+
+**Cómo se detecta ahora.** `tests/e2e/next/rotacion-geometria.spec.ts` (fixture
+`rotada.pdf`, 3 páginas con /Rotate 90/270/180: caja del run contra píxeles del
+canvas, inserción y nota contra el punto visual del clic), los tests de 270 en
+`PageGeometry.test.ts` y la regla guard `pagegeometry-solo-con-fabrica`.
