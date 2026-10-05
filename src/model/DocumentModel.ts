@@ -14,6 +14,7 @@ export class DocumentModel {
   private readonly changeListeners = new Set<ChangeCb>();
   private readonly reloadListeners = new Set<ReloadCb>();
   private readonly pageRebuiltListeners = new Set<ReloadCb>();
+  private readonly outlineListeners = new Set<ReloadCb>();
 
   constructor(pages: PageModel[]) {
     this._pages = pages;
@@ -48,6 +49,16 @@ export class DocumentModel {
   onPageRebuilt(cb: ReloadCb): () => void {
     this.pageRebuiltListeners.add(cb);
     return () => this.pageRebuiltListeners.delete(cb);
+  }
+
+  /** Suscribe a cambios del árbol de marcadores (crear/renombrar/borrar/mover… y su deshacer/rehacer). */
+  onOutlineChange(cb: ReloadCb): () => void {
+    this.outlineListeners.add(cb);
+    return () => this.outlineListeners.delete(cb);
+  }
+
+  notifyOutlineChanged(): void {
+    for (const cb of this.outlineListeners) cb();
   }
 
   private emitChange(pageIndex: number): void {

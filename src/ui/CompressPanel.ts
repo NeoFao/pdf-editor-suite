@@ -7,24 +7,24 @@
  */
 export interface OpcionesPanelCompresion { calidad: number; dpiMax: number }
 
+import { mostrarModal } from './dialogo';
+
 const DPI_OPCIONES = [72, 150, 300];
 
 export class CompressPanel {
   static open(onConfirm: (opciones: OpcionesPanelCompresion) => Promise<void>): void {
-    const overlay = document.createElement('div');
-    overlay.id = 'compress-panel';
-    Object.assign(overlay.style, {
-      position: 'fixed', inset: '0', background: 'rgba(0,0,0,.45)', display: 'flex',
-      alignItems: 'center', justifyContent: 'center', zIndex: '1000'
-    });
-
-    const panel = document.createElement('div');
+    // `<dialog>` modal (A-05): role implícito dialog, ::backdrop en lugar del overlay a mano.
+    const panel = document.createElement('dialog');
+    panel.id = 'compress-panel';
     Object.assign(panel.style, {
-      background: '#fff', padding: '16px', borderRadius: '8px', font: '14px sans-serif',
-      display: 'flex', flexDirection: 'column', gap: '10px', minWidth: '240px'
+      background: '#fff', color: '#000', padding: '16px', borderRadius: '8px', font: '14px sans-serif',
+      flexDirection: 'column', gap: '10px', minWidth: '240px', border: 'none'
     });
+    // `display:flex` solo con el diálogo abierto: ver `dialog.compress-panel[open]` en estilos.css.
+    panel.classList.add('compress-panel');
 
     const title = document.createElement('div');
+    title.id = 'compress-panel-titulo';
     title.textContent = 'Comprimir documento';
     title.style.fontWeight = 'bold';
 
@@ -63,11 +63,13 @@ export class CompressPanel {
     const btnRun = document.createElement('button');
     btnRun.id = 'btn-compress-run'; btnRun.textContent = 'Comprimir';
 
-    const close = (): void => overlay.remove();
+    let ocupado = false;
+    const close = (): void => panel.close();
     btnCancel.addEventListener('click', close);
     btnRun.addEventListener('click', () => {
       const calidad = Number(quality.value) / 100;
       const dpiMax = Number(dpi.value);
+      ocupado = true;
       btnRun.disabled = true;
       btnCancel.disabled = true;
       void onConfirm({ calidad, dpiMax }).finally(close);
@@ -75,7 +77,6 @@ export class CompressPanel {
 
     barra.append(btnCancel, btnRun);
     panel.append(title, qualityRow, dpiRow, barra);
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
+    mostrarModal(panel, { tituloId: 'compress-panel-titulo', puedeCerrar: () => !ocupado });
   }
 }

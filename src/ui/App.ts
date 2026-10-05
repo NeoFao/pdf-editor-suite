@@ -3,6 +3,8 @@ import { EditSession } from '../model/EditSession';
 import { CommandBus } from '../commands/Command';
 import { EditTextRunCmd } from '../commands/EditTextRun';
 import { ReplaceRunFontCmd } from '../commands/ReplaceRunFont';
+import { ReemplazarTextoCmd, type CambioTexto } from '../commands/ReemplazarTexto';
+import { buscarEnRuns, aplicarReemplazos, type Coincidencia, type OpcionesBusqueda } from '../texto/buscarReemplazar';
 import { DeleteRunCmd } from '../commands/DeleteRun';
 import { InsertTextCmd } from '../commands/InsertText';
 import { MoveRunCmd } from '../commands/MoveRun';
@@ -50,9 +52,14 @@ import { Viewer, type ToolMode } from './Viewer';
 import { calcularEscalaAjusteAncho } from './layout';
 import type { EditRequest } from './TextLayer';
 import type { PtPoint } from '../coords/PageGeometry';
-import type { RectPt, OutlineItem } from '../engine/PdfEngine';
+import type { RectPt } from '../engine/PdfEngine';
+import { PanelMarcadores } from './PanelMarcadores';
+import { SetOutlineCmd } from '../commands/SetOutline';
 import { STANDARD_FONTS } from '../engine/standardFontFor';
 import { stripSubsetPrefix } from '../engine/fontClassify';
+import { ComentariosPanel } from './ComentariosPanel';
+import { SetNoteTextCmd } from '../commands/SetNoteText';
+import { RemoveNoteCmd } from '../commands/RemoveNote';
 import { crearIcono, type NombreIcono } from './iconos';
 import { contarRenderPage } from '../diagnostico';
 
@@ -122,6 +129,12 @@ function cederHilo(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+/** Resultado de recorrer el documento buscando para reemplazar: runs con coincidencias propias + nº de coincidencias que cruzan runs. */
+interface EscaneoReemplazo {
+  runs: { pageIndex: number; runId: number; texto: string; coincidencias: Coincidencia[] }[];
+  cruzan: number;
+}
+
 /** Orquesta motor + sesión + comandos + visor. Punto de entrada de la app nueva. */
 export class App {
   private engine!: PdfiumEngine;
@@ -183,8 +196,13 @@ export class App {
   /** Orden en que se pintaron las miniaturas ya renderizadas — para desalojar las más antiguas si se acumulan demasiadas (`maybeEvictFarThumbs`). */
   private thumbRenderOrder: number[] = [];
   private readonly outlineEl: HTMLElement;
+  private readonly outlineBarEl: HTMLElement;
+  private panelMarcadores: PanelMarcadores | null = null;
   private readonly tabPages: HTMLButtonElement;
   private readonly tabOutline: HTMLButtonElement;
+  private readonly tabComments: HTMLButtonElement;
+  private readonly commentsEl: HTMLElement;
+  private readonly comentarios: ComentariosPanel;
   private readonly status: HTMLElement;
   /** Aviso visible (no solo `#status`/consola) con las advertencias de una conversión Word/Markdown -> PDF (§9 fila #4: "no se pierde en silencio"). Oculto (`hidden`) cuando no hay advertencias pendientes. */
   private readonly avisoConversionEl: HTMLElement;
@@ -207,6 +225,19 @@ export class App {
   private readonly searchInput: HTMLInputElement;
   /** Incrementado en cada `search()`: una búsqueda vieja que sigue en vuelo se abandona en cuanto detecta que ya no es la última (ver `search`). */
   private searchSeq = 0;
+  // ── Buscar y reemplazar (Ctrl/Cmd+H) ──
+  private replaceBar!: HTMLElement;
+  private replaceInput!: HTMLInputElement;
+  private optCase!: HTMLInputElement;
+  private optWord!: HTMLInputElement;
+  private btnReplace!: HTMLButtonElement;
+  private btnReplaceAll!: HTMLButtonElement;
+  private replaceResult!: HTMLElement;
+  private btnReplaceToggle!: HTMLButtonElement;
+  /** true mientras corre un reemplazo: evita solapar dos operaciones de documento completo. */
+  private reemplazando = false;
+  /** Posición tras la última coincidencia reemplazada (página, run, desplazamiento UTF-16): el siguiente "Reemplazar" busca A PARTIR de aquí, para no re-reemplazar lo recién escrito si contiene la consulta. */
+  private cursorReemplazo: { pageIndex: number; runId: number; pos: number } | null = null;
   private readonly rangeInput: HTMLInputElement;
   private currentPage = 0;
   /** `#file-input`: se guarda como campo para poder disparar `.click()` desde el atajo Ctrl/Cmd+O (§9, #34). */
@@ -339,8 +370,10 @@ export class App {
       swatch.setAttribute('aria-label', label);
       swatch.setAttribute('aria-pressed', 'false'); // reflectSwatches() lo corrige justo debajo
       Object.assign(swatch.style, {
-        width: '18px', height: '18px', padding: '0', borderRadius: '3px', cursor: 'pointer',
-        background: color, border: '2px solid transparent'
+        // A-07 (WCAG 2.5.8): área clicable de 24x24 px CSS; el cuadro de color que se
+        // ve sigue siendo de 18x18 (24 - 2*3 de padding, `background-clip: content-box`).
+        width: '24px', height: '24px', padding: '3px', boxSizing: 'border-box', borderRadius: '3px', cursor: 'pointer',
+        background: color, backgroundClip: 'content-box', border: '0'
       });
       swatch.addEventListener('click', () => this.setToolColor(hexToRgb(color)));
       swatchesEl.appendChild(swatch);
@@ -390,6 +423,9 @@ export class App {
     searchBox.appendChild(crearIcono('buscar'));
     searchBox.appendChild(this.searchInput);
 
+    this.searchInput.addEventListener('input', () => { this.cursorReemplazo = null; });
+    this.construirBarraReemplazo();
+
     const btnPrev = this.iconBoton('flecha-izq', 'Página anterior', 'btn-prev', () => this.goToPage(this.currentPage - 1));
     const btnNext = this.iconBoton('flecha-der', 'Página siguiente', 'btn-next', () => this.goToPage(this.currentPage + 1));
     const btnRotate = this.iconBoton('rotar', 'Rotar', 'btn-rotate', () => { if (this.bus) void this.bus.execute(new RotatePageCmd(this.currentPage, 90)); }, { mostrarEtiqueta: true });
@@ -430,6 +466,9 @@ export class App {
 
     this.status = document.createElement('span');
     this.status.id = 'status';
+    // A-01 (WCAG 4.1.3): los cambios de estado se anuncian a los lectores de pantalla.
+    this.status.setAttribute('role', 'status');
+    this.status.setAttribute('aria-live', 'polite');
 
     const btnShortcuts = document.createElement('button');
     btnShortcuts.type = 'button'; btnShortcuts.id = 'btn-shortcuts'; btnShortcuts.className = 'icon-btn';
@@ -498,7 +537,7 @@ export class App {
       grupoGuardar,
       Object.assign(document.createElement('div'), { className: 'topbar-spacer' }),
       grupoZoom, this.separador('topbar-sep'),
-      searchBox, this.separador('topbar-sep'),
+      searchBox, this.btnReplaceToggle, this.separador('topbar-sep'),
       btnShortcuts
     );
     topbar.append(this.btnDrawer, topbarScroll, this.btnMore);
@@ -571,7 +610,7 @@ export class App {
 
     const toolbarWrap = document.createElement('div');
     toolbarWrap.id = 'toolbar';
-    toolbarWrap.append(topbar, this.toolbarMoreEl);
+    toolbarWrap.append(topbar, this.replaceBar, this.toolbarMoreEl);
     rootEl.appendChild(toolbarWrap);
 
     // Aviso de advertencias de conversión (§9 fila #4: "NO se pierde en
@@ -584,6 +623,7 @@ export class App {
     this.avisoConversionEl.className = 'conversion-warnings';
     this.avisoConversionEl.hidden = true;
     this.avisoConversionEl.setAttribute('role', 'status');
+    this.avisoConversionEl.setAttribute('aria-live', 'polite'); // A-08
     const avisoCabecera = document.createElement('div');
     avisoCabecera.className = 'conversion-warnings-header';
     const avisoTitulo = document.createElement('strong');
@@ -634,9 +674,11 @@ export class App {
     tabs.setAttribute('role', 'tablist');
     this.tabPages = this.button('Páginas', 'tab-pages', () => this.showSidebarTab('pages'));
     this.tabOutline = this.button('Marcadores', 'tab-outline', () => this.showSidebarTab('outline'));
+    this.tabComments = this.button('Comentarios', 'tab-comments', () => this.showSidebarTab('comments'));
     this.tabPages.className = 'tab';
     this.tabOutline.className = 'tab';
-    tabs.append(this.tabPages, this.tabOutline);
+    this.tabComments.className = 'tab';
+    tabs.append(this.tabPages, this.tabOutline, this.tabComments);
 
     this.thumbsEl = document.createElement('div');
     this.thumbsEl.id = 'thumbs';
@@ -645,7 +687,22 @@ export class App {
     this.outlineEl.id = 'outline-panel';
     this.outlineEl.style.display = 'none';
 
-    sidebar.append(tabs, this.thumbsEl, this.outlineEl);
+    this.commentsEl = document.createElement('div');
+    this.commentsEl.id = 'comments-panel';
+    this.commentsEl.style.display = 'none';
+    this.comentarios = new ComentariosPanel(this.commentsEl, {
+      totalPaginas: () => this.session?.model.pages.length ?? 0,
+      leerPagina: (i) => (this.session ? this.session.engine.getComments(this.session.doc, i) : []),
+      irAPagina: (i) => this.goToPage(i),
+      resaltar: (p, a) => this.viewer?.resaltarNota(p, a),
+      editar: (p, a, t) => { void this.bus?.execute(new SetNoteTextCmd(p, a, t)); this.setStatus('Comentario editado.'); },
+      borrar: (p, a) => { void this.bus?.execute(new RemoveNoteCmd(p, a)); this.setStatus('Comentario borrado.'); }
+    });
+
+    this.outlineBarEl = document.createElement('div');
+    this.outlineBarEl.id = 'outline-toolbar';
+    this.outlineBarEl.style.display = 'none';
+    sidebar.append(tabs, this.outlineBarEl, this.thumbsEl, this.outlineEl, this.commentsEl);
 
     this.viewerEl = document.createElement('div');
     this.viewerEl.id = 'viewer';
@@ -1049,6 +1106,7 @@ export class App {
       if (this.currentPage >= total) this.currentPage = Math.max(0, total - 1);
       this.buildThumbnails();
       this.buildOutline();
+      this.comentarios.invalidarTodo();
       this.setActiveThumb(this.currentPage);
       this.updateIndicator();
     });
@@ -1057,7 +1115,7 @@ export class App {
     // conjunto de páginas no cambió, así que basta con refrescar la
     // miniatura de esa página (nunca las 500) — `refreshThumbnail` no hace
     // nada si esa miniatura seguía sin pintar (placeholder fuera de vista).
-    this.session.model.on('change', (pageIndex) => this.refreshThumbnail(pageIndex));
+    this.session.model.on('change', (pageIndex) => { this.refreshThumbnail(pageIndex); this.comentarios.invalidarPagina(pageIndex); });
     // Tras CUALQUIER recarga del modelo (deshacer/rehacer de un cambio de
     // fuente/tamaño/página, que recrean el documento desde una copia —
     // `EditSession.reload`—, lo reconstruyen en sitio —`refresh()`— o tocan
@@ -1076,8 +1134,21 @@ export class App {
     // `reload`).
     this.session.model.onReload(() => this.reconcileSelectionAfterReload());
     this.session.model.onPageRebuilt(() => this.reconcileSelectionAfterReload());
+    const sesion = this.session;
+    this.panelMarcadores = new PanelMarcadores({
+      contenedor: this.outlineEl,
+      barra: this.outlineBarEl,
+      obtenerArbol: () => sesion.engine.getOutline(sesion.doc),
+      paginaActual: () => this.currentPage,
+      ir: (pageIndex) => this.goToPage(pageIndex),
+      aplicar: async (antes, despues, etiqueta) => { await this.bus?.execute(new SetOutlineCmd(antes, despues, etiqueta)); },
+      estado: (m) => this.setStatus(m)
+    });
+    // Crear/renombrar/borrar/mover… y su deshacer/rehacer repintan el panel.
+    this.session.model.onOutlineChange(() => this.buildOutline());
     this.buildThumbnails();
     this.buildOutline();
+    this.comentarios.invalidarTodo();
     this.showSidebarTab('pages');
     this.updateIndicator();
     this.setStatus(`${this.session.model.pages.length} página(s)`);
@@ -1202,6 +1273,10 @@ export class App {
         e.preventDefault();
         this.searchInput.focus();
         this.searchInput.select();
+        break;
+      case 'reemplazar':
+        e.preventDefault();
+        this.abrirReemplazo();
         break;
       case 'zoom-in':
         e.preventDefault();
@@ -1675,80 +1750,21 @@ export class App {
   }
 
   /** Alterna el panel lateral entre miniaturas de página y árbol de marcadores. */
-  private showSidebarTab(which: 'pages' | 'outline'): void {
+  private showSidebarTab(which: 'pages' | 'outline' | 'comments'): void {
     this.thumbsEl.style.display = which === 'pages' ? 'block' : 'none';
     this.outlineEl.style.display = which === 'outline' ? 'block' : 'none';
+    this.outlineBarEl.style.display = which === 'outline' ? 'flex' : 'none';
+    this.commentsEl.style.display = which === 'comments' ? 'block' : 'none';
     this.tabPages.setAttribute('aria-selected', String(which === 'pages'));
     this.tabOutline.setAttribute('aria-selected', String(which === 'outline'));
+    this.tabComments.setAttribute('aria-selected', String(which === 'comments'));
+    // Lectura perezosa: el panel solo toca el motor mientras está a la vista.
+    this.comentarios.setVisible(which === 'comments');
   }
 
-  /** Árbol de marcadores del documento. Se reconstruye al abrir otro documento y tras cualquier `onReload` (borrar/mover página cambia los índices). */
+  /** Repinta el panel de marcadores (al abrir otro documento, tras cualquier `onReload` —borrar/mover página cambia los índices— y tras cada cambio del outline). */
   private buildOutline(): void {
-    this.outlineEl.textContent = '';
-    const s = this.session;
-    if (!s) return;
-    const items = s.engine.getOutline(s.doc);
-    if (items.length === 0) {
-      const p = document.createElement('p');
-      p.textContent = 'Este documento no tiene marcadores.';
-      this.outlineEl.appendChild(p);
-      return;
-    }
-    this.outlineEl.appendChild(this.buildOutlineList(items, 0));
-  }
-
-  /** Nivel de la lista de marcadores: un `<ul>` con un `<li>` por nodo, recursivo para los hijos. */
-  private buildOutlineList(items: OutlineItem[], depth: number): HTMLUListElement {
-    const ul = document.createElement('ul');
-    Object.assign(ul.style, { listStyle: 'none', margin: '0', padding: '0' });
-    for (const item of items) {
-      const li = document.createElement('li');
-      const row = document.createElement('div');
-      Object.assign(row.style, { display: 'flex', alignItems: 'center', paddingLeft: `${depth * 14}px` });
-
-      let childrenUl: HTMLUListElement | null = null;
-      if (item.children.length > 0) {
-        const toggle = document.createElement('button');
-        toggle.className = 'outline-toggle';
-        toggle.textContent = '▸';
-        toggle.setAttribute('aria-expanded', 'false');
-        toggle.title = 'Desplegar/plegar';
-        Object.assign(toggle.style, { border: 'none', background: 'none', color: 'inherit', cursor: 'pointer', width: '16px', flex: '0 0 16px', padding: '0' });
-        toggle.addEventListener('click', () => {
-          const expandido = toggle.getAttribute('aria-expanded') === 'true';
-          const siguiente = !expandido;
-          toggle.setAttribute('aria-expanded', String(siguiente));
-          toggle.textContent = siguiente ? '▾' : '▸';
-          if (childrenUl) childrenUl.style.display = siguiente ? 'block' : 'none';
-        });
-        row.appendChild(toggle);
-      } else {
-        const spacer = document.createElement('span');
-        Object.assign(spacer.style, { width: '16px', flex: '0 0 16px', display: 'inline-block' });
-        row.appendChild(spacer);
-      }
-
-      const btn = document.createElement('button');
-      btn.className = 'outline-item';
-      btn.textContent = item.title;
-      Object.assign(btn.style, { border: 'none', background: 'none', color: 'inherit', textAlign: 'left', flex: '1', padding: '2px 0', cursor: item.pageIndex !== null ? 'pointer' : 'default' });
-      if (item.pageIndex !== null) {
-        const pageIndex = item.pageIndex;
-        btn.addEventListener('click', () => this.goToPage(pageIndex));
-      } else {
-        btn.disabled = true;
-      }
-      row.appendChild(btn);
-      li.appendChild(row);
-
-      if (item.children.length > 0) {
-        childrenUl = this.buildOutlineList(item.children, depth + 1);
-        childrenUl.style.display = 'none';
-        li.appendChild(childrenUl);
-      }
-      ul.appendChild(li);
-    }
-    return ul;
+    this.panelMarcadores?.render();
   }
 
   /** Miniaturas: un canvas pequeño por página; clic desplaza el visor, arrastrar reordena (ver beginThumbDrag). */
@@ -2042,7 +2058,7 @@ export class App {
       for (let i = 0; i < pages.length; i++) {
         if (this.searchSeq !== token) return; // una búsqueda más reciente ya la reemplazó
         const page = pages[i]!;
-        const rects = this.session.engine.findText(this.session.doc, page.index, q);
+        const rects = this.session.engine.findText(this.session.doc, page.index, q, this.opcionesBusqueda());
         if (rects.length) { byPage.set(page.index, rects); total += rects.length; }
         if ((i + 1) % PAGE_YIELD_CHUNK === 0 || i === pages.length - 1) {
           if (pages.length > PAGE_YIELD_CHUNK) this.setStatus(`Buscando… ${i + 1}/${pages.length}`);
@@ -2053,6 +2069,277 @@ export class App {
     if (this.searchSeq !== token) return;
     this.viewer.setHighlights(byPage);
     this.setStatus(q ? `${total} coincidencia(s)` : '');
+  }
+
+  // ───────────────────────── Buscar y reemplazar ─────────────────────────
+
+  private construirBarraReemplazo(): void {
+    this.btnReplaceToggle = document.createElement('button');
+    this.btnReplaceToggle.type = 'button';
+    this.btnReplaceToggle.id = 'btn-replace-toggle';
+    this.btnReplaceToggle.className = 'icon-btn';
+    this.btnReplaceToggle.textContent = 'Reemplazar…';
+    this.btnReplaceToggle.title = 'Buscar y reemplazar (Ctrl/Cmd+H)';
+    this.btnReplaceToggle.setAttribute('aria-expanded', 'false');
+    this.btnReplaceToggle.setAttribute('aria-controls', 'replace-bar');
+    this.btnReplaceToggle.addEventListener('click', () => {
+      if (this.replaceBar.hidden) this.abrirReemplazo(); else this.cerrarReemplazo();
+    });
+
+    const bar = document.createElement('div');
+    bar.id = 'replace-bar';
+    bar.className = 'replace-bar';
+    bar.hidden = true;
+    bar.setAttribute('role', 'group');
+    bar.setAttribute('aria-label', 'Buscar y reemplazar');
+    this.replaceBar = bar;
+
+    this.replaceInput = document.createElement('input');
+    this.replaceInput.type = 'text';
+    this.replaceInput.id = 'replace-input';
+    this.replaceInput.placeholder = 'Reemplazar con…';
+    this.replaceInput.setAttribute('aria-label', 'Reemplazar con');
+    this.replaceInput.autocomplete = 'off';
+    this.replaceInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); void this.reemplazarActual(); }
+    });
+
+    const casilla = (id: string, etiqueta: string): [HTMLLabelElement, HTMLInputElement] => {
+      const l = document.createElement('label');
+      l.className = 'replace-opt';
+      const i = document.createElement('input');
+      i.type = 'checkbox'; i.id = id;
+      i.addEventListener('change', () => { this.cursorReemplazo = null; void this.search(); });
+      l.append(i, document.createTextNode(etiqueta));
+      return [l, i];
+    };
+    const [lblCase, optCase] = casilla('opt-case', 'Distinguir mayúsculas');
+    const [lblWord, optWord] = casilla('opt-word', 'Palabra completa');
+    this.optCase = optCase; this.optWord = optWord;
+
+    this.btnReplace = document.createElement('button');
+    this.btnReplace.type = 'button'; this.btnReplace.id = 'btn-replace'; this.btnReplace.className = 'replace-btn';
+    this.btnReplace.textContent = 'Reemplazar';
+    this.btnReplace.addEventListener('click', () => void this.reemplazarActual());
+    this.btnReplaceAll = document.createElement('button');
+    this.btnReplaceAll.type = 'button'; this.btnReplaceAll.id = 'btn-replace-all'; this.btnReplaceAll.className = 'replace-btn';
+    this.btnReplaceAll.textContent = 'Reemplazar todo';
+    this.btnReplaceAll.addEventListener('click', () => void this.reemplazarTodo());
+
+    const cerrar = document.createElement('button');
+    cerrar.type = 'button'; cerrar.id = 'btn-replace-close'; cerrar.className = 'replace-btn';
+    cerrar.textContent = '×';
+    cerrar.title = 'Cerrar buscar y reemplazar';
+    cerrar.setAttribute('aria-label', 'Cerrar buscar y reemplazar');
+    cerrar.addEventListener('click', () => this.cerrarReemplazo());
+
+    this.replaceResult = document.createElement('span');
+    this.replaceResult.id = 'replace-result';
+    this.replaceResult.className = 'replace-result';
+    this.replaceResult.setAttribute('role', 'status');
+    this.replaceResult.setAttribute('aria-live', 'polite');
+
+    bar.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); this.cerrarReemplazo(); } });
+    bar.append(this.replaceInput, lblCase, lblWord, this.btnReplace, this.btnReplaceAll, this.replaceResult, cerrar);
+  }
+
+  /** Ctrl/Cmd+H o el botón: muestra la barra y deja el foco donde falta algo (consulta vacía -> buscar; si no -> reemplazo). */
+  private abrirReemplazo(): void {
+    this.replaceBar.hidden = false;
+    this.btnReplaceToggle.setAttribute('aria-expanded', 'true');
+    if (!this.searchInput.value.trim()) { this.searchInput.focus(); this.searchInput.select(); }
+    else { this.replaceInput.focus(); this.replaceInput.select(); }
+  }
+
+  private cerrarReemplazo(): void {
+    this.replaceBar.hidden = true;
+    this.btnReplaceToggle.setAttribute('aria-expanded', 'false');
+    this.btnReplaceToggle.focus();
+  }
+
+  private opcionesBusqueda(): OpcionesBusqueda {
+    return { mayusculas: this.optCase.checked, palabraCompleta: this.optWord.checked };
+  }
+
+  private anunciarReemplazo(msg: string): void {
+    this.replaceResult.textContent = msg;
+    this.setStatus(msg);
+  }
+
+  private ocupadoReemplazo(ocupado: boolean): void {
+    this.reemplazando = ocupado;
+    this.btnReplace.disabled = ocupado;
+    this.btnReplaceAll.disabled = ocupado;
+  }
+
+  /**
+   * Recorre TODAS las páginas buscando `q` en el texto de sus runs (operación
+   * de documento completo: cede el hilo cada `PAGE_YIELD_CHUNK` páginas y
+   * muestra el avance — E-043). Devuelve los runs con coincidencias propias
+   * (reemplazables) y cuántas coincidencias cruzan runs (no reemplazables).
+   */
+  private async escanearReemplazo(q: string): Promise<EscaneoReemplazo | null> {
+    const s = this.session;
+    if (!s) return null;
+    const opts = this.opcionesBusqueda();
+    const out: EscaneoReemplazo['runs'] = [];
+    let cruzan = 0;
+    const total = s.model.pages.length;
+    for (let i = 0; i < total; i++) {
+      if (this.session !== s) return null; // se abrió otro documento mientras tanto
+      const runs = s.ensureText(i);
+      const r = buscarEnRuns(runs, q, opts);
+      cruzan += r.cruzan;
+      const porRun = new Map<number, Coincidencia[]>();
+      for (const c of r.dentro) {
+        let l = porRun.get(c.runId);
+        if (!l) { l = []; porRun.set(c.runId, l); }
+        l.push(c);
+      }
+      for (const run of runs) {
+        const l = porRun.get(run.runId);
+        if (l) out.push({ pageIndex: i, runId: run.runId, texto: run.text, coincidencias: l });
+      }
+      if ((i + 1) % PAGE_YIELD_CHUNK === 0 || i === total - 1) {
+        if (total > PAGE_YIELD_CHUNK) this.setStatus(`Buscando… ${i + 1}/${total}`);
+        await cederHilo();
+      }
+    }
+    return { runs: out, cruzan };
+  }
+
+  private textoAvisoCruces(n: number): string {
+    return n === 1
+      ? '1 coincidencia no reemplazada porque abarca varias líneas o tramos'
+      : `${n} coincidencias no reemplazadas porque abarcan varias líneas o tramos`;
+  }
+
+  /** Avisos del comando (fuente estándar / runs que ningún tipo de letra cubre) y de coincidencias entre runs. */
+  private avisosReemplazo(cmd: ReemplazarTextoCmd, cruzan: number): string {
+    const r = cmd.resumen;
+    const partes: string[] = [];
+    if (r.sustituidos > 0) partes.push(`${r.sustituidos} con fuente estándar (${r.fuentes.join(', ')}) porque la original no tenía algún carácter`);
+    if (r.fallidos > 0) partes.push(`${r.fallidos} sin cambiar porque ninguna fuente tiene esos caracteres`);
+    if (cruzan > 0) partes.push(this.textoAvisoCruces(cruzan));
+    return partes.join('; ');
+  }
+
+  /** "Reemplazar": cambia la PRÓXIMA coincidencia (desde la página actual o desde la última reemplazada) y avisa de las que no puede tocar. */
+  private async reemplazarActual(): Promise<void> {
+    const s = this.session;
+    if (!s || !this.bus || this.reemplazando) return;
+    const q = this.searchInput.value.trim();
+    if (!q) { this.anunciarReemplazo('Escribe primero qué buscar.'); this.searchInput.focus(); return; }
+    this.ocupadoReemplazo(true);
+    try {
+      const esc = await this.escanearReemplazo(q);
+      if (!esc) return;
+      const cur = this.cursorReemplazo ?? { pageIndex: this.currentPage, runId: -1, pos: 0 };
+      interface Hit { pageIndex: number; runId: number; texto: string; c: Coincidencia }
+      const hits: Hit[] = [];
+      for (const r of esc.runs) for (const c of r.coincidencias) hits.push({ pageIndex: r.pageIndex, runId: r.runId, texto: r.texto, c });
+      const despues = (h: Hit): boolean =>
+        h.pageIndex > cur.pageIndex ||
+        (h.pageIndex === cur.pageIndex && (h.runId > cur.runId || (h.runId === cur.runId && h.c.inicio >= cur.pos)));
+      const hit = hits.find(despues) ?? hits[0];
+      if (!hit) {
+        this.anunciarReemplazo(esc.cruzan > 0 ? `0 reemplazos; ${this.textoAvisoCruces(esc.cruzan)}.` : 'No hay coincidencias.');
+        return;
+      }
+      const reemplazo = this.replaceInput.value;
+      const cambio: CambioTexto = {
+        pageIndex: hit.pageIndex, runId: hit.runId, oldText: hit.texto,
+        newText: aplicarReemplazos(hit.texto, [hit.c], reemplazo)
+      };
+      const cmd = new ReemplazarTextoCmd([cambio], 'Reemplazar');
+      await this.bus.execute(cmd);
+      this.cursorReemplazo = cmd.resumen.sustituidos > 0
+        ? { pageIndex: hit.pageIndex, runId: -1, pos: 0 } // el run se recreó con otro runId
+        : { pageIndex: hit.pageIndex, runId: hit.runId, pos: hit.c.inicio + reemplazo.length };
+      this.goToPage(hit.pageIndex);
+      await this.search();
+      await this.marcarActual(q);
+      const avisos = this.avisosReemplazo(cmd, esc.cruzan);
+      this.anunciarReemplazo(cmd.resumen.fallidos > 0
+        ? `0 reemplazos; ${avisos}.`
+        : `1 reemplazo (quedan ${hits.length - 1})${avisos ? '; ' + avisos : ''}.`);
+    } finally {
+      this.ocupadoReemplazo(false);
+    }
+  }
+
+  /**
+   * Selecciona y resalta (naranja) la coincidencia ACTUAL: la siguiente a
+   * `cursorReemplazo`, la misma que cambiará el próximo "Reemplazar". Lleva
+   * la vista a su página. Su caja sale de `findText` (mismo criterio y mismas
+   * opciones que el resaltado): la k-ésima caja, de izquierda a derecha, dentro
+   * de la caja del run, siendo k el orden de la coincidencia dentro de su run.
+   */
+  private async marcarActual(q: string): Promise<void> {
+    const s = this.session;
+    if (!s || !this.viewer) return;
+    const esc = await this.escanearReemplazo(q);
+    if (!esc || this.session !== s) return;
+    const cur = this.cursorReemplazo ?? { pageIndex: this.currentPage, runId: -1, pos: 0 };
+    interface Cand { pageIndex: number; runId: number; k: number; inicio: number }
+    const cands: Cand[] = [];
+    for (const r of esc.runs) r.coincidencias.forEach((c, k) => cands.push({ pageIndex: r.pageIndex, runId: r.runId, k, inicio: c.inicio }));
+    const h = cands.find((c) => c.pageIndex > cur.pageIndex ||
+      (c.pageIndex === cur.pageIndex && (c.runId > cur.runId || (c.runId === cur.runId && c.inicio >= cur.pos)))) ?? cands[0];
+    if (!h) { this.viewer.setCurrentMatch(null); return; }
+    const run = s.ensureText(h.pageIndex).find((x) => x.runId === h.runId);
+    if (!run) return;
+    const b = run.boxPt;
+    const cajas = s.engine.findText(s.doc, h.pageIndex, q, this.opcionesBusqueda())
+      .filter((r) => {
+        const cx = r.xPt + r.wPt / 2, cy = r.yPt + r.hPt / 2;
+        return cx >= b.xPt && cx <= b.xPt + b.wPt && cy >= b.yPt && cy <= b.yPt + b.hPt;
+      })
+      .sort((p1, p2) => p1.xPt - p2.xPt);
+    this.goToPage(h.pageIndex);
+    this.selection = { pageIndex: h.pageIndex, runId: h.runId };
+    this.reflectPropsPanel();
+    this.viewer.setCurrentMatch({ pageIndex: h.pageIndex, rect: cajas[h.k] ?? b });
+  }
+
+  /** "Reemplazar todo": UN comando compuesto (un solo paso de deshacer) sobre todo el documento. */
+  private async reemplazarTodo(): Promise<void> {
+    const s = this.session;
+    if (!s || !this.bus || this.reemplazando) return;
+    const q = this.searchInput.value.trim();
+    if (!q) { this.anunciarReemplazo('Escribe primero qué buscar.'); this.searchInput.focus(); return; }
+    this.ocupadoReemplazo(true);
+    try {
+      const esc = await this.escanearReemplazo(q);
+      if (!esc) return;
+      const reemplazo = this.replaceInput.value;
+      const cambios: CambioTexto[] = [];
+      const coincidenciasPorRun = new Map<string, number>();
+      let n = 0;
+      for (const r of esc.runs) {
+        n += r.coincidencias.length;
+        coincidenciasPorRun.set(`${r.pageIndex}:${r.runId}`, r.coincidencias.length);
+        cambios.push({ pageIndex: r.pageIndex, runId: r.runId, oldText: r.texto, newText: aplicarReemplazos(r.texto, r.coincidencias, reemplazo) });
+      }
+      if (cambios.length === 0) {
+        this.anunciarReemplazo(esc.cruzan > 0 ? `0 reemplazos; ${this.textoAvisoCruces(esc.cruzan)}.` : 'No hay coincidencias.');
+        return;
+      }
+      const cmd = new ReemplazarTextoCmd(cambios, 'Reemplazar todo', {
+        onProgress: (hechas, t) => { if (t > PAGE_YIELD_CHUNK) this.setStatus(`Reemplazando… ${hechas}/${t}`); },
+        ceder: cederHilo,
+        paginasPorTanda: PAGE_YIELD_CHUNK
+      });
+      await this.bus.execute(cmd);
+      this.cursorReemplazo = null;
+      // Los runs que no se pudieron escribir quedaron intactos: no cuentan como reemplazos.
+      for (const f of cmd.fallidosCambios) n -= coincidenciasPorRun.get(`${f.pageIndex}:${f.runId}`) ?? 0;
+      await this.search();
+      const avisos = this.avisosReemplazo(cmd, esc.cruzan);
+      this.anunciarReemplazo(`${n} reemplazo${n === 1 ? '' : 's'}${avisos ? '; ' + avisos : ''}.`);
+    } finally {
+      this.ocupadoReemplazo(false);
+    }
   }
 
   private zoom(factor: number): void {

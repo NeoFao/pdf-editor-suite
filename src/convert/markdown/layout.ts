@@ -1,4 +1,5 @@
 import type { Block, Inline, ListBlock } from './ast';
+import { validarUrlEnlace } from '../../engine/validarUrlEnlace';
 import {
   wrapAtoms, lineToFlowLine, paginar as paginarFlujo,
   type Atom, type RGB, type Medir, type FlowItem, type FlowLine, type BarSeg, type BgSeg, type ResultadoLayout, type PageGeometry
@@ -28,9 +29,10 @@ import {
  * Estilo (fijado por el dueño, no configurable en esta fase): cuerpo
  * Helvetica 11pt/interlineado 1.4; H1 22, H2 17, H3 14, H4-H6 12, todos
  * Helvetica-Bold; código Courier 10 con fondo gris; cita con sangría y barra
- * gris; listas con viñeta/número y sangría francesa; enlaces en azul (el
- * texto — la URL como anotación clicable queda para una fase posterior, ver
- * nota en `ConversorMarkdownNavegador`).
+ * gris; listas con viñeta/número y sangría francesa; enlaces en azul con su
+ * URL como anotación `/Link` clicable (fase 2a: el nodo `link` del AST lleva
+ * su `url` hasta el átomo y `paginar` la deja en `ResultadoLayout.enlaces`,
+ * que `ConversorMarkdownNavegador` traduce a `addLink`).
  *
  * Limitaciones conocidas de esta fase:
  * - La línea base se aproxima con `BASELINE_FRACTION` (fracción fija de la
@@ -54,7 +56,7 @@ import {
  *   (encabezados casi nunca envuelven) y no cubierto por los tests.
  */
 
-export type { RGB, Medir, Trazo, Barra, ResultadoLayout } from '../flujo/layout';
+export type { RGB, Medir, Trazo, Barra, ResultadoLayout, EnlaceColocado } from '../flujo/layout';
 
 // --- Geometría de página y estilo (constantes del dueño, no configurables) ---
 
@@ -122,7 +124,15 @@ function flattenInline(nodes: Inline[], sizePt: number, color: RGB, bold: boolea
       for (const w of node.text.split(/\s+/)) if (w !== '') atoms.push({ text: w, font: 'Courier', sizePt, color });
     } else if (node.type === 'link') {
       const font = lockFont ?? bodyFontFor(bold, italic);
-      for (const w of node.text.split(/\s+/)) if (w !== '') atoms.push({ text: w, font, sizePt, color: LINK_BLUE });
+      // Fase 2a: la URL viaja en el átomo y `paginar` (flujo/layout.ts) la
+      // convierte en una anotación /Link real (validada con
+      // validarUrlEnlace.ts en el conversor, que también filtra el esquema
+      // ANTES de llamar a addLink — ver ConversorMarkdownNavegador).
+      // Enlace válido: azul + subrayado + url (misma presentación que DOCX). Rechazado
+      // (esquema no permitido o URL no absoluta): texto plano — no se pinta como enlace
+      // algo que no lo es; el conversor avisa con `urlsRechazadas`.
+      const url = validarUrlEnlace(node.url);
+      for (const w of node.text.split(/\s+/)) if (w !== '') atoms.push(url ? { text: w, font, sizePt, color: LINK_BLUE, url, underline: true } : { text: w, font, sizePt, color });
     }
   }
   return atoms;
@@ -205,7 +215,8 @@ function renderBlock(block: Block, indentPt: number, medir: Medir, color: RGB): 
     case 'blockquote': {
       const inner = renderBlocksFlat(block.children, indentPt + QUOTE_INDENT_PT, medir, false, QUOTE_GRAY_TEXT);
       const bar: BarSeg = { xPt: MARGIN_PT + indentPt, wPt: QUOTE_BAR_WIDTH_PT, color: QUOTE_BAR_GRAY };
-      return inner.map((it) => (it.kind === 'pagebreak' ? it : { ...it, bars: [...it.bars, bar] }));
+      // Markdown nunca produce imagen/tabla: solo line/gap/rule (con `bars`) o pagebreak.
+      return inner.map((it) => (it.kind === 'line' || it.kind === 'gap' || it.kind === 'rule' ? { ...it, bars: [...it.bars, bar] } : it));
     }
     case 'code':
       return renderCode(block, indentPt);
@@ -233,7 +244,10 @@ function renderBlocksFlat(blocks: Block[], indentPt: number, medir: Medir, widow
         const nextGap = spacingBefore(block.type, next.type);
         const nextItems = renderBlock(next, indentPt, medir, color);
         const nextFirst = nextItems[0];
-        const extra = nextGap + (nextFirst && nextFirst.kind !== 'pagebreak' ? nextFirst.height : 0);
+        // Markdown nunca produce imagen/tabla, así que solo line/gap/rule tienen `height` aquí en la práctica;
+        // la comprobación explícita evita depender de que TS lo infiera desde `FlowItem` entero.
+        const tieneAltura = nextFirst && (nextFirst.kind === 'line' || nextFirst.kind === 'gap' || nextFirst.kind === 'rule' || nextFirst.kind === 'image' || nextFirst.kind === 'tableRow');
+        const extra = nextGap + (tieneAltura ? nextFirst.height : 0);
         const last = blockItems[blockItems.length - 1]!;
         if (last.kind === 'line') last.keepWithNextHeight = (last.keepWithNextHeight ?? 0) + extra;
       }
@@ -243,8 +257,29 @@ function renderBlocksFlat(blocks: Block[], indentPt: number, medir: Medir, widow
   return items;
 }
 
+/** URLs de enlaces del documento que NO se pueden convertir en enlace clicable (esquema no permitido o no absoluta), en orden de aparición. */
+export function urlsRechazadas(blocks: Block[]): string[] {
+  const out: string[] = [];
+  const inlines = (nodes: Inline[]): void => {
+    for (const n of nodes) {
+      if (n.type === 'link') { if (!validarUrlEnlace(n.url)) out.push(n.url); }
+      else if (n.type === 'strong' || n.type === 'em') inlines(n.children);
+    }
+  };
+  const lista = (l: ListBlock): void => { for (const it of l.items) { inlines(it.children); if (it.sublist) lista(it.sublist); } };
+  const bloques = (bs: Block[]): void => {
+    for (const b of bs) {
+      if (b.type === 'heading' || b.type === 'paragraph') inlines(b.children);
+      else if (b.type === 'list') lista(b);
+      else if (b.type === 'blockquote') bloques(b.children);
+    }
+  };
+  bloques(blocks);
+  return out;
+}
+
 export function layoutMarkdown(blocks: Block[], medir: Medir): ResultadoLayout {
-  if (blocks.length === 0) return { totalPaginas: 1, trazos: [], barras: [] };
+  if (blocks.length === 0) return { totalPaginas: 1, trazos: [], barras: [], imagenes: [], enlaces: [], advertencias: [] };
   const items = renderBlocksFlat(blocks, 0, medir, true, BLACK);
   return paginarFlujo(items, PAGE_GEOMETRY, BASELINE_FRACTION);
 }

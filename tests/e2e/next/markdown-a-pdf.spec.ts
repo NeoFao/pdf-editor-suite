@@ -52,6 +52,26 @@ test('Markdown -> PDF -> Exportar Markdown: el .md de vuelta trae "# " y el tít
   expect(md).toContain('Título');
 });
 
+test('el enlace de ejemplo.md genera una anotación /Link real en el PDF guardado (fase 2a)', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(EJEMPLO_MD);
+  await expect(page.locator('.run').first()).toBeVisible();
+
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.locator('#btn-save').click()
+  ]);
+  const destino = path.join(test.info().outputDir, 'ejemplo-con-enlace.pdf');
+  await download.saveAs(destino);
+
+  // Se comprueba con el motor en Node sobre el PDF ya guardado (no en el
+  // navegador): PdfEngine no expone (todavía) un getter de enlaces, así que
+  // se inspeccionan los bytes crudos, igual que PdfiumEngine.addlink.test.ts.
+  const crudo = fs.readFileSync(destino).toString('latin1');
+  expect(crudo).toContain('/Link');
+  expect(crudo).toContain('https://ejemplo.com/pagina');
+});
+
 test('guardar el PDF convertido produce un archivo con texto extraíble en el motor', async ({ page }) => {
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(EJEMPLO_MD);

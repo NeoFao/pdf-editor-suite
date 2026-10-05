@@ -45,6 +45,21 @@ export type SetSizeResult =
 /** Nota adhesiva (anotación PDF real de subtipo Text). `index` es su índice entre TODAS las anotaciones de la página. */
 export interface NoteInfo { index: number; text: string; rectPt: RectPt }
 
+/**
+ * Tipo de una anotación con comentario, tal como la lista el panel "Comentarios".
+ * Alcance: solo anotaciones REALES del PDF. Los resaltados/subrayados/tachados
+ * que crea este editor son paths de contenido (no anotaciones) y por tanto no
+ * aparecen; sí aparecen los de ese tipo que traiga un PDF ajeno con `/Contents`.
+ */
+export type CommentKind = 'note' | 'highlight' | 'underline' | 'strikeout' | 'freetext' | 'other';
+
+/**
+ * Anotación con comentario de una página. `index` es su índice entre TODAS las
+ * anotaciones de la página (igual convención que `NoteInfo.index`); `author` es
+ * `/T` ('' si no existe); `rectPt` en puntos PDF (origen abajo-izquierda).
+ */
+export interface CommentInfo { index: number; kind: CommentKind; text: string; author: string; rectPt: RectPt }
+
 /** Tipo de campo AcroForm (FPDF_FORMFIELD_*). Fase 1 solo edita 'text' y 'checkbox'. */
 export type FormFieldKind = 'text' | 'checkbox' | 'radio' | 'combo' | 'list' | 'button' | 'signature' | 'unknown';
 
@@ -132,6 +147,23 @@ export interface OutlineItem {
   title: string;
   pageIndex: number | null;
   children: OutlineItem[];
+  /**
+   * Acción del marcador cuando NO es un destino de página. Ausente = destino de
+   * página (`pageIndex`) o marcador sin destino. `uri`: enlace http/https/mailto
+   * que el motor sabe recrear. `no-soportada`: Launch, GoToR, JavaScript, URI con
+   * esquema no permitido, destino sin página… — NUNCA se ejecuta y el motor se
+   * niega a reescribir un outline que la contenga (no puede conservarla fielmente).
+   */
+  accion?: AccionMarcador;
+}
+
+export type AccionMarcador =
+  | { tipo: 'uri'; uri: string }
+  | { tipo: 'no-soportada'; descripcion: string };
+
+/** true si algún marcador del árbol lleva una acción que no se puede conservar al reescribir. */
+export function outlineTieneAccionesNoSoportadas(items: OutlineItem[]): boolean {
+  return items.some((i) => i.accion?.tipo === 'no-soportada' || outlineTieneAccionesNoSoportadas(i.children));
 }
 
 /** Puntero opaco al documento dentro del motor. */
@@ -149,7 +181,9 @@ export type PageOp =
   | { type: 'fillRect'; rect: RectPt; color: [number, number, number] }
   | { type: 'highlightRect'; rect: RectPt; color: [number, number, number] }
   | { type: 'drawStroke'; points: { xPt: number; yPt: number }[]; color: [number, number, number]; widthPt: number }
-  | { type: 'drawRect'; rect: RectPt; color: [number, number, number]; widthPt: number };
+  | { type: 'drawRect'; rect: RectPt; color: [number, number, number]; widthPt: number }
+  | { type: 'insertImage'; spec: InsertImageSpec }
+  | { type: 'addLink'; rect: RectPt; url: string };
 
 /** Resultado de un `PageOp`, en el mismo orden que se pasó a `applyPageOps`. */
 export type PageOpResult =
@@ -157,7 +191,9 @@ export type PageOpResult =
   | { type: 'fillRect'; ok: boolean }
   | { type: 'highlightRect'; ok: boolean }
   | { type: 'drawStroke'; ok: boolean }
-  | { type: 'drawRect'; ok: boolean };
+  | { type: 'drawRect'; ok: boolean }
+  | { type: 'insertImage'; ok: boolean }
+  | { type: 'addLink'; ok: boolean };
 
 export interface PdfEngine {
   open(bytes: Uint8Array): Promise<DocHandle>;
@@ -168,7 +204,7 @@ export interface PdfEngine {
   /** Renderiza la página a un bitmap RGBA a la escala dada. */
   renderPage(doc: DocHandle, pageIndex: number, scale: number): RenderResult;
   /** Busca `query` en la página (insensible a mayúsculas) y devuelve la caja de cada coincidencia. */
-  findText(doc: DocHandle, pageIndex: number, query: string): RectPt[];
+  findText(doc: DocHandle, pageIndex: number, query: string, opciones?: { mayusculas?: boolean; palabraCompleta?: boolean }): RectPt[];
   /** Runs de texto de la página, con su caja, fuente, tamaño y color. Vacío si no hay texto (escaneado). */
   getPageText(doc: DocHandle, pageIndex: number): TextRun[];
   /**
@@ -179,6 +215,13 @@ export interface PdfEngine {
    * implementación del motor.
    */
   getOutline(doc: DocHandle): OutlineItem[];
+  /**
+   * Reescribe el árbol de marcadores completo (reemplaza el anterior). Lanza
+   * `RangeError` —sin tocar el documento— si el árbol supera las cotas de
+   * E-031 (`OUTLINE_MAX_DEPTH`, `OUTLINE_MAX_NODES`). `pageIndex` nulo o fuera
+   * de rango se escribe sin destino.
+   */
+  setOutline(doc: DocHandle, items: OutlineItem[]): void;
   /**
    * Edita el texto de un run EN SITIO: conserva fuente, tamaño, color y posición.
    * No crea objetos nuevos ni rasteriza. Devuelve `glyph-missing` (sin modificar)
@@ -296,6 +339,16 @@ export interface PdfEngine {
   /** Añade un resaltado (rectángulo de color, blend Multiply) sobre la caja dada. */
   highlightRect(doc: DocHandle, pageIndex: number, rect: RectPt, color: [number, number, number]): boolean;
   /**
+   * Crea una anotación `/Link` real (acción `/URI`) sobre `rectPt` (puntos
+   * PDF). Solo `http:`, `https:` y `mailto:` se aceptan
+   * (`validarUrlEnlace.ts`, PR fase 2a de Word/Markdown → PDF): cualquier
+   * otro esquema (`javascript:`, `file:`, `data:`...) no crea nada y
+   * devuelve `false` — un PDF es entrada no confiable y un enlace es
+   * contenido que el propio documento controla (mismo principio que
+   * E-003/E-027). Persiste tras `save()`+reabrir.
+   */
+  addLink(doc: DocHandle, pageIndex: number, rectPt: RectPt, url: string): boolean;
+  /**
    * Crea una nota adhesiva (anotación real /Subtype /Text) de 20×20 pt cuya esquina
    * superior-izquierda es (xPt, yPt) — el punto del clic — y `Contents` = text.
    * Devuelve el índice de la anotación entre todas las de la página.
@@ -303,6 +356,18 @@ export interface PdfEngine {
   addNote(doc: DocHandle, pageIndex: number, spec: { xPt: number; yPt: number; text: string }): number;
   /** Anotaciones de subtipo Text de la página. */
   getNotes(doc: DocHandle, pageIndex: number): NoteInfo[];
+  /**
+   * Anotaciones con comentario de la página: todas las de subtipo Text (aunque
+   * su texto esté vacío) y cualquier otra de marcado (resaltado, subrayado,
+   * tachado, texto libre, sello...) con `/Contents` no vacío. Excluye enlaces,
+   * popups y widgets de formulario.
+   */
+  getComments(doc: DocHandle, pageIndex: number): CommentInfo[];
+  /**
+   * Reescribe `/Contents` de la anotación en `index` (entre todas las de la
+   * página). `false` si el índice no existe o es un enlace/popup/widget.
+   */
+  setNoteText(doc: DocHandle, pageIndex: number, index: number, text: string): boolean;
   /** Elimina la anotación en `index` (entre todas las de la página). */
   removeNote(doc: DocHandle, pageIndex: number, index: number): boolean;
   /** Campos de formulario AcroForm de la página (todos los tipos son editables desde fase 2, salvo botón/firma). */

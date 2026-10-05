@@ -1,35 +1,13 @@
-import { test, expect, beforeAll, afterAll } from 'vitest';
+import { test, expect } from 'vitest';
 import { PDFDocument } from 'pdf-lib';
-import { chromium, type Browser } from '@playwright/test';
 import { PdfiumEngine } from '../../src/engine/pdfium/PdfiumEngine';
 import { EditSession } from '../../src/model/EditSession';
 import { CommandBus } from '../../src/commands/Command';
 import { ComprimirDocumentoCmd } from '../../src/commands/ComprimirDocumento';
 import type { AdaptadorImagen } from '../../src/ui/adaptadorImagenNavegador';
+import { JPEG_4X4_GRIS as JPEG_PEQUENO } from './_jpegsFijos';
 
-// Igual razón que en PdfiumEngine.imagepixels.test.ts: replaceImageJpeg exige
-// un JPEG YA CODIFICADO de verdad (PDFium lo decodifica de verdad al
-// incrustarlo), así que el JPEG "falso" de las pruebas de este fichero se
-// genera una vez con un <canvas> real en Chromium, no a mano.
-let browser: Browser;
-let JPEG_PEQUENO: Uint8Array;
-
-beforeAll(async () => {
-  browser = await chromium.launch();
-  const page = await browser.newPage();
-  const dataUrl = await page.evaluate(() => {
-    const c = document.createElement('canvas');
-    c.width = 4; c.height = 4;
-    const ctx = c.getContext('2d')!;
-    ctx.fillStyle = 'rgb(10,10,10)';
-    ctx.fillRect(0, 0, 4, 4);
-    return c.toDataURL('image/jpeg', 0.5);
-  });
-  await page.close();
-  JPEG_PEQUENO = new Uint8Array(Buffer.from(dataUrl.slice(dataUrl.indexOf(',') + 1), 'base64'));
-}, 30000);
-
-afterAll(async () => { await browser.close(); });
+// El JPEG "recodificado" son bytes fijos (./_jpegsFijos.ts): sin navegador en Vitest.
 
 /** Reescala con vecino más cercano (determinista, sin canvas) y "codifica" siempre al mismo JPEG pequeño ya generado. */
 function fakeAdaptador(jpegForzado?: Uint8Array): AdaptadorImagen {

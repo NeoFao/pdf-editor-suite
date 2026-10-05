@@ -22,9 +22,10 @@
   --ed-surface-2: #ffffff;
   --ed-border: #d3d7dc;
   --ed-border-strong: #b7bcc4;
+  --ed-control-border: #7b8290;
   --ed-text: #20242c;
-  --ed-text-muted: #5b6472;
-  --ed-text-faint: #8a92a0;
+  --ed-text-muted: #4a5260;
+  --ed-text-faint: #596170;
   --ed-accent: #6366f1;
   --ed-accent-strong: #4338ca;
   --ed-accent-soft: #e6e6fd;
@@ -51,7 +52,7 @@
   --ed-tablist-h: 36px;
   --ed-contextbar-h: 44px;
   --ed-statusbar-h: 28px;
-  --ed-sidebar-w: 168px;
+  --ed-sidebar-w: 208px; /* ancho de 3 pestañas (Páginas, Marcadores, Comentarios) sin recorte */
 
   color-scheme: light;
 }
@@ -63,9 +64,11 @@
     --ed-surface-2: #24272e;
     --ed-border: #34383f;
     --ed-border-strong: #454a53;
+    --ed-control-border: #6f7684;
+    --ed-focus-ring: #60a5fa;
     --ed-text: #e7e9ee;
     --ed-text-muted: #a7adb8;
-    --ed-text-faint: #767c88;
+    --ed-text-faint: #8d93a0;
     --ed-accent: #818cf8;
     --ed-accent-strong: #a5b4fc;
     --ed-accent-soft: #302f5e;
@@ -82,9 +85,11 @@
   --ed-surface-2: #24272e;
   --ed-border: #34383f;
   --ed-border-strong: #454a53;
+  --ed-control-border: #6f7684;
+  --ed-focus-ring: #60a5fa;
   --ed-text: #e7e9ee;
   --ed-text-muted: #a7adb8;
-  --ed-text-faint: #767c88;
+  --ed-text-faint: #8d93a0;
   --ed-accent: #818cf8;
   --ed-accent-strong: #a5b4fc;
   --ed-accent-soft: #302f5e;
@@ -187,7 +192,7 @@ button { font-family: inherit; }
   align-items: center;
   gap: 4px;
   background: var(--ed-surface-2);
-  border: 1px solid var(--ed-border);
+  border: 1px solid var(--ed-control-border);
   border-radius: var(--ed-radius-md);
   padding: 0 var(--ed-sp-2);
   height: 30px;
@@ -299,7 +304,7 @@ button:focus-visible {
 #props-panel label { display: flex; align-items: center; gap: 4px; font-size: var(--ed-font-xs); color: var(--ed-text-muted); }
 #props-panel select, #props-panel input[type="number"] {
   font-size: var(--ed-font-sm);
-  border: 1px solid var(--ed-border);
+  border: 1px solid var(--ed-control-border);
   border-radius: var(--ed-radius-sm);
   background: var(--ed-surface-2);
   color: var(--ed-text);
@@ -319,7 +324,10 @@ select, input[type="text"], input[type="search"], input[type="number"] {
 
 #sidebar {
   width: var(--ed-sidebar-w);
-  flex: 0 0 var(--ed-sidebar-w);
+  /* El panel crece hasta el ancho mínimo de contenido (las 3 pestañas sin partir):
+     el ancho en px es solo el valor base, no un límite (E-051). */
+  min-width: min-content;
+  flex: 0 0 auto;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -328,7 +336,7 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   box-sizing: border-box;
 }
 .sidebar-tabs { display: flex; flex: 0 0 auto; border-bottom: 1px solid var(--ed-border); }
-.sidebar-tabs .tab { flex: 1; padding: var(--ed-sp-2) 4px; border-bottom: 2px solid transparent; color: var(--ed-text-muted); }
+.sidebar-tabs .tab { flex: 1 1 auto; min-width: 0; white-space: nowrap; padding: var(--ed-sp-2) 2px; border-bottom: 2px solid transparent; color: var(--ed-text-muted); }
 .sidebar-tabs .tab[aria-selected="true"] { color: var(--ed-accent-strong); border-bottom-color: var(--ed-accent); background: var(--ed-hover); }
 
 #thumbs, #outline-panel { flex: 1; overflow: auto; padding: var(--ed-sp-2); box-sizing: border-box; }
@@ -588,11 +596,11 @@ select, input[type="text"], input[type="search"], input[type="number"] {
    * Excepción deliberada: la paleta de 8 muestras de color (§2/#18 de la
    * tabla de paridad) es un grupo denso y contiguo de swatches, no botones
    * de acción independientes — a 40px cada una desborda un viewport de
-   * 390px. Se mantiene su tamaño de diseño (18px) en vez del mínimo
-   * general; `#tool-color` (el selector personalizado, justo al lado)
-   * sigue en 40px.
+   * 390px. A-07: área clicable de 24px (mínimo WCAG 2.5.8) con el cuadro
+   * visible de 18px (padding + background-clip); `#tool-color` (el
+   * selector personalizado, justo al lado) sigue en 40px.
    */
-  #swatches button.swatch { min-width: 18px; min-height: 18px; }
+  #swatches button.swatch { min-width: 24px; min-height: 24px; }
 
   /*
    * Hermanos normales de `.topbar-scroll` (ver `topbarScroll` en App.ts), no
@@ -629,3 +637,60 @@ select, input[type="text"], input[type="search"], input[type="number"] {
     z-index: 40;
   }
 }
+
+/* A-05: el panel de compresión es un <dialog>; solo es flex mientras está abierto. */
+dialog.compress-panel[open] { display: flex; }
+
+/* ── Buscar y reemplazar (Ctrl/Cmd+H) ───────────────────────────────────── */
+.replace-bar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--ed-sp-2);
+  padding: var(--ed-sp-1) var(--ed-sp-3);
+  background: var(--ed-surface);
+  border-bottom: 1px solid var(--ed-border);
+  font-size: var(--ed-font-sm);
+  color: var(--ed-text);
+}
+.replace-bar[hidden] { display: none; }
+.replace-bar input[type="text"] {
+  height: 28px; box-sizing: border-box; min-width: 140px;
+  border: 1px solid var(--ed-control-border); border-radius: var(--ed-radius-sm);
+  background: var(--ed-surface-2); color: var(--ed-text); padding: 0 var(--ed-sp-2);
+  font-size: var(--ed-font-sm);
+}
+.replace-opt { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; }
+.replace-btn {
+  height: 28px; padding: 0 var(--ed-sp-3); cursor: pointer;
+  border: 1px solid var(--ed-control-border); border-radius: var(--ed-radius-sm);
+  background: var(--ed-surface-2); color: var(--ed-text); font-size: var(--ed-font-sm);
+}
+.replace-btn:hover:not(:disabled) { background: var(--ed-hover); }
+.replace-btn:disabled { opacity: .55; cursor: default; }
+.replace-result { color: var(--ed-text-muted); flex: 1 1 auto; min-width: 0; }
+
+/* Panel "Comentarios" (pestaña del panel lateral). */
+#comments-panel { flex: 1; overflow: auto; padding: var(--ed-sp-2); box-sizing: border-box; color: var(--ed-text); font-size: var(--ed-font-sm); }
+.comentarios-filtro { width: 100%; box-sizing: border-box; margin-bottom: var(--ed-sp-2); }
+.comentarios-estado { margin: 0 0 var(--ed-sp-2); color: var(--ed-text-muted); }
+.comentarios-lista { list-style: none; margin: 0; padding: 0; }
+.comentarios-pagina { margin-top: var(--ed-sp-2); font-weight: 600; color: var(--ed-text-muted); }
+.comentario { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0; border-bottom: 1px solid var(--ed-border); }
+.comentario-item { flex: 1 1 100%; display: flex; flex-direction: column; text-align: left; border: none; background: none; color: inherit; cursor: pointer; padding: 2px; }
+.comentario-item:hover { background: var(--ed-hover); }
+.comentario-item:focus-visible, .comentario-accion:focus-visible { outline: 2px solid var(--ed-focus-ring); outline-offset: 2px; }
+.comentario-meta { font-size: 11px; color: var(--ed-text-muted); }
+.comentario-texto { overflow-wrap: anywhere; }
+.comentario-editor { flex: 1 1 100%; min-height: 4em; box-sizing: border-box; }
+.note-marker.activa { outline: 2px solid var(--ed-accent); background: rgba(250, 204, 21, .35) !important; }
+
+/* Panel de marcadores editable: barra de acciones, selección y campo de título inline. */
+#outline-toolbar { flex: 0 0 auto; flex-wrap: wrap; gap: 2px; padding: var(--ed-sp-1, 4px); border-bottom: 1px solid var(--ed-border); }
+#outline-toolbar .outline-action { font-size: var(--ed-font-sm); padding: 2px 6px; border-radius: var(--ed-radius-sm); color: var(--ed-text); }
+#outline-toolbar .outline-action:disabled { opacity: 0.4; cursor: default; }
+#outline-panel [role="treeitem"] { outline: none; }
+#outline-panel [role="treeitem"].seleccionado > div { background: var(--ed-hover); }
+#outline-panel [role="treeitem"]:focus-visible > div { outline: 2px solid var(--ed-focus-ring); outline-offset: -2px; }
+#outline-panel input.outline-edit { font: inherit; color: var(--ed-text); background: var(--ed-surface, transparent); border: 1px solid var(--ed-accent); border-radius: var(--ed-radius-sm); padding: 1px 4px; }

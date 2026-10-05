@@ -63,6 +63,8 @@ export class Viewer {
   private rendered = new Set<number>();
   private scale = 1;
   private highlights = new Map<number, RectPt[]>();
+  /** Coincidencia ACTUAL de buscar y reemplazar (la que reemplazará el próximo "Reemplazar"), en puntos PDF; se pinta más fuerte que el resto. */
+  private currentMatch: { pageIndex: number; rect: RectPt } | null = null;
   private observer: IntersectionObserver | null = null;
   private currentPage = 0;
   /**
@@ -385,15 +387,25 @@ export class Viewer {
   /** Fija las coincidencias de búsqueda a resaltar por página y las repinta. */
   setHighlights(byPage: Map<number, RectPt[]>): void {
     this.highlights = byPage;
+    this.currentMatch = null;
     for (let i = 0; i < this.wrappers.length; i++) this.drawHighlights(i);
+  }
+
+  /** Marca (o, con null, desmarca) la coincidencia actual: caja naranja encima del resto de resaltados. */
+  setCurrentMatch(m: { pageIndex: number; rect: RectPt } | null): void {
+    const previa = this.currentMatch?.pageIndex;
+    this.currentMatch = m;
+    if (previa !== undefined && previa !== m?.pageIndex) this.drawHighlights(previa);
+    if (m) this.drawHighlights(m.pageIndex);
   }
 
   private drawHighlights(i: number): void {
     const wrapper = this.wrappers[i];
     if (!wrapper) return;
     wrapper.querySelector('.hl-layer')?.remove();
-    const rects = this.highlights.get(i);
-    if (!rects || rects.length === 0) return;
+    const rects = this.highlights.get(i) ?? [];
+    const actual = this.currentMatch && this.currentMatch.pageIndex === i ? this.currentMatch.rect : null;
+    if (rects.length === 0 && !actual) return;
     const geom = this.geoms[i]!;
     const layer = document.createElement('div');
     layer.className = 'hl-layer';
@@ -409,7 +421,29 @@ export class Viewer {
       });
       layer.appendChild(box);
     }
+    if (actual) {
+      const c = geom.rectPtToCss(actual);
+      const box = document.createElement('div');
+      box.className = 'search-hl search-hl-current';
+      Object.assign(box.style, {
+        position: 'absolute', left: `${c.left}px`, top: `${c.top}px`,
+        width: `${c.width}px`, height: `${c.height}px`,
+        background: 'rgba(249, 115, 22, .5)', outline: '2px solid #c2410c'
+      });
+      layer.appendChild(box);
+    }
     wrapper.appendChild(layer);
+  }
+
+  /** Nota marcada desde el panel Comentarios (página + índice de anotación); sobrevive a repintados. */
+  private notaResaltada: { pageIndex: number; annotIndex: number } | null = null;
+
+  /** Resalta en el visor la nota `annotIndex` de la página (clase `activa`); quita la marca de la anterior. */
+  resaltarNota(pageIndex: number, annotIndex: number): void {
+    const anterior = this.notaResaltada;
+    this.notaResaltada = { pageIndex, annotIndex };
+    if (anterior && anterior.pageIndex !== pageIndex) this.drawNotes(anterior.pageIndex);
+    this.drawNotes(pageIndex);
   }
 
   /** Marcadores de notas adhesivas (anotaciones reales); se leen del motor, no del modelo. */
@@ -427,6 +461,8 @@ export class Viewer {
       const c = geom.rectPtToCss(note.rectPt);
       const marker = document.createElement('div');
       marker.className = 'note-marker';
+      const r = this.notaResaltada;
+      if (r && r.pageIndex === i && r.annotIndex === note.index) marker.classList.add('activa');
       marker.title = note.text;
       marker.setAttribute('aria-label', note.text);
       // El motor ya pinta el icono de la nota al renderizar la página (el bitmap
@@ -744,12 +780,17 @@ export class Viewer {
     const canvas = document.createElement('canvas');
     canvas.width = width; canvas.height = height;
     canvas.style.display = 'block';
+    // A-06 (WCAG 1.1.1): el bitmap del motor es una imagen con nombre de página.
+    canvas.setAttribute('role', 'img');
+    canvas.setAttribute('aria-label', `Página ${i + 1}`);
     const img = new ImageData(width, height);
     img.data.set(data);
     canvas.getContext('2d')!.putImageData(img, 0, 0);
     wrapper.appendChild(canvas);
     const layer = document.createElement('div');
     layer.className = 'text-layer';
+    layer.setAttribute('role', 'group');
+    layer.setAttribute('aria-label', `Texto de la página ${i + 1}`);
     Object.assign(layer.style, { position: 'absolute', inset: '0' });
     wrapper.appendChild(layer);
     const geom = this.geoms[i]!;

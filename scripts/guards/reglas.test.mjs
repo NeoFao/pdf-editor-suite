@@ -605,6 +605,36 @@ describe('sin-cronometraje-en-unit', () => {
   });
 });
 
+describe('sin-playwright-en-unit', () => {
+  const regla = detectarEn('sin-playwright-en-unit');
+  const PATRON = /\b(from\s+|import\s*\(\s*|require\s*\(\s*)['"](@playwright\/test|playwright(-core)?)['"]/;
+
+  test('detecta el import estático de @playwright/test', () => {
+    assert.ok(PATRON.test("import { chromium, type Browser } from '@playwright/test';"));
+  });
+
+  test('detecta import dinámico y require', () => {
+    assert.ok(PATRON.test("const { chromium } = await import('playwright');"));
+    assert.ok(PATRON.test("const pw = require('@playwright/test');"));
+  });
+
+  test('no confunde otros imports', () => {
+    assert.ok(!PATRON.test("import { test } from 'vitest';"));
+  });
+
+  test('un escape con razón exime la línea siguiente', () => {
+    const contenido = [
+      '// guard-disable-next-line sin-playwright-en-unit: herramienta de generación puntual',
+      "import { chromium } from '@playwright/test';"
+    ].join('\n');
+    assert.ok(lineasExentas(contenido, 'sin-playwright-en-unit').has(2));
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
 describe('docx-descomprimir-acotado', () => {
   const regla = detectarEn('docx-descomprimir-acotado');
   const patronDecompression = /\bnew\s+DecompressionStream\(/;

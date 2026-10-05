@@ -5,7 +5,7 @@
  * cada corrida (`npm run test:fixtures`). Así el repo no acumula binarios y
  * cualquier máquina obtiene exactamente el mismo documento.
  */
-import { PDFDocument, StandardFonts, rgb, PDFName, PDFHexString } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb, PDFName, PDFHexString, PDFString } from 'pdf-lib';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -621,23 +621,147 @@ function docxBasico() {
   ]);
 }
 
-/** Texto de las celdas de la tabla y advertencias esperadas (tabla + imagen). */
+/** Texto de las celdas de la tabla y advertencias esperadas (tabla + imagen). Fase 2a: tabla e imagen REALES, ver `docxTablaImagen()`. */
 export const DOCX_TABLA_CELDAS = ['Producto', 'Precio', 'Manzanas', '3,50'];
 
+/** Un `<Relationship>` de imagen/hipervínculo para `word/_rels/document.xml.rels`. */
+function relacion(id, tipo, target, externo) {
+  return `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${tipo}" Target="${target}"${externo ? ' TargetMode="External"' : ''}/>`;
+}
+
+function relsXml(relaciones) {
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${relaciones.join('')}</Relationships>`;
+}
+
+/** `w:drawing` inline real (`wp:inline` -> `a:blip r:embed`), tamaño en EMU (914400/pulgada). */
+function drawingInline(rId, cxEmu, cyEmu) {
+  return `<w:drawing><wp:inline><wp:extent cx="${cxEmu}" cy="${cyEmu}"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="${rId}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>`;
+}
+
+/** Tabla real (2x2, sin bordes/sombreado — ver `docxCompleto()` para esos) + imagen inline real (PR fase 2a): reemplaza el antiguo aplanado a texto con tabulador. */
 function docxTablaImagen() {
   const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
 <w:document><w:body>
-  <w:p><w:r><w:t>Documento con una tabla y una imagen no soportadas en fase 1.</w:t></w:r></w:p>
+  <w:p><w:r><w:t>Documento con una tabla y una imagen.</w:t></w:r></w:p>
   <w:tbl>
+    <w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>
     <w:tr><w:tc><w:p><w:r><w:t>${DOCX_TABLA_CELDAS[0]}</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>${DOCX_TABLA_CELDAS[1]}</w:t></w:r></w:p></w:tc></w:tr>
     <w:tr><w:tc><w:p><w:r><w:t>${DOCX_TABLA_CELDAS[2]}</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>${DOCX_TABLA_CELDAS[3]}</w:t></w:r></w:p></w:tc></w:tr>
   </w:tbl>
-  <w:p><w:r><w:drawing/></w:r></w:p>
+  <w:p><w:r>${drawingInline('rId1', 457200, 457200)}</w:r></w:p>
 </w:body></w:document>`;
 
   return construirZip([
     { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/_rels/document.xml.rels', datos: Buffer.from(relsXml([relacion('rId1', 'image', 'media/image1.png', false)]), 'utf-8') },
+    { nombre: 'word/media/image1.png', datos: pngSolido(16, 16, [255, 0, 0]) }
+  ]);
+}
+
+/**
+ * JPEG mínimo válido (16x16, azul sólido) generado UNA vez con
+ * `canvas.toDataURL('image/jpeg', 0.9)` en Chromium (sin dependencias) y
+ * fijado aquí en base64: el fixture es determinista en cualquier máquina.
+ */
+const JPEG_AZUL_16X16_B64 =
+  '/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1BST0ZJTEUAAQEAAAHIAAAAAAQwAABtbnRyUkdCIFhZWiAH4AABAAEAAAAAAABhY3NwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQAA9tYAAQAAAADTLQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAlkZXNjAAAA8AAAACRyWFlaAAABFAAAABRnWFlaAAABKAAAABRiWFlaAAABPAAAABR3dHB0AAABUAAAABRyVFJDAAABZAAAAChnVFJDAAABZAAAAChiVFJDAAABZAAAAChjcHJ0AAABjAAAADxtbHVjAAAAAAAAAAEAAAAMZW5VUwAAAAgAAAAcAHMAUgBHAEJYWVogAAAAAAAAb6IAADj1AAADkFhZWiAAAAAAAABimQAAt4UAABjaWFlaIAAAAAAAACSgAAAPhAAAts9YWVogAAAAAAAA9tYAAQAAAADTLXBhcmEAAAAAAAQAAAACZmYAAPKnAAANWQAAE9AAAApbAAAAAAAAAABtbHVjAAAAAAAAAAEAAAAMZW5VUwAAACAAAAAcAEcAbwBvAGcAbABlACAASQBuAGMALgAgADIAMAAxADb/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/2wBDAQMEBAUEBQkFBQkUDQsNFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBT/wAARCAAQABADASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAn/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAABgn/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCe4CqYO//Z';
+
+/** Tamaño declarado (`wp:extent`) de la imagen de `word-jpeg.docx`: 914400x457200 EMU = 72x36 pt. */
+export const DOCX_JPEG_ANCHO_PT = 72;
+export const DOCX_JPEG_ALTO_PT = 36;
+
+/** .docx con UNA imagen JPEG inline (ejercita el camino de `createImageBitmap` del navegador, que Node no tiene). */
+function docxJpeg() {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:p><w:r><w:t>Documento con una imagen JPEG.</w:t></w:r></w:p>
+  <w:p><w:r>${drawingInline('rId1', 914400, 457200)}</w:r></w:p>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/_rels/document.xml.rels', datos: Buffer.from(relsXml([relacion('rId1', 'image', 'media/image1.jpg', false)]), 'utf-8') },
+    { nombre: 'word/media/image1.jpg', datos: Buffer.from(JPEG_AZUL_16X16_B64, 'base64') }
+  ]);
+}
+
+/** .docx con una celda combinada verticalmente (3 filas, sombreada) junto a celdas normales (T1b). */
+function docxCombinada() {
+  const bordes = '<w:tblBorders>' + ['top', 'bottom', 'left', 'right', 'insideH', 'insideV']
+    .map((lado) => `<w:${lado} w:val="single" w:sz="8" w:color="000000"/>`).join('') + '</w:tblBorders>';
+  const fila = (a, b, pr) => `<w:tr><w:tc><w:tcPr>${pr}</w:tcPr><w:p><w:r><w:t>${a}</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>${b}</w:t></w:r></w:p></w:tc></w:tr>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:tbl><w:tblPr>${bordes}</w:tblPr><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>
+    ${fila('Fusionada', 'fila uno', '<w:vMerge w:val="restart"/><w:shd w:fill="CCE5FF"/>')}
+    ${fila('', 'fila dos', '<w:vMerge/>')}
+    ${fila('', 'fila tres', '<w:vMerge/>')}
+    ${fila('Suelta', 'fila cuatro', '')}
+  </w:tbl>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
     { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') }
+  ]);
+}
+
+/**
+ * Fixture "completo" de la fase 2a (spec, ítem 8): tabla 3×3 con encabezado,
+ * una celda combinada horizontalmente (`w:gridSpan`) y sombreada (`w:shd`),
+ * una imagen PNG inline (reutiliza el mismo rojo sólido que `rojo.png`), un
+ * hipervínculo válido y uno con esquema `javascript:` que debe acabar SIN
+ * enlace y con advertencia visible.
+ */
+export const DOCX_COMPLETO_ENCABEZADO_COMBINADO = 'Encabezado combinado';
+export const DOCX_COMPLETO_CELDAS_FILA1 = ['A1', 'B1', 'C1'];
+export const DOCX_COMPLETO_CELDAS_FILA2 = ['A2', 'B2', 'C2'];
+export const DOCX_COMPLETO_TEXTO_ENLACE_OK = 'Ir a example.com';
+export const DOCX_COMPLETO_URL_OK = 'https://example.com';
+export const DOCX_COMPLETO_TEXTO_ENLACE_JS = 'enlace peligroso';
+export const DOCX_COMPLETO_URL_JS = 'javascript:alert(1)';
+
+function docxCompleto() {
+  const bordes = '<w:tblBorders>' + ['top', 'bottom', 'left', 'right', 'insideH', 'insideV']
+    .map((lado) => `<w:${lado} w:val="single" w:sz="8" w:color="000000"/>`).join('') + '</w:tblBorders>';
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:p><w:r><w:t>Documento completo: tabla, imagen y enlaces.</w:t></w:r></w:p>
+  <w:tbl>
+    <w:tblPr>${bordes}</w:tblPr>
+    <w:tblGrid><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/><w:gridCol w:w="2000"/></w:tblGrid>
+    <w:tr><w:trPr><w:tblHeader/></w:trPr>
+      <w:tc><w:tcPr><w:gridSpan w:val="2"/><w:shd w:fill="FFCC00"/></w:tcPr><w:p><w:r><w:t>${DOCX_COMPLETO_ENCABEZADO_COMBINADO}</w:t></w:r></w:p></w:tc>
+      <w:tc><w:p><w:r><w:t>Col C</w:t></w:r></w:p></w:tc>
+    </w:tr>
+    <w:tr>
+      <w:tc><w:p><w:r><w:t>${DOCX_COMPLETO_CELDAS_FILA1[0]}</w:t></w:r></w:p></w:tc>
+      <w:tc><w:p><w:r><w:t>${DOCX_COMPLETO_CELDAS_FILA1[1]}</w:t></w:r></w:p></w:tc>
+      <w:tc><w:p><w:r><w:t>${DOCX_COMPLETO_CELDAS_FILA1[2]}</w:t></w:r></w:p></w:tc>
+    </w:tr>
+    <w:tr>
+      <w:tc><w:p><w:r><w:t>${DOCX_COMPLETO_CELDAS_FILA2[0]}</w:t></w:r></w:p></w:tc>
+      <w:tc><w:p><w:r><w:t>${DOCX_COMPLETO_CELDAS_FILA2[1]}</w:t></w:r></w:p></w:tc>
+      <w:tc><w:p><w:r><w:t>${DOCX_COMPLETO_CELDAS_FILA2[2]}</w:t></w:r></w:p></w:tc>
+    </w:tr>
+  </w:tbl>
+  <w:p><w:r>${drawingInline('rIdImg', 457200, 457200)}</w:r></w:p>
+  <w:p><w:hyperlink r:id="rIdOk"><w:r><w:t>${DOCX_COMPLETO_TEXTO_ENLACE_OK}</w:t></w:r></w:hyperlink></w:p>
+  <w:p><w:hyperlink r:id="rIdJs"><w:r><w:t>${DOCX_COMPLETO_TEXTO_ENLACE_JS}</w:t></w:r></w:hyperlink></w:p>
+</w:body></w:document>`;
+
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    {
+      nombre: 'word/_rels/document.xml.rels',
+      datos: Buffer.from(relsXml([
+        relacion('rIdImg', 'image', 'media/image1.png', false),
+        relacion('rIdOk', 'hyperlink', DOCX_COMPLETO_URL_OK, true),
+        relacion('rIdJs', 'hyperlink', DOCX_COMPLETO_URL_JS, true)
+      ]), 'utf-8')
+    },
+    { nombre: 'word/media/image1.png', datos: pngSolido(16, 16, [255, 0, 0]) }
   ]);
 }
 
@@ -652,6 +776,27 @@ function docxHostil() {
   return construirZip([{ nombre: 'word/document.xml', datos: ceros, metodo: 8 }]);
 }
 
+/**
+ * PDF de 2 páginas con marcadores planos: "Capítulo" (destino página 1) y
+ * "Web" con una acción en vez de destino. `accion` es el diccionario /A del
+ * segundo marcador (URI, Launch, JavaScript…): para probar que el editor
+ * conserva una URI y se niega a reescribir lo que no sabe conservar.
+ */
+async function pdfMarcadoresConAccion(accion) {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const p1 = doc.addPage([595.28, 841.89]);
+  p1.drawText('Pagina 1', { x: 60, y: 760, size: 20, font });
+  doc.addPage([595.28, 841.89]).drawText('Pagina 2', { x: 60, y: 760, size: 20, font });
+  const { context, catalog } = doc;
+  const root = context.nextRef(), a = context.nextRef(), b = context.nextRef();
+  context.assign(a, context.obj({ Title: PDFHexString.fromText('Capítulo'), Parent: root, Next: b, Dest: context.obj([p1.ref, PDFName.of('Fit')]) }));
+  context.assign(b, context.obj({ Title: PDFHexString.fromText('Web'), Parent: root, Prev: a, A: context.obj(accion) }));
+  context.assign(root, context.obj({ Type: 'Outlines', First: a, Last: b, Count: 2 }));
+  catalog.set(PDFName.of('Outlines'), root);
+  return doc.save();
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -663,6 +808,9 @@ async function main() {
     'subconjunto.pdf': await pdfSubconjunto(),
     'marcadores.pdf': await pdfMarcadores(),
     'outline-ciclo.pdf': await pdfOutlineCiclo(),
+    'marcadores-uri.pdf': await pdfMarcadoresConAccion({ S: 'URI', URI: PDFString.of('https://example.com/') }),
+    'marcadores-launch.pdf': await pdfMarcadoresConAccion({ S: 'Launch', F: PDFString.of('calc.exe') }),
+    'marcadores-js.pdf': await pdfMarcadoresConAccion({ S: 'JavaScript', JS: PDFString.of('app.alert(1)') }),
     'paginas-pequenas.pdf': await pdfPaginasPequenas(),
     'grande.pdf': await pdfGrande(),
     'paginas-pequenas-marcadores.pdf': await pdfPaginasPequenasMarcadores(),
@@ -672,6 +820,9 @@ async function main() {
     'firma-blanca.png': pngFirma(120, 60),
     'word-basico.docx': docxBasico(),
     'word-tabla-imagen.docx': docxTablaImagen(),
+    'word-completo.docx': docxCompleto(),
+    'word-jpeg.docx': docxJpeg(),
+    'word-combinada.docx': docxCombinada(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {

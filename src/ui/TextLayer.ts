@@ -50,6 +50,20 @@ export class TextLayer {
     this.build();
   }
 
+  /**
+   * A-03 (WCAG 2.1.1) — "roving tabindex": una página puede tener cientos de
+   * runs, así que SOLO uno (`tabindex=0`) es tabstop de la capa; el resto van
+   * a -1 y se recorren con ↑/↓ (o Inicio/Fin). Enter edita, Escape sale.
+   * El foco NO pinta nada en reposo salvo el anillo de `:focus-visible` (E-029).
+   */
+  private readonly bloques: HTMLElement[] = [];
+
+  private moverTabstop(destino: HTMLElement | undefined): void {
+    if (!destino) return;
+    for (const b of this.bloques) b.tabIndex = b === destino ? 0 : -1;
+    destino.focus();
+  }
+
   private build(): void {
     for (const run of this.page.runs) {
       // Rect de reposo: SIEMPRE la caja original de los glifos (`run.boxPt`).
@@ -74,6 +88,12 @@ export class TextLayer {
       block.className = 'run';
       block.dataset.runId = String(run.runId);
       block.textContent = run.text;
+      block.setAttribute('role', 'textbox');
+      block.setAttribute('aria-readonly', 'true');
+      block.setAttribute('aria-label', `Línea de texto ${this.bloques.length + 1}`);
+      block.tabIndex = this.bloques.length === 0 ? 0 : -1;
+      this.bloques.push(block);
+      block.addEventListener('focus', () => { for (const b of this.bloques) b.tabIndex = b === block ? 0 : -1; });
       // Solo geometría inline (E-029): el resto de la apariencia en reposo
       // (texto transparente, sin fondo) sale de la clase `.run` en CSS.
       Object.assign(block.style, {
@@ -94,8 +114,8 @@ export class TextLayer {
       const editColor = `rgb(${run.color[0]}, ${run.color[1]}, ${run.color[2]})`;
 
       let oldText = run.text;
-      block.addEventListener('click', (e) => {
-        e.stopPropagation();
+      let editadoConTeclado = false;
+      const empezarEdicion = (): void => {
         for (const el of Array.from(this.host.querySelectorAll<HTMLElement>('.run'))) el.classList.remove('selected');
         block.classList.add('selected');
         this.cb.onSelect(this.page.index, run.runId);
@@ -125,11 +145,18 @@ export class TextLayer {
         mask.classList.add('active');
         block.classList.add('editing');
         block.contentEditable = 'true';
+        block.setAttribute('aria-readonly', 'false');
         block.focus();
+      };
+      block.addEventListener('click', (e) => {
+        e.stopPropagation();
+        editadoConTeclado = false;
+        empezarEdicion();
       });
       const commit = (): void => {
         if (!block.isContentEditable) return;
         block.contentEditable = 'false';
+        block.setAttribute('aria-readonly', 'true');
         block.classList.remove('editing');
         mask.classList.remove('active');
         block.style.font = '';
@@ -149,9 +176,26 @@ export class TextLayer {
         }
       };
       block.addEventListener('blur', commit);
+      // Devuelve el foco al run tras editar SOLO si la edición empezó con
+      // teclado (A-03): con ratón no se pinta anillo de foco tras Enter/Escape
+      // (prueba de oro de reposo, E-029).
+      const salirDeEdicion = (): void => {
+        block.blur();
+        if (editadoConTeclado) { editadoConTeclado = false; if (block.isConnected) block.focus(); }
+      };
       block.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') { e.preventDefault(); block.blur(); }
-        if (e.key === 'Escape') { block.textContent = oldText; block.blur(); }
+        if (block.isContentEditable) {
+          if (e.key === 'Enter') { e.preventDefault(); salirDeEdicion(); }
+          if (e.key === 'Escape') { block.textContent = oldText; salirDeEdicion(); }
+          return;
+        }
+        // Reposo: navegación entre runs y activación con teclado (A-03).
+        const i = this.bloques.indexOf(block);
+        if (e.key === 'ArrowDown') { e.preventDefault(); this.moverTabstop(this.bloques[i + 1]); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); this.moverTabstop(this.bloques[i - 1]); }
+        else if (e.key === 'Home') { e.preventDefault(); this.moverTabstop(this.bloques[0]); }
+        else if (e.key === 'End') { e.preventDefault(); this.moverTabstop(this.bloques[this.bloques.length - 1]); }
+        else if (e.key === 'Enter') { e.preventDefault(); editadoConTeclado = true; empezarEdicion(); }
       });
 
       block.appendChild(this.makeDragHandle(block, run.runId));

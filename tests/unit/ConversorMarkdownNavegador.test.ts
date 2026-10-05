@@ -48,6 +48,24 @@ test('convertir produce un PDF de al menos 2 páginas con texto vectorial (sin i
   engine.close(doc);
 });
 
+test('un enlace [texto](url) genera una anotación /Link real con la URI; un esquema no permitido no crea ninguna (fase 2a)', async () => {
+  const engine = await PdfiumEngine.create();
+  const conversor = new ConversorMarkdownNavegador(engine);
+  const md = '[haz clic aquí](https://example.com/pagina) y este otro es [peligroso](javascript:alert(1)).';
+  const { pdf } = await conversor.convertir('enlace.md', new TextEncoder().encode(md));
+
+  const crudo = Buffer.from(pdf).toString('latin1');
+  expect(crudo).toContain('/Link');
+  expect(crudo).toContain('https://example.com/pagina');
+  expect(crudo).not.toContain('javascript:alert');
+
+  const doc = await engine.open(pdf);
+  const texto = engine.getPageText(doc, 0).map((r) => r.text).join(' ');
+  expect(texto).toContain('haz');
+  expect(texto).toContain('peligroso');
+  engine.close(doc);
+});
+
 test('convertir con Markdown vacío produce un PDF de 1 página sin texto', async () => {
   const engine = await PdfiumEngine.create();
   const conversor = new ConversorMarkdownNavegador(engine);
@@ -56,4 +74,15 @@ test('convertir con Markdown vacío produce un PDF de 1 página sin texto', asyn
   expect(engine.pageCount(doc)).toBe(1);
   expect(engine.getPageText(doc, 0)).toEqual([]);
   engine.close(doc);
+});
+
+test('un enlace con esquema rechazado devuelve una advertencia visible (con la URL); uno válido no', async () => {
+  const engine = await PdfiumEngine.create();
+  const conversor = new ConversorMarkdownNavegador(engine);
+  const md = '[bien](https://example.com) y [mal](javascript:void0) y [rel](pagina.html)';
+  const { advertencias } = await conversor.convertir('e.md', new TextEncoder().encode(md));
+  expect(advertencias).toHaveLength(2);
+  expect(advertencias.join(' | ')).toContain('javascript:void0');
+  expect(advertencias.join(' | ')).toContain('pagina.html');
+  expect(advertencias.join(' | ')).not.toContain('https://example.com');
 });

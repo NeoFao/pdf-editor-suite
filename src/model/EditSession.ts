@@ -126,6 +126,11 @@ export class EditSession {
     this.model.reset(EditSession.buildPages(this.engine, this.doc));
   }
 
+  /** Notifica a la UI que cambió el outline (ver `DocumentModel.onOutlineChange`). */
+  refreshOutline(): void {
+    this.model.notifyOutlineChanged();
+  }
+
   /** Recarga el documento desde unos bytes (snapshot) y reconstruye el modelo. */
   async reload(bytes: Uint8Array): Promise<void> {
     this.engine.close(this.doc);

@@ -4,22 +4,25 @@ import { abrirZip } from './docx/zip';
 import { DocxError } from './docx/DocxError';
 import { construirModeloDocx } from './docx/modelo';
 import { renderizarModeloDocx } from './docx/render';
+import { decodificarImagenDocx, type ResultadoImagenDocx } from './imagenes/decodificarImagenDocx';
+import type { ImagenColocada } from './flujo/layout';
 
 /**
  * Conversor `.docx` (Word) -> PDF, 100% en el navegador, con el motor
- * PDFium (§9 fila #4, FASE 1). Igual que `ConversorMarkdownNavegador`: el
+ * PDFium (§9 fila #4, FASE 2a). Igual que `ConversorMarkdownNavegador`: el
  * PDF resultante tiene texto REAL y vectorial (`insertText`), nunca una
  * imagen rasterizada — a diferencia de la app vieja (`docx-preview` +
  * `html2pdf`).
  *
- * Fase 1 (ver `docx/modelo.ts` y `docx/render.ts` para el detalle):
- * párrafos con negrita/cursiva/subrayado/tamaño/color, alineación,
- * sangrías, espaciado, saltos de página, encabezados por estilo, listas con
- * viñeta/numeración correlativa, tablas aplanadas a texto con advertencia.
- * Sin tablas reales, imágenes, encabezados/pies de página, cuadros de
- * texto, notas al pie, campos ni control de cambios resuelto — todo eso se
- * CUENTA en `advertencias` (nunca se pierde en silencio, ver
- * `ConversorDocumento.ResultadoConversion`).
+ * Fase 2a añade sobre la fase 1 (ver `docx/modelo.ts` y `docx/render.ts`
+ * para el detalle): TABLAS reales (grid, spans, merges, bordes, sombreado),
+ * IMÁGENES inline (`w:drawing`, PNG/JPEG, decodificadas por
+ * `decodificarImagenDocx` y colocadas con `insertImage`) y ENLACES clicables
+ * (`w:hyperlink` externo, anotación `/Link` real vía `addLink`, con la
+ * misma validación de esquema que el motor). Sigue sin encabezados/pies de
+ * página, cuadros de texto, notas al pie, campos ni control de cambios
+ * resuelto — todo eso se CUENTA en `advertencias` (nunca se pierde en
+ * silencio, ver `ConversorDocumento.ResultadoConversion`).
  *
  * Fuentes: Calibri/Arial y similares se mapean a Helvetica, Times New
  * Roman/Cambria a Times, Consolas/Courier New a Courier (`fontClassify`),
@@ -46,8 +49,10 @@ export class ConversorDocxNavegador implements ConversorDocumento {
     const stylesXml = stylesBytes ? decodificador.decode(stylesBytes) : null;
     const numberingBytes = await zip.leer('word/numbering.xml');
     const numberingXml = numberingBytes ? decodificador.decode(numberingBytes) : null;
+    const relsBytes = await zip.leer('word/_rels/document.xml.rels');
+    const relsXml = relsBytes ? decodificador.decode(relsBytes) : null;
 
-    const modelo = construirModeloDocx(documentXml, stylesXml, numberingXml);
+    const modelo = construirModeloDocx(documentXml, stylesXml, numberingXml, relsXml);
 
     // Mismo caché de `measureText` por conversión que `ConversorMarkdownNavegador`
     // (ver el comentario allí): evita cruzar la frontera WASM por cada
@@ -59,14 +64,19 @@ export class ConversorDocxNavegador implements ConversorDocumento {
       if (w === undefined) { w = this.engine.measureText(font, sizePt, s); cache.set(key, w); }
       return w;
     };
-    const { totalPaginas, trazos, barras } = renderizarModeloDocx(modelo, medir);
+    const { totalPaginas, trazos, barras, imagenes, enlaces } = renderizarModeloDocx(modelo, medir);
+
+    const { rgbaPorId, advertenciasImagenes } = await this.resolverImagenes(zip, imagenes);
+    const advertencias = [...modelo.advertencias, ...advertenciasImagenes];
 
     const blank = this.engine.createBlank(modelo.paginaAnchoPt, modelo.paginaAltoPt);
     const doc: DocHandle = await this.engine.open(blank);
     for (let i = 1; i < totalPaginas; i++) this.engine.importPages(doc, blank, i);
 
     // Lote por página (E-037, docs/ERRORES-CONOCIDOS.md): ver el mismo
-    // razonamiento en `ConversorMarkdownNavegador`.
+    // razonamiento en `ConversorMarkdownNavegador`. Orden de dibujo: fondos
+    // y bordes (fillRect) primero, luego imágenes, luego texto encima;
+    // los enlaces son anotaciones transparentes (no compiten por z-order).
     const opsPorPagina = new Map<number, PageOp[]>();
     const agregar = (page: number, op: PageOp): void => {
       let lista = opsPorPagina.get(page);
@@ -76,13 +86,53 @@ export class ConversorDocxNavegador implements ConversorDocumento {
     for (const b of barras) {
       agregar(b.page, { type: 'fillRect', rect: { xPt: b.xPt, yPt: b.yPt, wPt: b.wPt, hPt: b.hPt }, color: b.color });
     }
+    for (const img of imagenes) {
+      const rgba = rgbaPorId.get(img.imgId);
+      if (!rgba) continue; // decodificación fallida: ya se avisó en resolverImagenes, el hueco queda en blanco
+      agregar(img.page, { type: 'insertImage', spec: { rgba: rgba.rgba, imgWidth: rgba.width, imgHeight: rgba.height, xPt: img.xPt, yPt: img.yPt, wPt: img.wPt, hPt: img.hPt } });
+    }
     for (const t of trazos) {
       agregar(t.page, { type: 'insertText', spec: { xPt: t.xPt, yPt: t.yPt, text: t.text, sizePt: t.sizePt, fontName: t.font, color: t.color } });
+    }
+    for (const e of enlaces) {
+      agregar(e.page, { type: 'addLink', rect: { xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt }, url: e.url });
     }
     for (const [page, ops] of opsPorPagina) this.engine.applyPageOps(doc, page, ops);
 
     const out = this.engine.save(doc);
     this.engine.close(doc);
-    return { pdf: out, advertencias: modelo.advertencias };
+    return { pdf: out, advertencias };
+  }
+
+  /**
+   * Lee y decodifica (una sola vez por `imgId`, aunque la misma imagen se
+   * use varias veces en el documento) cada imagen que el maquetador dejó
+   * colocada. Una imagen que no se pueda leer del ZIP o decodificar no
+   * aborta la conversión: se cuenta en advertencias y su hueco en el
+   * layout queda en blanco (mejor que perder el documento entero).
+   */
+  private async resolverImagenes(
+    zip: ReturnType<typeof abrirZip>, imagenes: ImagenColocada[]
+  ): Promise<{ rgbaPorId: Map<string, { rgba: Uint8Array; width: number; height: number }>; advertenciasImagenes: string[] }> {
+    const rgbaPorId = new Map<string, { rgba: Uint8Array; width: number; height: number }>();
+    const advertenciasImagenes: string[] = [];
+    const idsUnicos = [...new Set(imagenes.map((i) => i.imgId))];
+    for (const id of idsUnicos) {
+      const bytesImagen = await zip.leer(id);
+      if (!bytesImagen) {
+        advertenciasImagenes.push(`No se pudo insertar una imagen del documento (no se encontró "${id}" dentro del paquete).`);
+        continue;
+      }
+      const resultado: ResultadoImagenDocx = await decodificarImagenDocx(bytesImagen);
+      if (!resultado.ok) {
+        const motivo = resultado.razon === 'demasiado-grande' ? 'demasiado grande'
+          : resultado.razon === 'formato-no-soportado' ? 'formato no soportado (solo PNG y JPEG en esta fase)'
+            : 'no se pudo decodificar (archivo dañado o variante no soportada)';
+        advertenciasImagenes.push(`No se pudo insertar una imagen del documento (${motivo}).`);
+        continue;
+      }
+      rgbaPorId.set(id, resultado.imagen);
+    }
+    return { rgbaPorId, advertenciasImagenes };
   }
 }

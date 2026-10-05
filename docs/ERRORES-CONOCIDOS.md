@@ -1968,3 +1968,158 @@ despliega" dejarían de ser la misma política, silenciosamente.
   más un servidor HTTP real de punta a punta.
 - Regla determinista `csp-coherente` (`scripts/guards/reglas.mjs`), con test
   en `scripts/guards/reglas.test.mjs`.
+
+---
+
+### E-047 · Los enlaces salían con un recuadro visible y el subrayado nunca se dibujaba · encontrado en la revisión visual de Word fase 2a
+
+**Síntoma.** En `word-completo.docx` convertido, el hipervínculo aparecía
+encerrado en un rectángulo negro/azul, y el "subrayado" que pide el spec no
+existía: el texto solo salía azul.
+
+**Causa raíz.** Doble. (1) Una anotación `/Link` creada con
+`FPDFPage_CreateAnnot` sin `/Border` propio se pinta con el borde por defecto
+de 1 pt (el render usa `FPDF_ANNOT`); Acrobat, Chrome y Word generan siempre
+borde invisible. (2) `RunFormato.underline` se leía de `w:u` desde la fase 1
+pero ningún código lo convertía en trazo: era un dato huérfano.
+
+**Cómo se detecta ahora.** `PdfiumEngine.addLink` llama a
+`FPDFAnnot_SetBorder(annot, 0, 0, 0)`. `Atom/Seg.underline` viaja por
+`lineToFlowLine` y `paginar` traza la barra; tests
+`lineToFlowLine + paginar: un átomo con underline…` y
+`un átomo sin underline no produce ninguna barra`
+(`tests/unit/flujo-layout.test.ts`). El recuadro solo se ve a ojo: la defensa
+es la revisión visual obligatoria (AGENTS.md §2.8), no un test de píxeles.
+
+**Tercer defecto de la misma revisión.** El texto de las celdas de tabla salía
+pegado al borde superior: `renderizarTabla` medía la fracción de línea base
+(0,28) desde ARRIBA de la línea, y en `paginar` se mide desde ABAJO (mismo
+tipo de mezcla de orígenes que el resto de E-0xx de geometría). Arreglo:
+`relYPt = y + alto * (1 - fracción)`. Test:
+`la línea base del texto de una celda cae ~13,6pt bajo el borde superior…`
+(`tests/unit/ConversorDocxNavegador.test.ts`), rojo antes (8,36 pt).
+
+---
+
+### E-048 · La fase 2a descartaba contenido de Word sin avisar · encontrado al auditar la fase 2a
+
+**Síntoma.** Una celda `vMerge` "continue" se pintaba en blanco sin sombreado;
+una fila más alta que una página se salía de ella (contenido perdido bajo el
+margen); un `w:hyperlink` con `w:anchor`, un `w:sdt` o `w:fldSimple` dentro de
+un párrafo, una ecuación, un `w:sym`, una tabla anidada o una imagen dentro de
+una celda desaparecían o se aplanaban SIN ninguna advertencia. En Markdown, un
+enlace `javascript:` se pintaba azul como si funcionara.
+
+**Causa raíz.** Los `default: break`/`continue` de `modelo.ts` y `render.ts`
+descartaban nodos por ser "ruido", sin distinguir el ruido real (marcadores,
+`w:proofErr`) de contenido con texto. La regla del proyecto es que lo no
+soportado puede degradarse pero nunca en silencio (§3 del spec de la fila #4).
+
+**Cómo se detecta ahora.** `modelo.ts` cuenta cada descarte con `anotar()` y lo
+convierte en aviso (`MENSAJES_PERDIDAS`); cualquier elemento no reconocido que
+contenga `w:t` avisa como `desconocido`. Tests en `tests/unit/docx-modelo.test.ts`
+(bloque "T1b"), `tests/unit/docx-tabla-render.test.ts` (vMerge, cruce de página,
+fila partida, rejilla ampliada, escala) y `tests/unit/markdown-layout.test.ts`.
+Regla determinista: no se añade; "descartar sin avisar" no tiene firma
+sintáctica única (la defensa es el test de cada categoría al añadir una nueva).
+
+### E-049 · Tests de Vitest lanzaban Chromium dentro de `tests/unit/` y fallaban al azar con "Hook timeout 10000ms" · defecto del TEST, no de la app
+
+**Síntoma.** `npx vitest run` fallaba en 1 de cada 3 corridas: los `beforeAll`
+de `ComprimirDocumento.test.ts` y `PdfiumEngine.imagepixels.test.ts` morían
+con `Hook timed out in 10000ms` (y `PdfiumEngine.heapgrowth.test.ts` tenía el
+mismo patrón). El job de unit es obligatorio en CI: un rojo aleatorio no se
+tolera.
+
+**Causa raíz.** Los tres importaban `chromium` de `@playwright/test` y hacían
+`chromium.launch()` dentro del hook solo para obtener unos bytes JPEG con
+`canvas.toDataURL`. Con varios workers de Vitest en paralelo, arrancar N
+navegadores a la vez supera el timeout del hook. Además rompía la separación
+del repo: los tests que necesitan navegador van a `tests/e2e/` (Playwright),
+los de `tests/unit/` corren en Node.
+
+**Arreglo.** Los tests no necesitaban el navegador, solo los bytes de un JPEG
+válido: ahora son constantes base64 fijas (`tests/unit/_jpegsFijos.ts`,
+generadas una vez con el codificador de Chromium). Ninguna aserción cambió
+(ver `.orquestacion/T-flaky-informe.md`).
+
+**Cómo se detecta ahora.** Regla `sin-playwright-en-unit`: ningún fichero de
+`tests/unit/**` puede importar `@playwright/test` ni `playwright`. Test en
+`scripts/guards/reglas.test.mjs`.
+
+### E-050 · La app nueva no cumplía WCAG 2.2 AA: teclado, diálogos, avisos, contraste y objetivos táctiles
+
+**Síntoma.** Los `.run` (líneas editables) no eran alcanzables con Tab; `#status`
+no se anunciaba a lectores de pantalla; los diálogos «Texto…» y «Comprimir» no
+devolvían el foco (el segundo ni siquiera atrapaba Tab); el texto tenue tenía
+2.9:1 de contraste; las muestras de color medían 18×18 px; el `<canvas>` de cada
+página no tenía nombre.
+
+**Causa raíz.** Se construyó la UI verificando el aspecto y el ratón, no el uso
+con teclado ni con tecnologías de apoyo; cada panel modal se escribía a mano.
+
+**Arreglo.** `TextLayer` con «roving tabindex» (un único tabstop por página, ↑/↓/Inicio/Fin,
+Enter edita, Escape sale; sin `tabindex=0` en cientos de runs); helper común
+`src/ui/dialogo.ts` (`mostrarModal`: `<dialog>` modal, trampa de Tab, Escape,
+foco devuelto) usado por `TextPanel` y `CompressPanel`; `role="status"` +
+`aria-live="polite"` en `#status` y en el aviso de conversión; tokens de
+`estilos.css` con ≥ 4.5:1 en texto y ≥ 3:1 en bordes de control/foco (nuevo
+`--ed-control-border`); muestras de 24×24 (cuadro visible de 18 con `background-clip`);
+`role="img"` + `aria-label="Página N"` en el canvas.
+
+**Cómo se detecta ahora.**
+- `tests/e2e/next/accesibilidad.spec.ts` (Chromium real).
+- `tests/unit/contraste.test.ts` calcula las ratios leyendo `estilos.css`.
+- Sin regla determinista: no hay un patrón de código que la máquina pueda
+  reconocer de forma fiable (a diferencia de un `innerHTML`); lo cubren los tests.
+
+### E-051 · Las tres pestañas del panel lateral no cabían en 168 px y la primera quedaba recortada · encontrado al integrar ramas en paralelo
+
+**Síntoma.** Con las pestañas Páginas, Marcadores y Comentarios, el panel lateral
+(`--ed-sidebar-w: 168px`) desbordaba: al enfocar la última, el panel se
+desplazaba ~39 px y «Páginas» y los botones de la barra de marcadores salían
+recortados por la izquierda. Cada rama por separado (dos pestañas, o tres en la
+de comentarios sobre una barra distinta) pasaba su verify.
+
+**Causa raíz.** Dos ramas tocaron la misma zona (`App.ts` sidebar,
+`estilos.css`) sin que ninguna viera el resultado conjunto: el ancho del panel
+se dimensionó para dos pestañas. Los tests unitarios no calculan maquetación.
+
+**Segunda causa (CI en Ubuntu).** El arreglo a 208 px pasaba en Windows y falló en
+CI: `system-ui` resuelve allí a una fuente más ancha (DejaVu Sans o similar) y
+«Páginas» seguía recortada. Un ancho fijo en px para texto de UI depende de la
+fuente del sistema, que no controlamos.
+
+**Arreglo.** El panel conserva 208 px como valor base pero lleva
+`min-width: min-content`: crece hasta el ancho mínimo de sus pestañas (nowrap),
+sea cual sea la fuente. Test: `tests/e2e/next/panel-lateral-pestanas.spec.ts`
+(cada pestaña dentro del panel, `scrollWidth <= clientWidth`, sin `scrollLeft`),
+forzando una fuente ancha para reproducir en local la condición del CI; falla sin
+el arreglo y pasa con él.
+
+**Lección.** No fijar anchos en px para texto de UI; medir desbordamiento
+(`scrollWidth > clientWidth`) y dejar que el contenedor crezca con el contenido.
+Los tests de maquetación deben forzar una fuente ancha, no confiar en la del equipo.
+
+**Cómo se detecta ahora.** Ese test e2e y la revisión visual obligatoria
+(AGENTS.md §2.8) tras integrar ramas que añaden controles al mismo contenedor.
+No hay regla guard: no existe un patrón de código fiable.
+
+### E-052 · `npm run verify` en local podía fallar en falso: vitest leía fixtures no versionados desactualizados · encontrado al integrar ramas en paralelo
+
+**Síntoma.** Tras cambiar el generador de fixtures (p. ej. al integrar ramas),
+`npm run test:unit:src` fallaba en local con PDF/DOCX viejos de
+`tests/fixtures/generados/`, y pasaba tras regenerarlos a mano. En un clon
+limpio fallaba por ficheros inexistentes.
+
+**Causa raíz.** `tests/fixtures/generados/` no se versiona y solo `test:e2e`
+ejecutaba `test:fixtures`. En `verify`, `test:unit:src` corre antes que
+`test:e2e`, así que usaba lo que hubiera en disco. El CI lo ocultaba porque el
+job `app-nueva` genera los fixtures explícitamente antes.
+
+**Arreglo.** `vitest.config.ts` declara un `globalSetup`
+(`tests/unit/_setup/generar-fixtures.ts`) que ejecuta el generador antes de los
+unitarios. Es determinista e idempotente; en CI repite un paso barato.
+
+**Cómo se detecta ahora.** Borrar `tests/fixtures/generados/` y ejecutar solo
+`npm run test:unit:src` debe pasar. Sin regla guard: no hay patrón de código.

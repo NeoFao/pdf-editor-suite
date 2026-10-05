@@ -1,7 +1,9 @@
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, FormField, FormFieldKind, FormFieldOption, OutlineItem, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
+import { validarUrlEnlace } from '../validarUrlEnlace';
+import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
+import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_PAGEOBJ_PATH = 2;
@@ -16,6 +18,14 @@ const FPDFBitmap_BGRx = 3;
 const FPDFBitmap_BGRA = 4;
 const FPDF_SEGMENT_MOVETO = 2; // FPDF_SEGMENTTYPE: inicia un subtrazo nuevo, sin conectar con el punto anterior.
 const FPDF_ANNOT_TEXT = 1;    // FPDF_ANNOTATION_SUBTYPE: nota adhesiva ("sticky note")
+const FPDF_ANNOT_LINK = 2;    // FPDF_ANNOTATION_SUBTYPE: enlace clicable (addLink, PR fase 2a)
+// FPDF_ANNOTATION_SUBTYPE de las anotaciones que entiende el panel de comentarios.
+const FPDF_ANNOT_FREETEXT = 3;
+const FPDF_ANNOT_HIGHLIGHT = 9;
+const FPDF_ANNOT_UNDERLINE = 10;
+const FPDF_ANNOT_STRIKEOUT = 12;
+const FPDF_ANNOT_POPUP = 16;
+const FPDF_ANNOT_WIDGET = 20;
 const FPDF_ANNOT_FLAG = 0x01; // flag de FPDF_RenderPageBitmap: pinta también las anotaciones
 const FPDFANNOT_COLORTYPE_Color = 0;
 
@@ -34,14 +44,17 @@ const FPDF_FORMFIELD_KIND: Record<number, FormFieldKind> = {
 const FPDF_FORMFLAG_READONLY = 0x01; // bit 1 de /Ff (PDF 32000-1, tabla 221).
 const FPDF_FORMFLAG_CHOICE_MULTISELECT = 0x200000; // bit 22 de /Ff (tabla 231, solo campos de elección).
 
-const PDFACTION_GOTO = 1; // FPDFAction_GetType: acción "ir a" (destino dentro del propio documento).
+import { OUTLINE_MAX_DEPTH, OUTLINE_MAX_NODES } from '../cotasOutline';
+
+const PDFACTION_GOTO = 1;
+const PDFACTION_REMOTEGOTO = 2;
+const PDFACTION_URI = 3;
+const PDFACTION_LAUNCH = 4; // FPDFAction_GetType: acción "ir a" (destino dentro del propio documento).
 
 // Cotas del recorrido del outline (E-031, ver docs/ERRORES-CONOCIDOS.md): un
 // PDF hostil puede definir un outline con ciclos (un /Next o /First que
 // apunta hacia atrás) o una profundidad/cantidad de nodos desmedida. Sin
 // estas cotas, un `while` que sigue /NextSibling entraría en bucle infinito.
-const OUTLINE_MAX_DEPTH = 32;
-const OUTLINE_MAX_NODES = 10000;
 
 /**
  * Implementación de PdfEngine sobre @embedpdf/pdfium (WASM).
@@ -264,18 +277,31 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
-  findText(doc: DocHandle, pageIndex: number, query: string): RectPt[] {
+  findText(doc: DocHandle, pageIndex: number, query: string, opciones?: { mayusculas?: boolean; palabraCompleta?: boolean }): RectPt[] {
     if (!query) return [];
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const textPage = this.p.FPDFText_LoadPage(page);
     const wq = this.mem.wide(query);
-    const sh = this.p.FPDFText_FindStart(textPage, wq, 0, 0); // flags 0 = insensible a mayúsculas
+    // flags: 0 = insensible a mayúsculas; FPDF_MATCHCASE=0x1. NO se usa
+    // FPDF_MATCHWHOLEWORD (0x2): PDFium solo trata como letras el ASCII y '_',
+    // así que "a" casaría dentro de "año". La palabra completa se filtra abajo
+    // con `esCaracterDePalabra` (Unicode), el mismo criterio que buscarReemplazar.ts.
+    const flags = opciones?.mayusculas ? 0x1 : 0;
+    const palabraCompleta = !!opciones?.palabraCompleta;
+    const sh = this.p.FPDFText_FindStart(textPage, wq, flags, 0);
     const matches: RectPt[] = [];
     try {
       while (this.p.FPDFText_FindNext(sh)) {
         const start = this.p.FPDFText_GetSchResultIndex(sh);
         const count = this.p.FPDFText_GetSchCount(sh);
+        if (palabraCompleta) {
+          // Índices de carácter de la página de texto; fuera de rango = sin vecino.
+          const total = this.p.FPDFText_CountChars(textPage);
+          const antes = start > 0 ? this.p.FPDFText_GetUnicode(textPage, start - 1) : 0;
+          const despues = start + count < total ? this.p.FPDFText_GetUnicode(textPage, start + count) : 0;
+          if (esCaracterDePalabra(antes) || esCaracterDePalabra(despues)) continue;
+        }
         let minL = Infinity, minB = Infinity, maxR = -Infinity, maxT = -Infinity;
         for (let k = 0; k < count; k++) {
           const l = this.mem.malloc(8), r = this.mem.malloc(8), b = this.mem.malloc(8), t = this.mem.malloc(8);
@@ -384,9 +410,9 @@ export class PdfiumEngine implements PdfEngine {
           (buf, len) => this.p.FPDFBookmark_GetTitle(marcador, buf, len),
           (ptr) => this.mem.readU16(ptr)
         );
-        const pageIndex = this.bookmarkPageIndex(doc, marcador);
+        const { pageIndex, accion } = this.bookmarkTarget(doc, marcador);
         const children = leerHermanos(marcador, profundidad + 1);
-        items.push({ title, pageIndex, children });
+        items.push(accion ? { title, pageIndex, children, accion } : { title, pageIndex, children });
         marcador = this.p.FPDFBookmark_GetNextSibling(doc, marcador);
       }
       return items;
@@ -395,21 +421,122 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   /**
-   * Página de destino de un marcador, o `null` si no resuelve a ninguna.
-   * Primero el destino directo (`/Dest`); si no hay, la acción GoTo del
-   * marcador (`/A`) — un marcador solo tiene uno de los dos, nunca ambos.
+   * Reescribe el árbol de marcadores COMPLETO con `EPDFBookmark_*` (el build
+   * de @embedpdf/pdfium las expone; son las únicas que escriben outline).
+   * Estrategia: validar el árbol con las cotas de E-031 ANTES de tocar nada
+   * (así un árbol rechazado deja el documento intacto), borrar los marcadores
+   * raíz actuales (`EPDFBookmark_Delete` arrastra a los hijos y reengancha
+   * /First, /Last, /Next, /Prev, /Count, /Parent) y reconstruir con
+   * `AppendChild` (padre 0 = raíz). Cada destino es `[página /Fit]`
+   * (`EPDFDest_CreateView`, modo 2 = Fit, 0 parámetros); `pageIndex` nulo o
+   * fuera de rango se escribe sin destino. El título lo codifica PDFium
+   * (UTF-16BE con BOM): sobrevive ñ, emoji (pares sustitutos) y similares.
+   * Acciones: los marcadores URI (http/https/mailto) se recrean con
+   * `EPDFAction_CreateURI` + `EPDFBookmark_SetAction`; un árbol con cualquier
+   * acción `no-soportada` se rechaza antes de tocar nada.
    */
-  private bookmarkPageIndex(doc: DocHandle, marcador: number): number | null {
-    let dest = this.p.FPDFBookmark_GetDest(doc, marcador);
-    if (!dest) {
-      const action = this.p.FPDFBookmark_GetAction(marcador);
-      if (action && this.p.FPDFAction_GetType(action) === PDFACTION_GOTO) {
-        dest = this.p.FPDFAction_GetDest(doc, action);
-      }
+  setOutline(doc: DocHandle, items: OutlineItem[]): void {
+    this.validarOutline(items);
+    // 1) Borra el outline vigente. Cotas anti-ciclo: sin ellas un outline
+    // hostil (A→B→A) podría hacer que este bucle no terminara nunca.
+    const borrados = new Set<number>();
+    let raiz = this.p.FPDFBookmark_GetFirstChild(doc, 0);
+    while (raiz && !borrados.has(raiz) && borrados.size < OUTLINE_MAX_NODES) {
+      borrados.add(raiz);
+      this.p.EPDFBookmark_Delete(doc, raiz);
+      raiz = this.p.FPDFBookmark_GetFirstChild(doc, 0);
     }
-    if (!dest) return null;
-    const pageIndex = this.p.FPDFDest_GetDestPageIndex(doc, dest);
-    return pageIndex >= 0 ? pageIndex : null;
+    // 2) Reconstruye.
+    const total = this.p.FPDF_GetPageCount(doc);
+    const escribir = (padre: number, hijos: OutlineItem[]): void => {
+      for (const item of hijos) {
+        const titulo = this.mem.wide(item.title);
+        const marcador = this.p.EPDFBookmark_AppendChild(doc, padre, titulo);
+        this.mem.free(titulo);
+        if (!marcador) throw new Error('PDFium no pudo crear el marcador');
+        if (item.accion?.tipo === 'uri') {
+          const accion = this.p.EPDFAction_CreateURI(doc, item.accion.uri);
+          if (!accion || !this.p.EPDFBookmark_SetAction(doc, marcador, accion)) throw new Error('PDFium no pudo escribir la acción URI del marcador');
+        } else if (item.pageIndex !== null && item.pageIndex >= 0 && item.pageIndex < total) {
+          const page = this.p.FPDF_LoadPage(doc, item.pageIndex);
+          if (page) {
+            try {
+              const params = this.mem.malloc(4);
+              const dest = this.p.EPDFDest_CreateView(page, 2 /* Fit */, params, 0);
+              this.mem.free(params);
+              if (dest) this.p.EPDFBookmark_SetDest(doc, marcador, dest);
+            } finally {
+              this.p.FPDF_ClosePage(page);
+            }
+          }
+        }
+        escribir(marcador, item.children);
+      }
+    };
+    escribir(0, items);
+  }
+
+  /** Lanza si el árbol supera las cotas de E-031 (profundidad o nodos). Sin efectos. */
+  private validarOutline(items: OutlineItem[]): void {
+    let nodos = 0;
+    const visitar = (hijos: OutlineItem[], profundidad: number): void => {
+      if (hijos.length > 0 && profundidad > OUTLINE_MAX_DEPTH) {
+        throw new RangeError(`Outline demasiado profundo (máximo ${OUTLINE_MAX_DEPTH} niveles de profundidad)`);
+      }
+      for (const h of hijos) {
+        if (h.accion?.tipo === 'no-soportada') {
+          throw new Error(`Hay marcadores con acciones que este editor no puede conservar (${h.accion.descripcion}): no se reescribe el outline`);
+        }
+        if (h.accion?.tipo === 'uri' && validarUrlEnlace(h.accion.uri) === null) throw new Error('URI de marcador con esquema no permitido');
+        if (++nodos > OUTLINE_MAX_NODES) throw new RangeError(`Outline con demasiados nodos (máximo ${OUTLINE_MAX_NODES})`);
+        visitar(h.children, profundidad + 1);
+      }
+    };
+    visitar(items, 0);
+  }
+
+  /**
+   * Destino de un marcador: página (`/Dest` o acción GoTo), URI permitida, o
+   * una acción que no sabemos conservar (`no-soportada`: Launch, GoToR,
+   * JavaScript, nombrada, URI con esquema no permitido, destino sin página).
+   * Solo se LEE: ninguna acción se ejecuta jamás. Sin destino ni acción:
+   * `{ pageIndex: null }` sin `accion`.
+   */
+  private bookmarkTarget(doc: DocHandle, marcador: number): { pageIndex: number | null; accion?: AccionMarcador } {
+    const noSop = (descripcion: string) => ({ pageIndex: null, accion: { tipo: 'no-soportada', descripcion } as AccionMarcador });
+    const paginaDe = (dest: number): number | null => {
+      const i = this.p.FPDFDest_GetDestPageIndex(doc, dest);
+      return i >= 0 ? i : null;
+    };
+    // Primero la acción: `FPDFBookmark_GetDest` también devuelve el `/D` de una
+    // acción GoToR (otro documento) y lo resolvería, falsamente, contra ESTE
+    // documento. Solo sin acción vale el `/Dest` directo.
+    const action = this.p.FPDFBookmark_GetAction(marcador);
+    if (!action) {
+      const dirigido = this.p.FPDFBookmark_GetDest(doc, marcador);
+      if (!dirigido) return { pageIndex: null };
+      const i = paginaDe(dirigido);
+      return i === null ? noSop('Destino sin página resoluble') : { pageIndex: i };
+    }
+    switch (this.p.FPDFAction_GetType(action)) {
+      case PDFACTION_GOTO: {
+        const dest = this.p.FPDFAction_GetDest(doc, action);
+        const i = dest ? paginaDe(dest) : null;
+        return i === null ? noSop('Acción GoTo sin página resoluble') : { pageIndex: i };
+      }
+      case PDFACTION_URI: {
+        // ASCII de 7 bits según la especificación; patrón de dos llamadas (E-028).
+        const uri = leerCadenaPdfium(
+          this.mem,
+          (buf, len) => this.p.FPDFAction_GetURIPath(doc, action, buf, len),
+          (ptr) => this.mem.UTF8ToString(ptr)
+        );
+        return validarUrlEnlace(uri) !== null ? { pageIndex: null, accion: { tipo: 'uri', uri } } : noSop('URI con esquema no permitido');
+      }
+      case PDFACTION_LAUNCH: return noSop('Acción Launch (abrir fichero)');
+      case PDFACTION_REMOTEGOTO: return noSop('Acción GoToR (otro documento)');
+      default: return noSop('Acción no soportada (JavaScript, nombrada u otra)');
+    }
   }
 
   editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult {
@@ -733,8 +860,18 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   insertImage(doc: DocHandle, pageIndex: number, spec: InsertImageSpec): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
-    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'insertImage', spec }]);
+    return (res as Extract<PageOpResult, { type: 'insertImage' }>).ok;
+  }
+
+  /**
+   * Crea el objeto de página IMAGEN para `spec`, sin insertarlo todavía (el
+   * llamador decide en qué página y cuándo regenerar el contenido — usado
+   * por `insertImage` suelto y por el caso `insertImage` de `applyPageOps`,
+   * E-037: nunca un `FPDF_LoadPage`/`GenerateContent` por imagen cuando se
+   * insertan varias en la misma página, p. ej. un DOCX con varias imágenes).
+   */
+  private crearObjetoImagen(doc: DocHandle, spec: InsertImageSpec): number {
     // FPDFBitmap_Create: formato BGRA con alfa (3 = BGRA). El motor copia los
     // píxeles al generar el contenido, así que el bitmap puede destruirse luego.
     const bmp = this.p.FPDFBitmap_Create(spec.imgWidth, spec.imgHeight, 1);
@@ -756,12 +893,9 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDFImageObj_SetBitmap(0, 0, obj, bmp);
       // La imagen se define en un cuadrado unidad: la matriz la escala y sitúa.
       this.p.FPDFPageObj_Transform(obj, spec.wPt, 0, 0, spec.hPt, spec.xPt, spec.yPt);
-      this.p.FPDFPage_InsertObject(page, obj);
-      this.p.FPDFPage_GenerateContent(page);
-      return true;
+      return obj;
     } finally {
       this.p.FPDFBitmap_Destroy(bmp);
-      this.p.FPDF_ClosePage(page);
     }
   }
 
@@ -1096,6 +1230,11 @@ export class PdfiumEngine implements PdfEngine {
     return (res as Extract<PageOpResult, { type: 'highlightRect' }>).ok;
   }
 
+  addLink(doc: DocHandle, pageIndex: number, rectPt: RectPt, url: string): boolean {
+    const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'addLink', rect: rectPt, url }]);
+    return (res as Extract<PageOpResult, { type: 'addLink' }>).ok;
+  }
+
   addNote(doc: DocHandle, pageIndex: number, spec: { xPt: number; yPt: number; text: string }): number {
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
@@ -1163,6 +1302,72 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDF_ClosePage(page);
     }
     return notes;
+  }
+
+  getComments(doc: DocHandle, pageIndex: number): CommentInfo[] {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const out: CommentInfo[] = [];
+    try {
+      const n = this.p.FPDFPage_GetAnnotCount(page);
+      for (let i = 0; i < n; i++) {
+        const annot = this.p.FPDFPage_GetAnnot(page, i);
+        if (!annot) continue;
+        try {
+          const sub = this.p.FPDFAnnot_GetSubtype(annot);
+          if (sub === FPDF_ANNOT_LINK || sub === FPDF_ANNOT_POPUP || sub === FPDF_ANNOT_WIDGET) continue;
+          // Patrón de dos llamadas: ver leerCadenaPdfium (E-028).
+          const leer = (clave: string): string =>
+            leerCadenaPdfium(this.mem, (buf, len) => this.p.FPDFAnnot_GetStringValue(annot, clave, buf, len), (ptr) => this.mem.readU16(ptr));
+          const text = leer('Contents');
+          if (sub !== FPDF_ANNOT_TEXT && text === '') continue;
+          const rectPtr = this.mem.malloc(16);
+          this.p.FPDFAnnot_GetRect(annot, rectPtr);
+          const left = this.mem.getValue(rectPtr, 'float');
+          const top = this.mem.getValue(rectPtr + 4, 'float');
+          const right = this.mem.getValue(rectPtr + 8, 'float');
+          const bottom = this.mem.getValue(rectPtr + 12, 'float');
+          this.mem.free(rectPtr);
+          const kind: CommentKind =
+            sub === FPDF_ANNOT_TEXT ? 'note'
+            : sub === FPDF_ANNOT_HIGHLIGHT ? 'highlight'
+            : sub === FPDF_ANNOT_UNDERLINE ? 'underline'
+            : sub === FPDF_ANNOT_STRIKEOUT ? 'strikeout'
+            : sub === FPDF_ANNOT_FREETEXT ? 'freetext'
+            : 'other';
+          out.push({ index: i, kind, text, author: leer('T'), rectPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom } });
+        } finally {
+          this.p.FPDFPage_CloseAnnot(annot);
+        }
+      }
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+    return out;
+  }
+
+  setNoteText(doc: DocHandle, pageIndex: number, index: number, text: string): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      if (index < 0 || index >= this.p.FPDFPage_GetAnnotCount(page)) return false;
+      const annot = this.p.FPDFPage_GetAnnot(page, index);
+      if (!annot) return false;
+      try {
+        const sub = this.p.FPDFAnnot_GetSubtype(annot);
+        if (sub === FPDF_ANNOT_LINK || sub === FPDF_ANNOT_POPUP || sub === FPDF_ANNOT_WIDGET) return false;
+        const wptr = this.mem.wide(text);
+        try {
+          return !!this.p.FPDFAnnot_SetStringValue(annot, 'Contents', wptr);
+        } finally {
+          this.mem.free(wptr);
+        }
+      } finally {
+        this.p.FPDFPage_CloseAnnot(annot);
+      }
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
   }
 
   removeNote(doc: DocHandle, pageIndex: number, index: number): boolean {
@@ -1523,6 +1728,52 @@ export class PdfiumEngine implements PdfEngine {
             this.p.FPDFPage_InsertObject(page, obj);
             mutado = true;
             results.push({ type: 'drawRect', ok: true });
+            break;
+          }
+          case 'insertImage': {
+            const obj = this.crearObjetoImagen(doc, op.spec);
+            this.p.FPDFPage_InsertObject(page, obj);
+            mutado = true;
+            results.push({ type: 'insertImage', ok: true });
+            break;
+          }
+          case 'addLink': {
+            // Solo http:/https:/mailto: (validarUrlEnlace.ts): un PDF es
+            // entrada no confiable, así que esta comprobación es la última
+            // línea de defensa aunque el llamador (DOCX/Markdown) ya filtre
+            // antes de construir el lote — mismo principio que E-003/E-027.
+            const urlValida = validarUrlEnlace(op.url);
+            if (!urlValida) { results.push({ type: 'addLink', ok: false }); break; }
+            const annot = this.p.FPDFPage_CreateAnnot(page, FPDF_ANNOT_LINK);
+            if (!annot) { results.push({ type: 'addLink', ok: false }); break; }
+            try {
+              // FS_RECTF = {left, top, right, bottom} en puntos PDF (floats, 16 bytes), igual que addNote/getNotes.
+              const rectPtr = this.mem.malloc(16);
+              this.mem.setValue(rectPtr, op.rect.xPt, 'float');
+              this.mem.setValue(rectPtr + 4, op.rect.yPt + op.rect.hPt, 'float');
+              this.mem.setValue(rectPtr + 8, op.rect.xPt + op.rect.wPt, 'float');
+              this.mem.setValue(rectPtr + 12, op.rect.yPt, 'float');
+              this.p.FPDFAnnot_SetRect(annot, rectPtr);
+              this.mem.free(rectPtr);
+              // Sin esto, PDFium (como la mayoría de visores) pinta el borde
+              // POR DEFECTO de la anotación /Link (un rectángulo de 1pt
+              // alrededor del texto) — nada que ver con el azul+subrayado
+              // del propio texto, y nada profesional: Acrobat/Chrome/Word
+              // generan siempre un borde invisible en sus enlaces, el
+              // "aspecto" de enlace lo da el estilo del texto, no la caja
+              // de la anotación.
+              this.p.FPDFAnnot_SetBorder(annot, 0, 0, 0);
+              // Acción /URI: EPDFAction_CreateURI crea la acción (marshaling
+              // de "string" a cargo del propio binding, ver index.d.ts) y
+              // EPDFAnnot_SetAction la asocia a la anotación /Link recién
+              // creada. No hace falta FPDFPage_GenerateContent: una
+              // anotación no vive en el flujo de contenido de la página.
+              const action = this.p.EPDFAction_CreateURI(doc, urlValida);
+              const ok = action ? this.p.EPDFAnnot_SetAction(annot, action) : false;
+              results.push({ type: 'addLink', ok });
+            } finally {
+              this.p.FPDFPage_CloseAnnot(annot);
+            }
             break;
           }
         }
