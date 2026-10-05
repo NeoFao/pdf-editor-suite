@@ -140,3 +140,37 @@ test('deshacer revierte las 4 páginas de un solo paso; quitar elimina solo lo a
   bytes = await descargar(page, 'quitado-deshecho.pdf');
   expect((await textos(bytes, 3)).sort()).toEqual(['CONFIDENCIAL', 'PAGINA-4', 'Pie 4'].sort());
 });
+
+/**
+ * Con una fuente ancha (la que usa el CI en Ubuntu) ningún botón, etiqueta ni campo del
+ * diálogo se sale de él ni queda truncado (E-051). Medido en px CSS de viewport.
+ */
+test('con fuente ancha, nada del diálogo se desborda ni se trunca en ninguna pestaña', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto('/index.next.html');
+  await page.addStyleTag({ content: 'dialog, dialog * { font-family: "DejaVu Sans", Verdana, "Arial Black", sans-serif !important; letter-spacing: 0.04em !important; }' });
+  await page.locator('#file-input').setInputFiles(PDF);
+  await expect(page.locator('.run').first()).toBeVisible();
+  await abrirPestana(page, 'organizar');
+  await page.locator('#btn-encabezado').click();
+  await expect(page.locator('#encabezado-panel')).toBeVisible();
+
+  for (const tab of ['#eh-tab-encabezado', '#eh-tab-marca']) {
+    await page.locator(tab).click();
+    const r = await page.locator('#encabezado-panel').evaluate((dlg) => {
+      const d = dlg.getBoundingClientRect();
+      const malos: string[] = [];
+      for (const e of Array.from(dlg.querySelectorAll<HTMLElement>('button, label, span, input, select, div'))) {
+        if (e.offsetParent === null) continue; // oculto
+        const c = e.getBoundingClientRect();
+        if (c.width === 0) continue;
+        const nombre = e.id || e.className || e.tagName;
+        if (c.left < d.left - 0.5 || c.right > d.right + 0.5) malos.push('fuera: ' + nombre);
+        if ((e.tagName === 'BUTTON' || e.tagName === 'LABEL') && e.scrollWidth > e.clientWidth + 1) malos.push('truncado: ' + nombre);
+      }
+      return { malos, scrollX: (dlg as HTMLElement).scrollWidth > (dlg as HTMLElement).clientWidth + 1 };
+    });
+    expect(r.malos, tab).toEqual([]);
+    expect(r.scrollX, `${tab} sin desplazamiento horizontal`).toBe(false);
+  }
+});
