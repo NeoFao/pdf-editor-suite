@@ -61,6 +61,9 @@ const PDFACTION_LAUNCH = 4; // FPDFAction_GetType: acción "ir a" (destino dentr
  * FPDF_LoadMemDocument exige que el buffer de datos siga vivo mientras el
  * documento esté abierto: se guarda su puntero por documento y se libera al cerrar.
  */
+/** Clave de las propiedades de `/Artifact` con la que este editor marca lo que inserta. */
+const CLAVE_MARCA_EDITOR = 'PDFEditor';
+
 export class PdfiumEngine implements PdfEngine {
   private readonly srcPtr = new Map<DocHandle, number>();
   // Entorno de formularios (AcroForm), uno por documento. `info` es el struct
@@ -1674,12 +1677,26 @@ export class PdfiumEngine implements PdfEngine {
             this.p.FPDFText_SetText(obj, wptr);
             this.mem.free(wptr);
             const [r, g, b] = spec.color ?? [0, 0, 0];
-            this.p.FPDFPageObj_SetFillColor(obj, r, g, b, 255);
-            this.p.FPDFPageObj_Transform(obj, 1, 0, 0, 1, spec.xPt, spec.yPt);
+            const alfa = Math.round(255 * Math.min(1, Math.max(0, spec.opacidad ?? 1)));
+            this.p.FPDFPageObj_SetFillColor(obj, r, g, b, alfa);
+            if (spec.giroGrados) {
+              const t = (spec.giroGrados * Math.PI) / 180;
+              // Giro antihorario alrededor del origen y luego traslación a (xPt, yPt), puntos PDF.
+              this.p.FPDFPageObj_Transform(obj, Math.cos(t), Math.sin(t), -Math.sin(t), Math.cos(t), spec.xPt, spec.yPt);
+            } else {
+              this.p.FPDFPageObj_Transform(obj, 1, 0, 0, 1, spec.xPt, spec.yPt);
+            }
             if (spec.invisible) this.p.FPDFTextObj_SetTextRenderMode(obj, 3); // 3 = invisible (OCR)
-            this.p.FPDFPage_InsertObject(page, obj);
+            let runId: number;
+            if (spec.alFondo && this.p.FPDFPage_InsertObjectAtIndex(page, obj, 0)) {
+              runId = 0;
+            } else {
+              this.p.FPDFPage_InsertObject(page, obj);
+              runId = this.p.FPDFPage_CountObjects(page) - 1;
+            }
+            if (spec.marca) this.marcarArtefacto(doc, obj, spec.marca);
             mutado = true;
-            results.push({ type: 'insertText', runId: this.p.FPDFPage_CountObjects(page) - 1 });
+            results.push({ type: 'insertText', runId });
             break;
           }
           case 'fillRect': {
@@ -1780,6 +1797,60 @@ export class PdfiumEngine implements PdfEngine {
       }
       if (mutado) this.p.FPDFPage_GenerateContent(page); // una sola vez, pase lo que pase el número de ops
       return results;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /** Añade `/Artifact <</PDFEditor valor>>` al objeto (contenido de marca; ver `InsertTextSpec.marca`). */
+  private marcarArtefacto(doc: DocHandle, obj: number, valor: string): void {
+    const mark = this.p.FPDFPageObj_AddMark(obj, 'Artifact');
+    if (mark) this.p.FPDFPageObjMark_SetStringParam(doc, obj, mark, CLAVE_MARCA_EDITOR, valor);
+  }
+
+  /** Valor de `/PDFEditor` en la marca `/Artifact` del objeto, o null si no es nuestro. */
+  private valorMarcaEditor(obj: number): string | null {
+    const n = this.p.FPDFPageObj_CountMarks(obj);
+    const m = this.mem;
+    const out = m.malloc(4);
+    try {
+      for (let i = 0; i < n; i++) {
+        const mark = this.p.FPDFPageObj_GetMark(obj, i);
+        if (!mark) continue;
+        const nombre = leerCadenaPdfium(
+          m,
+          (buf, len) => { this.p.FPDFPageObjMark_GetName(mark, buf, len, out); return m.getValue(out, 'i32'); },
+          (ptr) => m.readU16(ptr)
+        );
+        if (nombre !== 'Artifact') continue;
+        const valor = leerCadenaPdfium(
+          m,
+          (buf, len) => { this.p.FPDFPageObjMark_GetParamStringValue(mark, CLAVE_MARCA_EDITOR, buf, len, out); return m.getValue(out, 'i32'); },
+          (ptr) => m.readU16(ptr)
+        );
+        if (valor) return valor;
+      }
+      return null;
+    } finally {
+      m.free(out);
+    }
+  }
+
+  removeMarkedObjects(doc: DocHandle, pageIndex: number, valor?: string): number {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      let quitados = 0;
+      // De atrás hacia delante: quitar un objeto reindexa los siguientes.
+      for (let i = this.p.FPDFPage_CountObjects(page) - 1; i >= 0; i--) {
+        const obj = this.p.FPDFPage_GetObject(page, i);
+        if (!obj) continue;
+        const v = this.valorMarcaEditor(obj);
+        if (v === null || (valor !== undefined && v !== valor)) continue;
+        if (this.p.FPDFPage_RemoveObject(page, obj)) { this.p.FPDFPageObj_Destroy(obj); quitados++; }
+      }
+      if (quitados > 0) this.p.FPDFPage_GenerateContent(page);
+      return quitados;
     } finally {
       this.p.FPDF_ClosePage(page);
     }
