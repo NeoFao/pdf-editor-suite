@@ -136,6 +136,27 @@ export interface InsertTextSpec {
   color?: [number, number, number]; // RGB 0-255; por defecto negro
   /** Modo de render 3 (invisible): buscable/extraíble pero no se pinta. Para capas de OCR. */
   invisible?: boolean;
+  /**
+   * Opacidad de relleno 0..1 (1 = opaco; por defecto). Se emite como `/ca` en el
+   * estado gráfico: `FPDFPageObj_SetFillColor` con alfa < 255 basta en este build
+   * de PDFium (medido: texto negro al 50 % renderiza a 127 sobre blanco).
+   */
+  opacidad?: number;
+  /**
+   * Giro del texto en grados, sentido antihorario, en el ESPACIO DE USUARIO del PDF
+   * (sin /Rotate): (xPt, yPt) es el origen de la línea base y el centro del giro.
+   * Para que el texto salga derecho en una página con /Rotate, quien llama suma
+   * el /Rotate a su ángulo visual (ver `src/pagina/encabezadoPie.ts`).
+   */
+  giroGrados?: number;
+  /** true = insertar AL PRINCIPIO del orden de dibujo (detrás del contenido existente). */
+  alFondo?: boolean;
+  /**
+   * Marca el objeto como artefacto de este editor: `/Artifact <</PDFEditor valor>> BDC`
+   * (contenido de marca estándar, ignorado por lectores de pantalla y localizable con
+   * `removeMarkedObjects`). `valor` es p. ej. `Encabezado` o `MarcaAgua`.
+   */
+  marca?: string;
 }
 
 /**
@@ -466,6 +487,13 @@ export interface PdfEngine {
    * orden.
    */
   applyPageOps(doc: DocHandle, pageIndex: number, ops: PageOp[]): PageOpResult[];
+  /**
+   * Elimina de la página SOLO los objetos marcados con `/Artifact <</PDFEditor …>>`
+   * (ver `InsertTextSpec.marca`). Con `valor`, solo los de ese valor (p. ej. 'MarcaAgua');
+   * sin él, todos los de este editor. Devuelve cuántos quitó. Un solo
+   * `GenerateContent` por página, y ninguno si no quitó nada.
+   */
+  removeMarkedObjects(doc: DocHandle, pageIndex: number, valor?: string): number;
   save(doc: DocHandle): Uint8Array<ArrayBuffer>;
   /**
    * Igual que `save()`, pero además descarta los streams de contenido de

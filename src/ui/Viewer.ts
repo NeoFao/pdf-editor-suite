@@ -156,6 +156,16 @@ export class Viewer {
     this.programmaticScroll = false;
   }
 
+  /**
+   * Elemento `.page` de la página `i` y la escala actual (px CSS por pt), para capas
+   * TEMPORALES de solo lectura (vista previa de encabezado/marca de agua): quien lo use
+   * debe retirar su capa; el visor no la conoce.
+   */
+  paginaDom(i: number): { el: HTMLElement; escala: number } | null {
+    const el = this.wrappers[i];
+    return el ? { el, escala: this.scale } : null;
+  }
+
   /** Cambia la escala (zoom) y vuelve a maquetar y renderizar. */
   setScale(scale: number): void {
     this.scale = scale;
