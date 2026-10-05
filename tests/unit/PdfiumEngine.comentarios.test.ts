@@ -33,7 +33,7 @@ test('getComments lee autor (/T), tipo y texto; incluye anotaciones ajenas con /
   const refs = [
     mk({ Subtype: 'Text', Rect: [10, 10, 30, 30], Contents: PDFHexString.fromText('Nota con autor'), T: PDFHexString.fromText('Ñoño') }),
     mk({ Subtype: 'Highlight', Rect: [10, 50, 100, 62], QuadPoints: [10, 62, 100, 62, 10, 50, 100, 50], Contents: PDFString.of('Comentario del resaltado') }),
-    mk({ Subtype: 'Highlight', Rect: [10, 80, 100, 92], QuadPoints: [10, 92, 100, 92, 10, 80, 100, 80] }), // sin /Contents: no es un comentario
+    mk({ Subtype: 'Highlight', Rect: [10, 80, 100, 92], QuadPoints: [10, 92, 100, 92, 10, 80, 100, 80] }), // sin /Contents: SÍ se lista (T11: el marcado se lista siempre, como Acrobat)
     mk({ Subtype: 'Link', Rect: [10, 100, 50, 120], Contents: PDFString.of('enlace') })
   ];
   page.node.set(PDFName.of('Annots'), ctx.obj(refs));
@@ -41,7 +41,7 @@ test('getComments lee autor (/T), tipo y texto; incluye anotaciones ajenas con /
   const doc = await eng.open(await d.save());
 
   const c = eng.getComments(doc, 0);
-  expect(c.map((x) => x.kind)).toEqual(['note', 'highlight']);
+  expect(c.map((x) => x.kind)).toEqual(['note', 'highlight', 'highlight']);
   expect(c[0]!.text).toBe('Nota con autor');
   expect(c[0]!.author).toBe('Ñoño');
   expect(c[0]!.index).toBe(0);

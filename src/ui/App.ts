@@ -24,9 +24,9 @@ import { SetFormTextCmd } from '../commands/SetFormText';
 import { SetFormCheckedCmd } from '../commands/SetFormChecked';
 import { SetFormChoiceCmd } from '../commands/SetFormChoice';
 import { SetFormRadioCmd } from '../commands/SetFormRadio';
-import { HighlightRunCmd } from '../commands/HighlightRun';
-import { UnderlineRunCmd } from '../commands/UnderlineRun';
-import { StrikethroughRunCmd } from '../commands/StrikethroughRun';
+import { AddMarkupCmd } from '../commands/AddMarkup';
+import { quadsPorLinea } from '../coords/quads';
+import type { MarkupKind } from '../engine/PdfEngine';
 import { DrawStrokeCmd } from '../commands/DrawStroke';
 import { DrawRectCmd } from '../commands/DrawRect';
 import { OcrPageCmd } from '../commands/OcrPage';
@@ -53,7 +53,7 @@ import { parseRange } from './pageRange';
 import { Viewer, type ToolMode } from './Viewer';
 import { calcularEscalaAjusteAncho } from './layout';
 import type { EditRequest } from './TextLayer';
-import type { PtPoint } from '../coords/PageGeometry';
+import { PageGeometry, type PtPoint } from '../coords/PageGeometry';
 import type { RectPt } from '../engine/PdfEngine';
 import { PanelMarcadores } from './PanelMarcadores';
 import { SetOutlineCmd } from '../commands/SetOutline';
@@ -1579,26 +1579,27 @@ export class App {
     this.setStatus('Firma insertada desde imagen (fondo quitado).');
   }
 
-  private highlightSelected(): void {
+  /**
+   * Resaltar/subrayar/tachar la línea seleccionada como anotación PDF REAL
+   * (T11): un quad por línea visual, calculado con la geometría común (E-053).
+   * Los resaltados antiguos (paths de contenido, de PDFs ya editados con
+   * versiones previas) se quedan como están: son contenido de la página.
+   */
+  private marcarSeleccion(tipo: MarkupKind, color: [number, number, number], verbo: string, hecho: string): void {
     const run = this.selectedRun();
-    if (!run || !this.bus || !this.selection) { this.setStatus('Selecciona una línea para resaltarla.'); return; }
-    void this.bus.execute(new HighlightRunCmd(this.selection.pageIndex, run.boxPt, this.toolColors.highlight));
-    this.setStatus('Resaltado.');
+    if (!run || !this.bus || !this.selection || !this.session) { this.setStatus(`Selecciona una línea para ${verbo}.`); return; }
+    const page = this.session.model.pages[this.selection.pageIndex]!;
+    // Escala 1: px CSS == pt visuales; las cajas del run están en pt de usuario.
+    const geo = PageGeometry.desdeTamanoVisual(page.sizePt.widthPt, page.sizePt.heightPt, 1, page.rotation);
+    const quads = quadsPorLinea([{ boxPt: run.boxPt, sizePt: run.sizePt }], geo);
+    // Autor: no hay nombre de usuario configurable todavía; /T queda vacío.
+    void this.bus.execute(new AddMarkupCmd(this.selection.pageIndex, tipo, quads, color));
+    this.setStatus(hecho);
   }
 
-  private underlineSelected(): void {
-    const run = this.selectedRun();
-    if (!run || !this.bus || !this.selection) { this.setStatus('Selecciona una línea para subrayarla.'); return; }
-    void this.bus.execute(new UnderlineRunCmd(this.selection.pageIndex, run.boxPt));
-    this.setStatus('Subrayado.');
-  }
-
-  private strikeSelected(): void {
-    const run = this.selectedRun();
-    if (!run || !this.bus || !this.selection) { this.setStatus('Selecciona una línea para tacharla.'); return; }
-    void this.bus.execute(new StrikethroughRunCmd(this.selection.pageIndex, run.boxPt));
-    this.setStatus('Tachado.');
-  }
+  private highlightSelected(): void { this.marcarSeleccion('highlight', this.toolColors.highlight, 'resaltarla', 'Resaltado.'); }
+  private underlineSelected(): void { this.marcarSeleccion('underline', [0, 0, 0], 'subrayarla', 'Subrayado.'); }
+  private strikeSelected(): void { this.marcarSeleccion('strikeout', [0, 0, 0], 'tacharla', 'Tachado.'); }
 
   private async runOcr(): Promise<void> {
     if (!this.session || !this.bus) { this.setStatus('Abre un documento antes del OCR.'); return; }

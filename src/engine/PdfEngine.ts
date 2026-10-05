@@ -1,4 +1,5 @@
 /** Contrato estable con el motor PDF. La UI y los comandos dependen de esto, nunca de FPDF_*. */
+import type { QuadPt } from '../coords/quads';
 
 export interface SizePt { widthPt: number; heightPt: number }
 export interface RectPt { xPt: number; yPt: number; wPt: number; hPt: number }
@@ -47,10 +48,14 @@ export interface NoteInfo { index: number; text: string; rectPt: RectPt }
 
 /**
  * Tipo de una anotación con comentario, tal como la lista el panel "Comentarios".
- * Alcance: solo anotaciones REALES del PDF. Los resaltados/subrayados/tachados
- * que crea este editor son paths de contenido (no anotaciones) y por tanto no
- * aparecen; sí aparecen los de ese tipo que traiga un PDF ajeno con `/Contents`.
+ * Alcance: solo anotaciones REALES del PDF. Resaltar/subrayar/tachar crean desde T11
+ * anotaciones /Highlight, /Underline y /StrikeOut y por tanto aparecen; los
+ * resaltados antiguos (paths de contenido de PDFs ya editados con versiones
+ * previas) siguen siendo contenido de la página y no aparecen.
  */
+/** Tipo de marcado de texto: anotación PDF real /Highlight, /Underline o /StrikeOut. */
+export type MarkupKind = 'highlight' | 'underline' | 'strikeout';
+
 export type CommentKind = 'note' | 'highlight' | 'underline' | 'strikeout' | 'freetext' | 'other';
 
 /**
@@ -375,13 +380,27 @@ export interface PdfEngine {
    * Devuelve el índice de la anotación entre todas las de la página.
    */
   addNote(doc: DocHandle, pageIndex: number, spec: { xPt: number; yPt: number; text: string }): number;
+  /**
+   * Crea una anotación de marcado REAL (`/Highlight`, `/Underline` o `/StrikeOut`,
+   * como Acrobat) con un `/QuadPoints` por cada quad de `quads` (puntos PDF de
+   * espacio de usuario, ver `QuadPt`: uno por línea de texto). Genera siempre la
+   * apariencia (`/AP`): sin ella PDFium no la pinta. `color` RGB 0-255; `contenido`
+   * es `/Contents`; `autor` es `/T` (vacío = no se escribe); `/M` = fecha actual.
+   * No toca el contenido de la página. Devuelve el índice de la anotación entre
+   * todas las de la página (se borra con `removeNote`), o -1 si falla.
+   */
+  addMarkup(doc: DocHandle, pageIndex: number, tipo: MarkupKind, quads: readonly QuadPt[], color: [number, number, number], contenido?: string, autor?: string): number;
+  /** QuadPoints de la anotación de marcado en `index` (pt PDF de usuario); [] si no tiene. */
+  getMarkupQuads(doc: DocHandle, pageIndex: number, index: number): QuadPt[];
+  /** Color `/C` RGB (0-255) de la anotación en `index`, o null si no tiene. */
+  getMarkupColor(doc: DocHandle, pageIndex: number, index: number): [number, number, number] | null;
   /** Anotaciones de subtipo Text de la página. */
   getNotes(doc: DocHandle, pageIndex: number): NoteInfo[];
   /**
-   * Anotaciones con comentario de la página: todas las de subtipo Text (aunque
-   * su texto esté vacío) y cualquier otra de marcado (resaltado, subrayado,
-   * tachado, texto libre, sello...) con `/Contents` no vacío. Excluye enlaces,
-   * popups y widgets de formulario.
+   * Anotaciones con comentario de la página: todas las de subtipo Text y las de
+   * marcado de texto (resaltado, subrayado, tachado; aunque su `/Contents` esté
+   * vacío, como lista Acrobat) y cualquier otra (texto libre, sello...) con
+   * `/Contents` no vacío. Excluye enlaces, popups y widgets de formulario.
    */
   getComments(doc: DocHandle, pageIndex: number): CommentInfo[];
   /**
