@@ -688,7 +688,8 @@ export class Viewer {
       });
       this.root.appendChild(w);
       this.wrappers.push(w);
-      this.geoms.push(new PageGeometry(page.sizePt.widthPt, page.sizePt.heightPt, this.scale, page.rotation));
+      // `page.sizePt` es el tamaño VISUAL (pt, ya girado); la fábrica lo devuelve al espacio de usuario (E-053).
+      this.geoms.push(PageGeometry.desdeTamanoVisual(page.sizePt.widthPt, page.sizePt.heightPt, this.scale, page.rotation));
     }
     this.observeVisible();
   }

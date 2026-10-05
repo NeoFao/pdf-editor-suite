@@ -14,14 +14,33 @@ export interface CssRect { left: CssPx; top: CssPx; width: CssPx; height: CssPx 
  *
  * Bajo rotación 90/270 los ejes se intercambian, por eso la conversión es SIEMPRE
  * por punto (x e y juntos): un `ptToCssX(x)` aislado no está bien definido.
+ *
+ * CONTRATO (E-053): `widthPt`/`heightPt` son el tamaño de la página SIN girar
+ * (espacio de usuario, el de la MediaBox), porque las fórmulas de 90/270 se
+ * escriben sobre ese espacio. Lo que devuelve el motor (`engine.pageSize`) es el
+ * tamaño VISUAL, ya girado: por eso el constructor es privado y se entra por
+ * `PageGeometry.desdeTamanoVisual`, que hace el intercambio en un único sitio.
  */
 export class PageGeometry {
-  constructor(
+  private constructor(
+    /** Ancho de la página SIN girar, pt PDF. */
     readonly widthPt: number,
+    /** Alto de la página SIN girar, pt PDF. */
     readonly heightPt: number,
+    /** px CSS por pt PDF. */
     readonly scale: number,
     readonly rotation: Rotation
   ) {}
+
+  /**
+   * Fábrica única. `anchoVisualPt`/`altoVisualPt` es el tamaño con la rotación
+   * ya aplicada (pt PDF), tal como lo da `engine.pageSize`; con 90/270 el
+   * ancho de usuario es el alto visual y viceversa.
+   */
+  static desdeTamanoVisual(anchoVisualPt: number, altoVisualPt: number, scale: number, rotation: Rotation): PageGeometry {
+    const gira = rotation === 90 || rotation === 270;
+    return new PageGeometry(gira ? altoVisualPt : anchoVisualPt, gira ? anchoVisualPt : altoVisualPt, scale, rotation);
+  }
 
   /** Punto PDF (origen abajo-izq, Y arriba) → punto CSS (origen arriba-izq, Y abajo). */
   ptToCss(xPt: number, yPt: number): CssPoint {

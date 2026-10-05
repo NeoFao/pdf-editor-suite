@@ -5,7 +5,7 @@
  * cada corrida (`npm run test:fixtures`). Así el repo no acumula binarios y
  * cualquier máquina obtiene exactamente el mismo documento.
  */
-import { PDFDocument, StandardFonts, rgb, PDFName, PDFHexString, PDFString } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFHexString, PDFString } from 'pdf-lib';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -797,12 +797,39 @@ async function pdfMarcadoresConAccion(accion) {
   return doc.save();
 }
 
+/**
+ * A4 vertical (595.28x841.89 pt SIN girar) con tres páginas: /Rotate 90, 270 y
+ * 180 (E-053). En cada una el texto "ESQUINA-SUP-IZQ" queda derecho en la
+ * esquina superior-izquierda VISUAL (línea base en visual x=40 pt, y=60 pt
+ * medido desde arriba). Las coordenadas de usuario se deducen de la rotación:
+ *   90 : x_usuario = vy,      y_usuario = vx,      giro del texto  90
+ *   270: x_usuario = W - vy,  y_usuario = H - vx,  giro del texto -90
+ *   180: x_usuario = W - vx,  y_usuario = vy,      giro del texto 180
+ */
+async function pdfRotada() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const W = 595.28, H = 841.89, vx = 40, vy = 60; // pt de usuario / pt visuales
+  const casos = [
+    { rot: 90, x: vy, y: vx, giro: 90 },
+    { rot: 270, x: W - vy, y: H - vx, giro: -90 },
+    { rot: 180, x: W - vx, y: vy, giro: 180 }
+  ];
+  for (const c of casos) {
+    const p = doc.addPage([W, H]);
+    p.setRotation(degrees(c.rot));
+    p.drawText('ESQUINA-SUP-IZQ', { x: c.x, y: c.y, size: 24, font, rotate: degrees(c.giro) });
+  }
+  return doc.save();
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
     'nativo.pdf': await pdfNativo(),
     'hostil.pdf': await pdfHostil(),
     'apaisado.pdf': await pdfApaisado(),
+    'rotada.pdf': await pdfRotada(),
     'fuentes.pdf': await pdfFuentes(),
     'formulario.pdf': await pdfFormulario(),
     'subconjunto.pdf': await pdfSubconjunto(),
