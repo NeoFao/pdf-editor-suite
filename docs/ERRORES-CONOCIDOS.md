@@ -2495,3 +2495,39 @@ inicio), después de `focus()`.
 **Cómo se detecta ahora.** `tests/e2e/next/edicion-consecutiva.spec.ts`: abre `nativo.pdf`, edita las líneas 2 y 4
 seguidas confirmando con Enter, con clic fuera y con Tab, y comprueba con el motor que ambas tienen el texto nuevo
 y el resto no cambia (falla en `main` sin el arreglo). Sin regla guard: no hay patrón estático fiable.
+
+### E-065 · Con páginas de tamaños distintos, "Subir página" no seguía a la página movida y el siguiente "Subir" movía OTRA
+
+**Síntoma.** Documento con A4, una página apaisada y otra diminuta: ir a la 3, pulsar "Subir" y el indicador
+decía "4 / 4" en vez de "2 / 4"; un segundo "Subir" movía la página equivocada. Duplicar, insertar un PDF y
+borrar tampoco dejaban la página actual en la que el usuario espera. Actuar sobre una página distinta de la
+elegida es bloqueante (misma familia que E-032).
+
+**Causa raíz.** `moveCurrentPage` asignaba `currentPage = to` a mano (sin `goToPage`, así que sin pin del
+`Viewer`) y ejecutaba el comando; el `refresh` reconstruye el visor y el `IntersectionObserver` elegía la página
+"más visible", que con tamaños mixtos no es la movida. Duplicar, insertar PDF y borrar no tocaban la página
+actual en absoluto.
+
+**Arreglo.** Mover, duplicar, insertar PDF, borrar y rotar esperan a `bus.execute` y llaman a `goToPage`
+(que fija `currentPage` y el pin): la movida en su nueva posición, la copia, la primera página insertada, la
+siguiente (o la anterior si era la última) y la misma tras rotar. Subir/Bajar reutilizan `commitReorder`, el
+camino del arrastre de miniaturas.
+
+**Cómo se detecta ahora.** `tests/e2e/next/pagina-actual-mover.spec.ts` con `tamanos-mixtos.pdf` (falló antes del
+arreglo con `Expected: "2 / 4"  Received: "4 / 4"`). Sin regla guard: el patrón ya lo cubre
+`navegacion-por-gotopage`. Aparte: `preview:next` y `preview:deploy` pasan por `scripts/servir-preview.mjs` y la
+regla `puertos-e2e-sincronizados` rechaza un `--port <n>` escrito a mano en los `preview:*` de package.json.
+
+### E-066 · El tirador de mover de una línea pegada al borde de la página quedaba fuera de la página
+
+**Síntoma.** El tirador (`.run-drag`) sobresale 9 px por la esquina superior izquierda de la línea; en una línea
+a menos de 9 px del borde izquierdo o superior de la página caía fuera de ella (recortado o inalcanzable).
+
+**Causa raíz.** Desplazamiento fijo `left/top: -9px` sin tener en cuenta la posición del bloque en la capa.
+
+**Arreglo.** `makeDragHandle` limita el desplazamiento a la distancia real al borde (nunca por fuera de la
+página; se solapa con el texto si hace falta).
+
+**Cómo se detecta ahora.** `tests/e2e/next/tirador-en-borde.spec.ts` con `lineas-borde.pdf` (esquina, suelo,
+centro): el tirador está dentro de la página y `elementFromPoint` en su centro es el propio tirador. Sin regla
+guard: es geometría de maquetación.

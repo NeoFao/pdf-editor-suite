@@ -24,7 +24,7 @@ for (const texto of ['ESQUINA', 'SUELO', 'CENTRO']) {
     expect(t.x + t.width).toBeLessThanOrEqual(pag.x + pag.width + 0.5);
     expect(t.y + t.height).toBeLessThanOrEqual(pag.y + pag.height + 0.5);
     // Es lo que recibe el puntero en su centro (no hay otra capa encima).
-    const alcanzable = await page.evaluate(([cx, cy]) => document.elementFromPoint(cx, cy)?.classList.contains('run-drag'), [t.x + t.width / 2, t.y + t.height / 2]);
+    const alcanzable = await page.evaluate(([cx, cy]: [number, number]) => document.elementFromPoint(cx, cy)?.classList.contains('run-drag'), [t.x + t.width / 2, t.y + t.height / 2] as [number, number]);
     expect(alcanzable).toBe(true);
   });
 }
