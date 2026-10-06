@@ -1125,6 +1125,45 @@ export const geometriaSoloConFabrica = {
   }
 };
 
+/* ── E-063 · la capa de texto no calcula rotaciones por run ───────────── */
+/**
+ * Analiza el texto de src/ui/TextLayer.ts. La rotación de página se resuelve UNA vez, con una
+ * transformación CSS sobre el contenedor de la capa (PageGeometry.transformCapaSinGirar); dentro de
+ * TextLayer no puede haber aritmética de rotación ni conversiones visuales por run.
+ * Devuelve [{ linea, mensaje }].
+ */
+export function analizarRotacionEnCapaTexto(contenido) {
+  const problemas = [];
+  const exentas = lineasExentas(contenido, 'capa-texto-sin-rotacion-por-run');
+  contenido.split('\n').forEach((linea, i) => {
+    const n = i + 1;
+    if (exentas.has(n)) return;
+    if (/^\s*(\/\/|\/?\*)/.test(linea)) return;
+    if (/\.rotation\b|\/Rotate\b|(?:===?\s*|case\s+)(?:90|180|270)\b/.test(linea)) {
+      problemas.push({ linea: n, mensaje: 'aritmética de rotación en TextLayer: usa la transformación del contenedor (PageGeometry.transformCapaSinGirar)' });
+    }
+    if (/geomVisual\.(ptToCss|cssToPt|rectPtToCss)\b/.test(linea)) {
+      problemas.push({ linea: n, mensaje: 'conversión visual por run en TextLayer: los runs se colocan con la geometría sin girar (sinGirar())' });
+    }
+  });
+  return problemas;
+}
+
+export const capaTextoSinRotacionPorRun = {
+  id: 'capa-texto-sin-rotacion-por-run',
+  titulo: 'TextLayer no calcula la rotación de página por run (E-063)',
+  comoArreglar:
+    'Dibuja los runs con geom.sinGirar() y deja que UNA transformación CSS del contenedor ' +
+    '(PageGeometry.transformCapaSinGirar) aplique el /Rotate. Calcular posición/tamaño de cada run ' +
+    'con la geometría visual deja cajas verticales con texto horizontal: se solapan y un clic edita otra línea.',
+  ejecutar() {
+    const rel = 'src/ui/TextLayer.ts';
+    if (!fs.existsSync(path.join(RAIZ, rel))) return [];
+    if (tieneDeuda(rel, this.id)) return [];
+    return analizarRotacionEnCapaTexto(leer(rel)).map((p) => hallazgo(rel, p.linea, p.mensaje));
+  }
+};
+
 /* ── E-062 · e2e:liberar debe cubrir todos los puertos del webServer ────── */
 /**
  * Analiza el texto de playwright.config.js y de scripts/liberar-puertos.mjs.
@@ -1215,6 +1254,7 @@ export const TODAS = [
   conDescompresionAcotada,
   conTextoPerezosoViaEditSession,
   geometriaSoloConFabrica,
+  capaTextoSinRotacionPorRun,
   conRegistroSinDuplicados,
   conPuertosE2eSincronizados
 ];

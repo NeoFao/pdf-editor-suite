@@ -2439,3 +2439,32 @@ mata el árbol, o a mano).
 `PUERTOS_E2E`, y ambos ficheros importan el módulo) con su test en `reglas.test.mjs`, y
 `scripts/procesos-e2e.test.mjs` (clasificación repo/ajeno/desconocido, ancestros protegidos y parsers, con
 datos falsos).
+
+### E-063 · En una página con `/Rotate` 90/270 las líneas editables se solapaban y un clic editaba OTRA línea
+
+**Síntoma.** Abrir un PDF normal, rotar una página 90° y hacer clic sobre el título: entraba en edición
+«Cuarta línea…» y al escribir se reescribía esa otra línea (el usuario no había tocado esa línea: AGENTS.md
+§2.3). Las cajas `.run` medían ~156×398, 312×395… en vez de ~16×400, el editor salía horizontal y desbordaba el
+visor. Con 180 las cajas no se pisaban, pero el texto de la capa seguía sin la rotación de la página.
+
+**Causa raíz.** E-053 arregló la fábrica de `PageGeometry`, pero `TextLayer` seguía colocando cada `.run` con la
+geometría VISUAL (`rectPtToCss` ya girada) y le daba `min-width`/`height`/`line-height` de esa caja visual.
+Con 90/270 la caja visual es vertical (estrecha y alta), pero el texto dentro seguía horizontal: la línea de
+texto (`white-space: pre`) crecía a lo ancho de su contenido, las cajas vecinas se pisaban y la última en el
+DOM ganaba el clic. Los tests de rotación de E-053 medían la caja del run, no el solape ni el clic, y su
+fixture contragira el texto (queda horizontal) así que el defecto no aparecía.
+
+**Arreglo.** La capa de texto se dibuja en coordenadas de la página SIN girar (`geom.sinGirar()`, px CSS de
+usuario) y UNA transformación CSS sobre el contenedor (`PageGeometry.transformCapaSinGirar`, derivada de
+`ptToCss`: 90 `matrix(0,1,-1,0,Hs,0)`, 180 `matrix(-1,0,0,-1,Ws,Hs)`, 270 `matrix(0,-1,1,0,0,Ws)`, origen 0 0)
+la lleva al espacio visual, igual que el canvas. Cada `.run` conserva su dirección de texto, su alto de línea
+y su editor sin cálculos por run. Lo que se mide en pantalla (arrastre con el tirador) pasa por
+`deltaVisualACapaSinGirar`, de la misma geometría. La selección de texto (T12), las anotaciones (T14) y los
+clics de fondo ya convertían de cliente a página con `getBoundingClientRect` del `.page` y la geometría
+visual, que no cambia, así que no dependen de la capa.
+
+**Cómo se detecta ahora.** `tests/e2e/next/capa-texto-rotada.spec.ts` (fixture `rotada-lineas.pdf`: /Rotate 90,
+270 y 180 con 4 líneas de texto normal; cajas sin solape, sobre los píxeles de su línea, clic al centro de la
+línea 3 edita la 3 y el PDF guardado conserva las demás), `tests/unit/PageGeometry.test.ts` (la matriz coincide
+con `ptToCss`) y la regla guard `capa-texto-sin-rotacion-por-run` (ni aritmética de rotación ni conversiones
+visuales por run dentro de `TextLayer.ts`).

@@ -64,6 +64,49 @@ export class PageGeometry {
     }
   }
 
+  /**
+   * Geometría de la MISMA página sin girar (rotación 0): px CSS del espacio de usuario, origen
+   * arriba-izq, tamaño `widthPt*scale` × `heightPt*scale`. Es el sistema en el que se dibujan las capas
+   * que no se calculan "por elemento" (E-063): se pintan aquí y UNA transformación CSS
+   * (`transformCapaSinGirar`) las lleva al espacio visual.
+   */
+  sinGirar(): PageGeometry {
+    return new PageGeometry(this.widthPt, this.heightPt, this.scale, 0);
+  }
+
+  /** Tamaño en px CSS de la página SIN girar (el de la capa que se dibuja con `sinGirar()`). */
+  tamanoCapaSinGirarCss(): { width: CssPx; height: CssPx } {
+    return { width: css(this.widthPt * this.scale), height: css(this.heightPt * this.scale) };
+  }
+
+  /**
+   * Matriz CSS `matrix(a,b,c,d,e,f)` (con `transform-origin: 0 0`) que lleva un punto de la capa sin
+   * girar (u,v: px CSS, origen arriba-izq) al visual (x,y: px CSS de la página girada):
+   * x = a·u + c·v + e, y = b·u + d·v + f. Se deduce de `ptToCss` (u = xPt·s, v = (H−yPt)·s):
+   * 90: x = yPt·s = Hs − v, y = xPt·s = u; 180: x = Ws − u, y = Hs − v; 270: x = (H−yPt)·s = v, y = Ws − u.
+   * Devuelve `null` en rotación 0 (identidad, no hace falta transformar).
+   */
+  transformCapaSinGirar(): string | null {
+    const Ws = this.widthPt * this.scale, Hs = this.heightPt * this.scale;
+    switch (this.rotation) {
+      case 0:   return null;
+      case 90:  return `matrix(0, 1, -1, 0, ${Hs}, 0)`;
+      case 180: return `matrix(-1, 0, 0, -1, ${Ws}, ${Hs})`;
+      case 270: return `matrix(0, -1, 1, 0, 0, ${Ws})`;
+    }
+  }
+
+  /**
+   * Desplazamiento visual (dx,dy px CSS de página, p. ej. el de un arrastre del ratón) → desplazamiento
+   * en la capa sin girar (px CSS). Pasa por pt PDF con las dos geometrías: nada de fórmulas ad hoc.
+   */
+  deltaVisualACapaSinGirar(dx: number, dy: number): { dx: CssPx; dy: CssPx } {
+    const o = this.cssToPt(0, 0), d = this.cssToPt(dx, dy);
+    const g = this.sinGirar();
+    const a = g.ptToCss(o.xPt, o.yPt), b = g.ptToCss(d.xPt, d.yPt);
+    return { dx: css(b.x - a.x), dy: css(b.y - a.y) };
+  }
+
   /** Caja PDF (origen abajo-izq) → caja CSS (origen arriba-izq), robusta a rotación. */
   rectPtToCss(r: RectPt): CssRect {
     const a = this.ptToCss(r.xPt, r.yPt);                 // esquina inferior-izq

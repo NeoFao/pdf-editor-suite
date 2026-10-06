@@ -44,9 +44,21 @@ export class TextLayer {
   constructor(
     private readonly host: HTMLElement,
     private readonly page: PageModel,
-    private readonly geom: PageGeometry,
+    geomVisual: PageGeometry,
     private readonly cb: TextLayerCallbacks
   ) {
+    // E-063: la capa se dibuja en el espacio de la página SIN girar (`geom`: px CSS de usuario, rotación 0)
+    // y UNA transformación CSS sobre el contenedor (`geomVisual.transformCapaSinGirar`) la lleva al espacio
+    // visual, igual que la rotación del canvas. Así cada `.run` conserva su dirección de texto, su alto de
+    // línea y su editor sin cálculos por run; solo lo que mide en pantalla (arrastre) pasa por la geometría.
+    this.geomVisual = geomVisual;
+    this.geom = geomVisual.sinGirar();
+    const { width, height } = geomVisual.tamanoCapaSinGirarCss();
+    Object.assign(host.style, {
+      position: 'absolute', inset: 'auto', left: '0px', top: '0px',
+      width: `${width}px`, height: `${height}px`,
+      transformOrigin: '0 0', transform: geomVisual.transformCapaSinGirar() ?? ''
+    });
     this.build();
   }
 
@@ -57,6 +69,10 @@ export class TextLayer {
    * El foco NO pinta nada en reposo salvo el anillo de `:focus-visible` (E-029).
    */
   private readonly bloques: HTMLElement[] = [];
+  /** Geometría visual de la página (con /Rotate): para convertir lo que se mide en pantalla (arrastres). */
+  private readonly geomVisual: PageGeometry;
+  /** Geometría de la página sin girar: la de las coordenadas de cada `.run` dentro de la capa. */
+  private readonly geom: PageGeometry;
 
   private moverTabstop(destino: HTMLElement | undefined): void {
     if (!destino) return;
@@ -228,8 +244,10 @@ export class TextLayer {
       const baseTop = parseFloat(block.style.top) || 0;
       registrarGesto({
         onMove: (ev) => {
-          block.style.left = `${baseLeft + (ev.clientX - startX)}px`;
-          block.style.top = `${baseTop + (ev.clientY - startY)}px`;
+          // El ratón mide en px CSS visuales; el bloque vive en la capa sin girar (E-063).
+          const d = this.geomVisual.deltaVisualACapaSinGirar(ev.clientX - startX, ev.clientY - startY);
+          block.style.left = `${baseLeft + d.dx}px`;
+          block.style.top = `${baseTop + d.dy}px`;
         },
         onUp: (ev) => {
           const dx = ev.clientX - startX, dy = ev.clientY - startY;
