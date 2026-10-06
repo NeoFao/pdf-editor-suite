@@ -2601,3 +2601,25 @@ lección de E-051), los campos `min-height: 40px`, y el panel es una hoja con `m
 orden, cajas dos a dos sin solape, `scrollWidth <= clientWidth` en cada control, altos >= 40 px, sin scroll
 horizontal, scroll vertical propio, todos los botones alcanzables con scroll y «Comprimir» abre su diálogo. Falla
 sin el arreglo (solapaba `btn-rect` con `btn-encabezado`). Sin regla guard: es maquetación, no un patrón de código.
+
+---
+
+### E-070 · La firma recién insertada aparecía fuera de pantalla y (dibujada) sin seleccionar
+
+**Síntoma.** Tras «Insertar firma» el estado decía «Firma insertada.» pero no se veía nada: con zoom alto o en
+una página alta la caja caía en y=1460 con el visor de 900 px y scroll 0. La firma dibujada ni siquiera quedaba
+seleccionada (solo la de imagen y la guardada), así que no se podía mover sin hacer scroll a mano.
+
+**Causa raíz.** La firma se centraba en la PÁGINA entera (`(ancho - w)/2`, 15 % desde abajo), no en lo que el
+usuario está mirando, y la ruta del pad (`openSignature`) tenía su propia copia de la colocación sin el paso de
+selección que sí tenía `colocarFirmaSeleccionada`. Dos rutas para lo mismo: una se arregló, otra no.
+
+**Arreglo.** Las tres rutas (dibujada, desde imagen, guardada) pasan por `colocarFirmaSeleccionada`, que centra
+la firma en el centro de la parte visible de la página (`Viewer.centroVisiblePt`: intersección página-visor en
+px CSS de viewport pasada a pt con la geometría de la página, acotada a la página), la selecciona y, si aun así
+queda fuera, desplaza el visor (`revelarRect`).
+
+**Cómo se detecta ahora.** `tests/e2e/next/firma-visible.spec.ts`: con zoom alto sobre `nativo.pdf` (dibujada,
+desde imagen y guardada) y a media página de `grande.pdf`, la caja `.image-box.selected` está entera dentro del
+visor. Fallaba antes (la dibujada no se seleccionaba; las otras desbordaban el visor). Sin regla guard: es
+colocación en pantalla, no un patrón de código.

@@ -32,10 +32,10 @@ test('firmar: dibujar en el pad e insertar lleva la firma al PDF descargado', as
   await download.saveAs(destino);
   const eng = await PdfiumEngine.create();
   const doc = await eng.open(new Uint8Array(fs.readFileSync(destino)));
-  // En la mitad inferior (donde se coloca la firma) debe haber trazo oscuro.
+  // Sin texto del documento por debajo del 40 % de la página: ahí (zona visible) cae la firma (E-070).
   const { width, height, data } = eng.renderPage(doc, 0, 1);
   let trazo = false;
-  for (let y = Math.floor(height * 0.55); y < height && !trazo; y++) {
+  for (let y = Math.floor(height * 0.4); y < height && !trazo; y++) {
     for (let x = 0; x < width; x++) {
       const i = (y * width + x) * 4;
       if (data[i]! < 100 && data[i+1]! < 100 && data[i+2]! < 100) { trazo = true; break; }

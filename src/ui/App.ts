@@ -1706,13 +1706,7 @@ export class App {
     if (!s || !this.bus) { this.setStatus('Abre un documento antes de firmar.'); return; }
     SignaturePad.open((rgba, imgWidth, imgHeight, guardar) => {
       const aviso = guardar ? this.guardarFirma(guardar.nombre, rgba, imgWidth, imgHeight) : null;
-      const page = s.model.pages[this.currentPage]!;
-      const wPt = Math.min(page.sizePt.widthPt * 0.4, 180);
-      const hPt = wPt * (imgHeight / imgWidth);
-      const xPt = (page.sizePt.widthPt - wPt) / 2;
-      const yPt = page.sizePt.heightPt * 0.15;
-      void this.bus!.execute(new InsertImageCmd(this.currentPage, { rgba, imgWidth, imgHeight, xPt, yPt, wPt, hPt }));
-      this.setStatus(aviso ? `Firma insertada. ${aviso}` : 'Firma insertada.');
+      void this.colocarFirmaSeleccionada(rgba, imgWidth, imgHeight, aviso ? `Firma insertada. ${aviso}` : 'Firma insertada.');
     });
   }
 
@@ -1764,8 +1758,16 @@ export class App {
     const page = s.model.pages[this.currentPage]!;
     const wPt = Math.min(page.sizePt.widthPt * 0.4, 180);
     const hPt = wPt * (height / width);
-    const xPt = (page.sizePt.widthPt - wPt) / 2;
-    const yPt = page.sizePt.heightPt * 0.15;
+    // Centrada en la parte VISIBLE de la página (E-070), no en el centro de la página entera: con
+    // zoom o en una página alta ese centro queda fuera del visor. Puntos PDF de usuario (origen
+    // abajo-izq); sin parte visible, se cae al sitio de siempre (centrada, 15 % desde abajo).
+    const girada = page.rotation === 90 || page.rotation === 270;
+    const anchoUsuarioPt = girada ? page.sizePt.heightPt : page.sizePt.widthPt;
+    const altoUsuarioPt = girada ? page.sizePt.widthPt : page.sizePt.heightPt;
+    const centro = this.viewer?.centroVisiblePt(this.currentPage) ?? null;
+    const acotar = (v: number, max: number): number => Math.max(0, Math.min(v, Math.max(0, max)));
+    const xPt = acotar(centro ? centro.xPt - wPt / 2 : (anchoUsuarioPt - wPt) / 2, anchoUsuarioPt - wPt);
+    const yPt = acotar(centro ? centro.yPt - hPt / 2 : altoUsuarioPt * 0.15, altoUsuarioPt - hPt);
     await this.bus.execute(new InsertImageCmd(this.currentPage, { rgba, imgWidth: width, imgHeight: height, xPt, yPt, wPt, hPt }));
     const imagenes = s.engine.listImageObjects(s.doc, this.currentPage);
     const insertada = imagenes.reduce((max, im) => (im.objIndex > max.objIndex ? im : max), imagenes[0]!);
@@ -1773,6 +1775,9 @@ export class App {
     this.selection = null;
     this.reflectPropsPanel();
     this.viewer?.selectImage(this.currentPage, insertada.objIndex);
+    // Red de seguridad: si no había parte visible (o la caja desborda el borde), desplaza el visor.
+    const rect = { xPt, yPt, wPt, hPt };
+    if (!this.viewer?.rectVisible(this.currentPage, rect)) this.viewer?.revelarRect(this.currentPage, rect);
     this.setStatus(estado);
   }
 
