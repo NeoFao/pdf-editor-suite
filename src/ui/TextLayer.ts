@@ -173,6 +173,17 @@ export class TextLayer {
         block.contentEditable = 'true';
         block.setAttribute('aria-readonly', 'false');
         block.focus();
+        // E-064: `focus()` solo coloca el cursor dentro si NO había ya una selección en el documento; tras la
+        // primera edición quedaba una selección colapsada en otro nodo y la segunda línea recibía el foco sin
+        // cursor (Ctrl+A seleccionaba la página y lo tecleado no llegaba). Se fija el cursor al inicio.
+        const sel = window.getSelection();
+        if (sel) {
+          const rango = document.createRange();
+          rango.selectNodeContents(block);
+          rango.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(rango);
+        }
       };
       block.addEventListener('click', (e) => {
         e.stopPropagation();

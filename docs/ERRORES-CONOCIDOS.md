@@ -2476,3 +2476,22 @@ objeto de texto) permite editar la línea girada sobre su origen (`rotate(-ángu
 EXACTAMENTE la línea (`width` fijo + `overflow: clip`): con `min-width` el texto horizontal desbordaba la caja
 girada y volvía a taparse con sus vecinas (lo vio `anotaciones-seleccion.spec.ts`, caso /Rotate). (2) Solo se
 tratan múltiplos de 90°; otros ángulos se siguen editando como horizontales (limitación previa, E-030).
+
+### E-064 · La segunda línea que se edita en una misma sesión no recibía lo tecleado
+
+**Síntoma.** Editar una línea (clic, teclear, Enter) y a continuación otra: la segunda pasaba a `editing` y
+conservaba el foco, pero Ctrl+A seleccionaba la página entera y lo tecleado no llegaba a la línea (el texto
+nuevo se perdía sin aviso). Ocurría también en `main`, con Enter, con un clic fuera y con Tab; la primera
+edición de cada carga funcionaba, por eso ningún test lo vio.
+
+**Causa raíz.** `empezarEdicion` solo llamaba a `block.focus()`. En un `contenteditable`, `focus()` coloca el
+cursor dentro únicamente si el documento no tiene ya una selección; tras la primera edición quedaba una
+selección colapsada en otro nodo (`.run` de reposo, `user-select: none`), así que el elemento tenía el foco
+pero el cursor seguía fuera de él.
+
+**Arreglo.** Al entrar en edición se fija la selección explícitamente dentro del bloque (rango colapsado al
+inicio), después de `focus()`.
+
+**Cómo se detecta ahora.** `tests/e2e/next/edicion-consecutiva.spec.ts`: abre `nativo.pdf`, edita las líneas 2 y 4
+seguidas confirmando con Enter, con clic fuera y con Tab, y comprueba con el motor que ambas tienen el texto nuevo
+y el resto no cambia (falla en `main` sin el arreglo). Sin regla guard: no hay patrón estático fiable.
