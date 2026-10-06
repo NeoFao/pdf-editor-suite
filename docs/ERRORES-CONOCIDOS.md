@@ -2552,3 +2552,29 @@ resaltados y coincidencia actual.
 
 **Cómo se detecta ahora.** `tests/e2e/next/busqueda-navegacion.spec.ts` (grande.pdf y rotada-lineas.pdf) y
 `tests/unit/iteradorCoincidencias.test.ts`. Sin regla guard: es una funcionalidad ausente, no un patrón de código.
+
+### E-068 · "Duplicar" (y subir/bajar) con la CPU cargada dejaba la página actual en OTRA: el "flaky" de `pagina-actual-mover` era una carrera real
+
+**Síntoma.** `pagina-actual-mover.spec.ts` fallaba de forma intermitente (esperaba «3 / 4», recibía «4 / 4»;
+«4 / 5» → «5 / 5» en Duplicar). Con la CPU normal 0 de 280 ejecuciones; con `Emulation.setCPUThrottlingRate=6`
+fallaba ~1 de cada 6 en «Duplicar» (8 de 84). No es un test inestable: es E-065 con otro disparador, y el
+usuario real lo sufre en un equipo lento (la acción siguiente, p. ej. «Eliminar página», actúa sobre otra página).
+
+**Causa raíz (orden de eventos medido, ms desde la carga).**
+`rebuild 4972 → goToPage 6467 / scrollToPage 6467 → IO best=2 6616 → finishProg 6696 (temporizador de 150 ms,
+SIN haber visto ningún scroll) → scroll prog=false 6698 → PIN->null → IO best=4 → currentPage=4`.
+`scrollToPage` armaba un temporizador de 150 ms para cerrar la ventana de "scroll programático"; con la CPU
+cargada el primer evento `scroll` del `scrollIntoView` suave llegó DESPUÉS (183 ms). Esos eventos se leyeron
+como scroll del usuario, liberaron el pin (`pinnedPage`) y el `IntersectionObserver` eligió "la más visible"
+(la A4 de al lado, con páginas de tamaños mixtos). Distinguir scroll programático de scroll del usuario por
+**tiempo** es una carrera; el `rebuild` y el orden `goToPage`-tras-comando eran correctos (síncronos).
+
+**Arreglo.** `Viewer.scrollToPage` calcula el `scrollTop` de destino (`pinTop`, acotado al máximo). Si ya está
+ahí no arma nada (no habrá scroll). Si no, la espera hasta el primer evento es larga (1500 ms) y solo después
+se debouncea a 150 ms; el scroll programático se cierra al LLEGAR a `pinTop` (o por `scrollend`). Un evento
+de scroll no programático que deja el visor en `pinTop` (p. ej. el del vaciado del DOM en `rebuild`) no libera
+el pin; uno que lo deja en otro sitio sí (usuario real). Decisión por posición, no por reloj.
+
+**Cómo se detecta ahora.** `tests/e2e/next/pagina-actual-mover.spec.ts`, bloque «E-068», corre «Duplicar»,
+«Subir» y «Bajar» con la CPU ralentizada x6 por CDP (siempre, sin variable de entorno); sin el arreglo falla.
+Sin regla guard: no hay patrón estático fiable (un `setTimeout` es legítimo en general).
