@@ -879,7 +879,13 @@ export class PdfiumEngine implements PdfEngine {
       if (!this.p.FPDFPage_RemoveObject(page, a.obj)) continue;
       this.p.FPDFPageObj_Destroy(a.obj);
     }
-    if (delta !== 0) for (const o of sufijo) this.p.FPDFPageObj_Transform(o, 1, 0, 0, 1, delta * cos, delta * sin);
+    if (delta !== 0 && sufijo.length > 0) {
+      // F4: los marcados que cubren el sufijo viajan con él. La zona se mide ANTES de mover (caja unida de sus objetos).
+      const zona = this.cajaUnida(sufijo);
+      for (const o of sufijo) this.p.FPDFPageObj_Transform(o, 1, 0, 0, 1, delta * cos, delta * sin);
+      const emPt = sizeP * Math.hypot(matP[0], matP[1]);
+      this.trasladarMarcadosSobre(page, zona, { cos, sin, uInicio: finViejoU, emPt }, delta * cos, delta * sin);
+    }
 
     // Índice del primer objeto de la línea tras los borrados (los de índice menor lo desplazan).
     const eraPrimero = i0 === 0 && medioNuevo !== '' ? objEscrito : primeroLinea;
@@ -888,6 +894,91 @@ export class PdfiumEngine implements PdfEngine {
     for (let i = 0; i < total; i++) if (this.p.FPDFPage_GetObject(page, i) === eraPrimero) { lineaRunIdInicial = i; break; }
     this.p.FPDFPage_GenerateContent(page);
     return { ok: true, lineaRunIdInicial, dxPt: delta, ...(fuenteEstandar ? { fuenteEstandar } : {}) };
+  }
+
+  /** Caja unida (pt de usuario) de varios objetos de página: `FPDFPageObj_GetBounds`. */
+  private cajaUnida(objs: readonly number[]): { l: number; b: number; r: number; t: number } {
+    const m = this.mem;
+    const buf = m.malloc(16);
+    let l = Infinity, b = Infinity, r = -Infinity, t = -Infinity;
+    try {
+      for (const o of objs) {
+        if (!this.p.FPDFPageObj_GetBounds(o, buf, buf + 4, buf + 8, buf + 12)) continue;
+        l = Math.min(l, m.getValue(buf, 'float')); b = Math.min(b, m.getValue(buf + 4, 'float'));
+        r = Math.max(r, m.getValue(buf + 8, 'float')); t = Math.max(t, m.getValue(buf + 12, 'float'));
+      }
+    } finally {
+      m.free(buf);
+    }
+    return { l, b, r, t };
+  }
+
+  /**
+   * Traslada (dx, dy) pt de usuario los marcados (resaltado, subrayado, tachado) cuyos quads cubren la `zona` del sufijo
+   * de una línea editada (N1 F4). Un quad entra si su centro cae en la zona (caja del sufijo ANTES de moverlo) y no
+   * empieza antes del final viejo del tramo editado (`uInicio`, en el eje de `cos`/`sin`) más de 1,5 em: un marcado
+   * que abarca también lo editado (p. ej. la línea entera) se queda; uno que solo roza el límite (la palabra cuyo
+   * primer glifo entró en el tramo reescrito) viaja. Marcas de otras líneas, notas, enlaces y
+   * demás anotaciones no se tocan. Se regenera la apariencia (`/AP`) y `/Rect`.
+   */
+  private trasladarMarcadosSobre(
+    page: number,
+    zona: { l: number; b: number; r: number; t: number },
+    eje: { cos: number; sin: number; uInicio: number; emPt: number },
+    dx: number,
+    dy: number
+  ): void {
+    if (!Number.isFinite(zona.l)) return;
+    const m = this.mem;
+    const n = this.p.FPDFPage_GetAnnotCount(page);
+    const qptr = m.malloc(32);
+    const rptr = m.malloc(16);
+    try {
+      for (let i = 0; i < n; i++) {
+        const annot = this.p.FPDFPage_GetAnnot(page, i);
+        if (!annot) continue;
+        try {
+          const sub = this.p.FPDFAnnot_GetSubtype(annot);
+          if (sub !== FPDF_ANNOT_HIGHLIGHT && sub !== FPDF_ANNOT_UNDERLINE && sub !== FPDF_ANNOT_STRIKEOUT) continue;
+          const nq = this.p.FPDFAnnot_CountAttachmentPoints(annot);
+          const mover: number[] = [];
+          for (let k = 0; k < nq; k++) {
+            if (!this.p.FPDFAnnot_GetAttachmentPoints(annot, k, qptr)) continue;
+            const q = Array.from({ length: 8 }, (_, j) => m.getValue(qptr + j * 4, 'float'));
+            const cx = (q[0]! + q[2]! + q[4]! + q[6]!) / 4, cy = (q[1]! + q[3]! + q[5]! + q[7]!) / 4;
+            const uMin = Math.min(...[0, 2, 4, 6].map((j) => q[j]! * eje.cos + q[j + 1]! * eje.sin));
+            const dentro = cx >= zona.l - 0.5 && cx <= zona.r + 0.5 && cy >= zona.b - 0.5 && cy <= zona.t + 0.5;
+            if (dentro && uMin >= eje.uInicio - 1.5 * eje.emPt) mover.push(k);
+          }
+          if (mover.length === 0) continue;
+          for (const k of mover) {
+            this.p.FPDFAnnot_GetAttachmentPoints(annot, k, qptr);
+            for (let j = 0; j < 8; j += 2) {
+              m.setValue(qptr + j * 4, m.getValue(qptr + j * 4, 'float') + dx, 'float');
+              m.setValue(qptr + (j + 1) * 4, m.getValue(qptr + (j + 1) * 4, 'float') + dy, 'float');
+            }
+            this.p.FPDFAnnot_SetAttachmentPoints(annot, k, qptr);
+          }
+          // /Rect = envolvente de TODOS los quads (los movidos y los que no).
+          let l = Infinity, b = Infinity, r = -Infinity, t = -Infinity;
+          for (let k = 0; k < nq; k++) {
+            if (!this.p.FPDFAnnot_GetAttachmentPoints(annot, k, qptr)) continue;
+            for (let j = 0; j < 8; j += 2) {
+              const x = m.getValue(qptr + j * 4, 'float'), y = m.getValue(qptr + (j + 1) * 4, 'float');
+              l = Math.min(l, x); r = Math.max(r, x); b = Math.min(b, y); t = Math.max(t, y);
+            }
+          }
+          m.setValue(rptr, l, 'float'); m.setValue(rptr + 4, t, 'float'); m.setValue(rptr + 8, r, 'float'); m.setValue(rptr + 12, b, 'float');
+          this.p.FPDFAnnot_SetRect(annot, rptr);
+          this.p.EPDFAnnot_GenerateAppearance(annot);
+        } finally {
+          this.p.FPDFPage_CloseAnnot(annot);
+        }
+      }
+    } finally {
+      m.free(qptr);
+      m.free(rptr);
+    }
   }
 
   /**
