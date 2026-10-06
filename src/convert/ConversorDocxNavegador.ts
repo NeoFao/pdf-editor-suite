@@ -1,5 +1,6 @@
 import type { ConversorDocumento, ResultadoConversion } from './ConversorDocumento';
 import type { PdfEngine, DocHandle, PageOp } from '../engine/PdfEngine';
+import { omitido, type Advertencia } from './advertencia';
 import { abrirZip } from './docx/zip';
 import { DocxError } from './docx/DocxError';
 import { construirModeloDocx } from './docx/modelo';
@@ -132,14 +133,14 @@ export class ConversorDocxNavegador implements ConversorDocumento {
    */
   private async resolverImagenes(
     zip: ReturnType<typeof abrirZip>, imagenes: ImagenColocada[]
-  ): Promise<{ rgbaPorId: Map<string, { rgba: Uint8Array; width: number; height: number }>; advertenciasImagenes: string[] }> {
+  ): Promise<{ rgbaPorId: Map<string, { rgba: Uint8Array; width: number; height: number }>; advertenciasImagenes: Advertencia[] }> {
     const rgbaPorId = new Map<string, { rgba: Uint8Array; width: number; height: number }>();
-    const advertenciasImagenes: string[] = [];
+    const advertenciasImagenes: Advertencia[] = [];
     const idsUnicos = [...new Set(imagenes.map((i) => i.imgId))];
     for (const id of idsUnicos) {
       const bytesImagen = await zip.leer(id);
       if (!bytesImagen) {
-        advertenciasImagenes.push(`No se pudo insertar una imagen del documento (no se encontró "${id}" dentro del paquete).`);
+        advertenciasImagenes.push(omitido(`No se pudo insertar una imagen del documento (no se encontró "${id}" dentro del paquete).`));
         continue;
       }
       const resultado: ResultadoImagenDocx = await decodificarImagenDocx(bytesImagen);
@@ -147,7 +148,7 @@ export class ConversorDocxNavegador implements ConversorDocumento {
         const motivo = resultado.razon === 'demasiado-grande' ? 'demasiado grande'
           : resultado.razon === 'formato-no-soportado' ? 'formato no soportado (solo PNG y JPEG en esta fase)'
             : 'no se pudo decodificar (archivo dañado o variante no soportada)';
-        advertenciasImagenes.push(`No se pudo insertar una imagen del documento (${motivo}).`);
+        advertenciasImagenes.push(omitido(`No se pudo insertar una imagen del documento (${motivo}).`));
         continue;
       }
       rgbaPorId.set(id, resultado.imagen);

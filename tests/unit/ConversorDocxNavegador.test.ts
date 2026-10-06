@@ -1,3 +1,4 @@
+import { textosAdvertencias } from '../../src/convert/advertencia';
 import { test, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -61,8 +62,8 @@ test('word-tabla-imagen.docx: la tabla sale como rejilla real y la imagen como o
   const { pdf, advertencias } = await conversor.convertir('word-tabla-imagen.docx', leerFixture('word-tabla-imagen.docx'));
 
   // Ya no se aplana: ninguna advertencia debe mencionar la tabla ni la imagen inline como omitidas.
-  expect(advertencias.some((a) => /tabla/i.test(a))).toBe(false);
-  expect(advertencias.some((a) => /imagen/i.test(a))).toBe(false);
+  expect(advertencias.some((a) => /tabla/i.test(a.mensaje))).toBe(false);
+  expect(advertencias.some((a) => /imagen/i.test(a.mensaje))).toBe(false);
 
   const doc = await engine.open(pdf);
   const runs = engine.getPageText(doc, 0);
@@ -93,9 +94,9 @@ test('word-completo.docx: tabla con encabezado/combinación/sombreado, imagen y 
   const { pdf, advertencias } = await conversor.convertir('word-completo.docx', leerFixture('word-completo.docx'));
 
   // El enlace javascript: se avisa; ni tabla ni imagen generan advertencia.
-  expect(advertencias.some((a) => /enlace/i.test(a))).toBe(true);
-  expect(advertencias.some((a) => /tabla/i.test(a))).toBe(false);
-  expect(advertencias.some((a) => /imagen/i.test(a))).toBe(false);
+  expect(advertencias.some((a) => /enlace/i.test(a.mensaje))).toBe(true);
+  expect(advertencias.some((a) => /tabla/i.test(a.mensaje))).toBe(false);
+  expect(advertencias.some((a) => /imagen/i.test(a.mensaje))).toBe(false);
 
   const doc = await engine.open(pdf);
   const runs = engine.getPageText(doc, 0);
@@ -139,7 +140,7 @@ test('word-jpeg.docx en Node (sin createImageBitmap): la imagen NO se pierde en 
   const engine = await PdfiumEngine.create();
   const conversor = new ConversorDocxNavegador(engine);
   const { pdf, advertencias } = await conversor.convertir('word-jpeg.docx', leerFixture('word-jpeg.docx'));
-  expect(advertencias.join(' | ')).toMatch(/imagen/i);
+  expect(textosAdvertencias(advertencias).join(' | ')).toMatch(/imagen/i);
   const doc = await engine.open(pdf);
   expect(engine.listImageObjects(doc, 0)).toHaveLength(0);
   expect(engine.getPageText(doc, 0).map((r) => r.text).join(' ')).toContain('JPEG');
@@ -201,8 +202,8 @@ test('word-encabezados.docx: el título que caería solo al pie de la página 1 
 test('word-flotante.docx: la imagen flotante se coloca en su posición de página (72 pt, 144 pt desde arriba) y se avisa "sin ajuste de texto"', async () => {
   const engine = await PdfiumEngine.create();
   const { pdf, advertencias } = await new ConversorDocxNavegador(engine).convertir('word-flotante.docx', leerFixture('word-flotante.docx'));
-  expect(advertencias.join(' | ')).toMatch(/imagen flotante colocada sin ajuste de texto/i);
-  expect(advertencias.join(' | ')).not.toMatch(/omiti/i);
+  expect(textosAdvertencias(advertencias).join(' | ')).toMatch(/imagen flotante colocada sin ajuste de texto/i);
+  expect(textosAdvertencias(advertencias).join(' | ')).not.toMatch(/omiti/i);
 
   const doc = await engine.open(pdf);
   const imagenes = engine.listImageObjects(doc, 0);

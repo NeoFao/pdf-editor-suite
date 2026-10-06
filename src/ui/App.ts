@@ -1,3 +1,4 @@
+import { agruparAdvertencias, type Advertencia, type TipoAdvertencia } from '../convert/advertencia';
 import { PdfiumEngine } from '../engine/pdfium/PdfiumEngine';
 import { EditSession } from '../model/EditSession';
 import { CommandBus } from '../commands/Command';
@@ -211,7 +212,8 @@ export class App {
   private readonly status: HTMLElement;
   /** Aviso visible (no solo `#status`/consola) con las advertencias de una conversión Word/Markdown -> PDF (§9 fila #4: "no se pierde en silencio"). Oculto (`hidden`) cuando no hay advertencias pendientes. */
   private readonly avisoConversionEl: HTMLElement;
-  private readonly avisoConversionLista: HTMLElement;
+  /** Dos grupos (T13): `omitido` (no está en el PDF) y `aproximado` (está, pero distinto). Cada uno con su encabezado y lista; un grupo vacío se oculta. */
+  private readonly avisoGrupos: Record<TipoAdvertencia, { seccion: HTMLElement; lista: HTMLElement }>;
   private readonly pageIndicator: HTMLElement;
   private readonly btnInsert: HTMLButtonElement;
   private readonly btnPen: HTMLButtonElement;
@@ -647,7 +649,7 @@ export class App {
     const avisoCabecera = document.createElement('div');
     avisoCabecera.className = 'conversion-warnings-header';
     const avisoTitulo = document.createElement('strong');
-    avisoTitulo.textContent = 'La conversión omitió algo del documento original:';
+    avisoTitulo.textContent = 'Avisos de la conversión';
     const avisoCerrar = document.createElement('button');
     avisoCerrar.type = 'button';
     avisoCerrar.id = 'conversion-warnings-close';
@@ -657,9 +659,24 @@ export class App {
     avisoCerrar.setAttribute('aria-label', 'Cerrar aviso de advertencias de conversión');
     avisoCerrar.addEventListener('click', () => { this.avisoConversionEl.hidden = true; });
     avisoCabecera.append(avisoTitulo, avisoCerrar);
-    this.avisoConversionLista = document.createElement('ul');
-    this.avisoConversionLista.className = 'conversion-warnings-list';
-    this.avisoConversionEl.append(avisoCabecera, this.avisoConversionLista);
+    const grupo = (tipo: TipoAdvertencia, titulo: string): { seccion: HTMLElement; lista: HTMLElement } => {
+      const seccion = document.createElement('section');
+      seccion.className = 'conversion-warnings-group';
+      seccion.dataset.tipo = tipo;
+      seccion.hidden = true;
+      const tituloEl = document.createElement('strong');
+      tituloEl.className = 'conversion-warnings-group-title';
+      tituloEl.textContent = titulo;
+      const lista = document.createElement('ul');
+      lista.className = 'conversion-warnings-list';
+      seccion.append(tituloEl, lista);
+      return { seccion, lista };
+    };
+    this.avisoGrupos = {
+      omitido: grupo('omitido', 'No se pudo incluir:'),
+      aproximado: grupo('aproximado', 'Incluido con diferencias:')
+    };
+    this.avisoConversionEl.append(avisoCabecera, this.avisoGrupos.omitido.seccion, this.avisoGrupos.aproximado.seccion);
     rootEl.appendChild(this.avisoConversionEl);
 
     this.activarPestana(leerPestanaGuardada() ?? 'editar');
@@ -1027,14 +1044,21 @@ export class App {
   }
 
   /** Rellena y muestra el aviso visible de advertencias de conversión (ver el campo `avisoConversionEl`). */
-  private mostrarAvisoConversion(advertencias: string[]): void {
-    this.avisoConversionLista.textContent = '';
-    for (const texto of advertencias) {
-      const li = document.createElement('li');
-      li.textContent = texto;
-      this.avisoConversionLista.appendChild(li);
-    }
-    this.avisoConversionEl.hidden = false;
+  private mostrarAvisoConversion(advertencias: Advertencia[]): void {
+    const { omitidas, aproximadas } = agruparAdvertencias(advertencias);
+    const rellenar = (tipo: TipoAdvertencia, items: Advertencia[]): void => {
+      const { seccion, lista } = this.avisoGrupos[tipo];
+      lista.textContent = '';
+      for (const a of items) {
+        const li = document.createElement('li');
+        li.textContent = a.mensaje;
+        lista.appendChild(li);
+      }
+      seccion.hidden = items.length === 0;
+    };
+    rellenar('omitido', omitidas);
+    rellenar('aproximado', aproximadas);
+    this.avisoConversionEl.hidden = advertencias.length === 0;
   }
 
   /** Decodifica una imagen a RGBA usando el canvas del navegador. */

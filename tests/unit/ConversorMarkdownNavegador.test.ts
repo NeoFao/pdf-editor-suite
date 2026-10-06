@@ -1,3 +1,4 @@
+import { textosAdvertencias } from '../../src/convert/advertencia';
 import { test, expect } from 'vitest';
 import { PdfiumEngine } from '../../src/engine/pdfium/PdfiumEngine';
 import { ConversorMarkdownNavegador } from '../../src/convert/ConversorMarkdownNavegador';
@@ -82,7 +83,7 @@ test('un enlace con esquema rechazado devuelve una advertencia visible (con la U
   const md = '[bien](https://example.com) y [mal](javascript:void0) y [rel](pagina.html)';
   const { advertencias } = await conversor.convertir('e.md', new TextEncoder().encode(md));
   expect(advertencias).toHaveLength(2);
-  expect(advertencias.join(' | ')).toContain('javascript:void0');
-  expect(advertencias.join(' | ')).toContain('pagina.html');
-  expect(advertencias.join(' | ')).not.toContain('https://example.com');
+  expect(textosAdvertencias(advertencias).join(' | ')).toContain('javascript:void0');
+  expect(textosAdvertencias(advertencias).join(' | ')).toContain('pagina.html');
+  expect(textosAdvertencias(advertencias).join(' | ')).not.toContain('https://example.com');
 });

@@ -1,3 +1,4 @@
+import { textosAdvertencias } from '../../src/convert/advertencia';
 import { test, expect } from 'vitest';
 import { construirModeloDocx, esParrafo, esTabla, type Parrafo, type Tabla } from '../../src/convert/docx/modelo';
 
@@ -25,7 +26,7 @@ test('encabezados/pies: default y first resueltos vía rels, márgenes de encabe
   expect(m.tituloPagina).toBe(true);
   expect(m.margenEncabezadoPt).toBe(36); // 720 twips
   expect(m.margenPiePt).toBe(18); // 360 twips
-  expect(m.advertencias.join(' | ')).not.toMatch(/encabezado|pie de página/i);
+  expect(textosAdvertencias(m.advertencias).join(' | ')).not.toMatch(/encabezado|pie de página/i);
 });
 
 test('sin w:titlePg el tipo first existe pero no se usa; evenAndOddHeaders se lee de settings.xml', () => {
@@ -44,7 +45,7 @@ test('márgenes de encabezado/pie por defecto de Word (0,5" = 36 pt) si w:pgMar 
 
 test('una referencia cuyo contenido no está en el paquete se avisa (encabezado y pie), no se pierde en silencio', () => {
   const m = construirModeloDocx(cuerpo(sect('')), null, null, REL_CAB, { partes: {} });
-  const a = m.advertencias.join(' | ');
+  const a = textosAdvertencias(m.advertencias).join(' | ');
   expect(a).toMatch(/encabezado/i);
   expect(a).toMatch(/pie de página/i);
   expect(m.encabezados.default).toBeNull();
@@ -61,7 +62,7 @@ test('campos PAGE y NUMPAGES: en w:fldSimple y en w:fldChar/w:instrText, con el 
   expect(textos(m.pies.default)).toEqual(['Página ', '{PAGE}', ' de ', '{NUMPAGES}']);
   const campoPage = m.pies.default![0]!.partes.find((x) => x.tipo === 'campo')!;
   expect(campoPage.tipo === 'campo' && campoPage.formato.font).toBe('Helvetica-Bold');
-  expect(m.advertencias.join(' | ')).not.toMatch(/campo/i);
+  expect(textosAdvertencias(m.advertencias).join(' | ')).not.toMatch(/campo/i);
 });
 
 test('un campo no soportado (DATE) deja su último valor guardado y se AVISA; en el cuerpo, PAGE también (solo se resuelve en encabezado/pie)', () => {
@@ -72,7 +73,7 @@ test('un campo no soportado (DATE) deja su último valor guardado y se AVISA; en
   );
   expect(textos(m.pies.default)).toEqual(['01/01/2026']);
   expect(textos(soloP(m))).toEqual(['1']);
-  expect(m.advertencias.join(' | ')).toMatch(/campo/i);
+  expect(textosAdvertencias(m.advertencias).join(' | ')).toMatch(/campo/i);
 });
 
 test('referencias de secciones anteriores que no se usan se avisan; la última sección hereda el tipo que no define', () => {
@@ -84,14 +85,14 @@ test('referencias de secciones anteriores que no se usan se avisan; la última s
   const m = construirModeloDocx(doc, null, null, REL_CAB, { partes: PARTES });
   expect(textos(m.encabezados.default)).toEqual(['cab primera']); // la última sección manda
   expect(textos(m.encabezados.even)).toEqual(['cab primera']); // no la define: hereda el `even` de la anterior (header2)
-  expect(m.advertencias.join(' | ')).toMatch(/secciones/i);
+  expect(textosAdvertencias(m.advertencias).join(' | ')).toMatch(/secciones/i);
 });
 
 test('imagen dentro de un encabezado se omite con aviso (aún no soportada ahí)', () => {
   const cab = '<w:hdr><w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="914400"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rIdI"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r><w:r><w:t>logo</w:t></w:r></w:p></w:hdr>';
   const m = construirModeloDocx(cuerpo(sect('')), null, null, REL_CAB, { partes: { ...PARTES, 'word/header1.xml': cab } });
   expect(textos(m.encabezados.default)).toEqual(['logo']);
-  expect(m.advertencias.join(' | ')).toMatch(/imagen.*(encabezado|pie)/i);
+  expect(textosAdvertencias(m.advertencias).join(' | ')).toMatch(/imagen.*(encabezado|pie)/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -148,7 +149,7 @@ test('w:tcBorders: lados por celda, w:sz en OCTAVOS de punto (24 → 3 pt), colo
 test('un estilo de borde que no es línea continua (doble, punteado) se dibuja continuo y se AVISA', () => {
   const doc = '<w:document><w:body><w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:tcPr><w:tcBorders><w:top w:val="dotted" w:sz="8"/></w:tcBorders></w:tcPr><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>';
   const m = construirModeloDocx(doc, null, null);
-  expect(m.advertencias.join(' | ')).toMatch(/borde/i);
+  expect(textosAdvertencias(m.advertencias).join(' | ')).toMatch(/borde/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -166,8 +167,8 @@ test('imagen flotante (wp:anchor): se coloca (posOffset EMU → pt) y se avisa "
   const img = soloP(m)[0]!.partes.find((x) => x.tipo === 'imagen')!;
   expect(img).toMatchObject({ tipo: 'imagen', refId: 'word/media/image1.png', wPt: 72, hPt: 36 });
   expect(img.tipo === 'imagen' && img.flotante).toEqual({ h: { rel: 'page', offsetPt: 72 }, v: { rel: 'margin', offsetPt: -10 } });
-  expect(m.advertencias.join(' | ')).toMatch(/imagen flotante colocada sin ajuste de texto/i);
-  expect(m.advertencias.join(' | ')).not.toMatch(/omiti/i);
+  expect(textosAdvertencias(m.advertencias).join(' | ')).toMatch(/imagen flotante colocada sin ajuste de texto/i);
+  expect(textosAdvertencias(m.advertencias).join(' | ')).not.toMatch(/omiti/i);
 });
 
 test('wp:align y relativeFrom (leftMargin/paragraph/column) se mapean; relativeFrom desconocido cae a margen', () => {
@@ -182,5 +183,5 @@ test('wp:align y relativeFrom (leftMargin/paragraph/column) se mapean; relativeF
 test('imagen flotante dentro de una celda: se omite con aviso de imagen en celda', () => {
   const doc = `<w:document><w:body><w:tbl><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid><w:tr><w:tc><w:p><w:r>${ancla('page|<wp:posOffset>0</wp:posOffset>', 'page|<wp:posOffset>0</wp:posOffset>')}</w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>`;
   const m = construirModeloDocx(doc, null, null, RELS_IMG);
-  expect(m.advertencias.join(' | ')).toMatch(/imagen.*celda/i);
+  expect(textosAdvertencias(m.advertencias).join(' | ')).toMatch(/imagen.*celda/i);
 });

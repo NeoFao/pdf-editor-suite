@@ -1,3 +1,4 @@
+import { aproximado, type Advertencia } from '../advertencia';
 import { esParrafo, esTabla, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type Borde, type BordesTabla, type ZonaPaginaModelo } from './modelo';
 import {
   wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona,
@@ -383,14 +384,14 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
   ];
 }
 
-function mensajesTabla(av: AvisosTabla): string[] {
-  const out: string[] = [];
+function mensajesTabla(av: AvisosTabla): Advertencia[] {
+  const out: Advertencia[] = [];
   const c = (n: number, uno: string, varios: string): string => (n === 1 ? uno : varios.replace('{n}', String(n)));
-  if (av.filasPartidas > 0) out.push(c(av.filasPartidas, 'Una fila de tabla era más alta que una página y se partió por líneas entre páginas.', '{n} filas de tabla eran más altas que una página y se partieron por líneas entre páginas.'));
-  if (av.mergeDemasiadoAlto > 0) out.push(c(av.mergeDemasiadoAlto, 'Una fila con celdas combinadas verticalmente es más alta que una página y no se pudo partir: parte de su contenido puede quedar fuera de la página.', '{n} filas con celdas combinadas verticalmente son más altas que una página y no se pudieron partir: parte de su contenido puede quedar fuera de la página.'));
-  if (av.gridAmpliado > 0) out.push(c(av.gridAmpliado, 'Una tabla tenía filas con más celdas que columnas en su rejilla; se ampliaron las columnas (72 pt cada una) para no perder celdas.', '{n} tablas tenían filas con más celdas que columnas en su rejilla; se ampliaron las columnas (72 pt cada una) para no perder celdas.'));
-  if (av.anchoEscalado > 0) out.push(c(av.anchoEscalado, 'Una tabla más ancha que la página se escaló proporcionalmente al ancho útil.', '{n} tablas más anchas que la página se escalaron proporcionalmente al ancho útil.'));
-  if (av.saltoEnZona > 0) out.push(c(av.saltoEnZona, 'Un salto de página dentro de un encabezado o pie se ignoró.', '{n} saltos de página dentro de encabezados o pies se ignoraron.'));
+  if (av.filasPartidas > 0) out.push(aproximado(c(av.filasPartidas, 'Una fila de tabla era más alta que una página y se partió por líneas entre páginas.', '{n} filas de tabla eran más altas que una página y se partieron por líneas entre páginas.')));
+  if (av.mergeDemasiadoAlto > 0) out.push(aproximado(c(av.mergeDemasiadoAlto, 'Una fila con celdas combinadas verticalmente es más alta que una página y no se pudo partir: parte de su contenido puede quedar fuera de la página.', '{n} filas con celdas combinadas verticalmente son más altas que una página y no se pudieron partir: parte de su contenido puede quedar fuera de la página.')));
+  if (av.gridAmpliado > 0) out.push(aproximado(c(av.gridAmpliado, 'Una tabla tenía filas con más celdas que columnas en su rejilla; se ampliaron las columnas (72 pt cada una) para no perder celdas.', '{n} tablas tenían filas con más celdas que columnas en su rejilla; se ampliaron las columnas (72 pt cada una) para no perder celdas.')));
+  if (av.anchoEscalado > 0) out.push(aproximado(c(av.anchoEscalado, 'Una tabla más ancha que la página se escaló proporcionalmente al ancho útil.', '{n} tablas más anchas que la página se escalaron proporcionalmente al ancho útil.')));
+  if (av.saltoEnZona > 0) out.push(aproximado(c(av.saltoEnZona, 'Un salto de página dentro de un encabezado o pie se ignoró.', '{n} saltos de página dentro de encabezados o pies se ignoraron.')));
   return out;
 }
 

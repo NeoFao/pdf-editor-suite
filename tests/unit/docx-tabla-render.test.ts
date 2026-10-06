@@ -1,3 +1,4 @@
+import { textosAdvertencias } from '../../src/convert/advertencia';
 import { test, expect } from 'vitest';
 import { construirModeloDocx } from '../../src/convert/docx/modelo';
 import { renderizarModeloDocx } from '../../src/convert/docx/render';
@@ -57,7 +58,7 @@ test('vMerge que cruza un salto de página: se avisa', () => {
   const filas = Array.from({ length: 12 }, (_v, i) => (i === 0 ? celda('M', '<w:vMerge w:val="restart"/>') : celda('', '<w:vMerge/>')) + celda(`r${i}`));
   const { res } = render(tabla([2000, 2000], filas, SECT_BAJA));
   expect(res.totalPaginas).toBeGreaterThan(1);
-  expect(res.advertencias.join(' | ')).toMatch(/combinad.*salto de página|salto de página.*combinad/i);
+  expect(textosAdvertencias(res.advertencias).join(' | ')).toMatch(/combinad.*salto de página|salto de página.*combinad/i);
 });
 
 test('una fila más alta que una página se PARTE por líneas entre páginas, sin perder ninguna línea, y se avisa', () => {
@@ -67,7 +68,7 @@ test('una fila más alta que una página se PARTE por líneas entre páginas, si
   for (let i = 0; i < 40; i++) expect(res.trazos.some((t) => t.text === `linea${i}`)).toBe(true);
   // Nada cae fuera del área útil (margen inferior de 20pt).
   for (const t of res.trazos) expect(t.yPt).toBeGreaterThanOrEqual(20);
-  expect(res.advertencias.join(' | ')).toMatch(/fila.*(más alta|partió|partida)|partió.*fila/i);
+  expect(textosAdvertencias(res.advertencias).join(' | ')).toMatch(/fila.*(más alta|partió|partida)|partió.*fila/i);
 });
 
 test('una fila con más celdas que columnas en tblGrid amplía la rejilla (nada se solapa ni se pierde) y se avisa', () => {
@@ -75,12 +76,12 @@ test('una fila con más celdas que columnas en tblGrid amplía la rejilla (nada 
   const x = ['c1', 'c2', 'c3'].map((t) => res.trazos.find((y) => y.text === t)!.xPt);
   expect(x[1]).toBeGreaterThan(x[0]!);
   expect(x[2]).toBeGreaterThan(x[1]!);
-  expect(res.advertencias.join(' | ')).toMatch(/más celdas|columnas/i);
+  expect(textosAdvertencias(res.advertencias).join(' | ')).toMatch(/más celdas|columnas/i);
 });
 
 test('una tabla más ancha que la página se escala y se avisa', () => {
   const { res } = render(tabla([9000, 9000], [celda('a') + celda('b')])); // 900pt > 468pt útiles
-  expect(res.advertencias.join(' | ')).toMatch(/más ancha|escal/i);
+  expect(textosAdvertencias(res.advertencias).join(' | ')).toMatch(/más ancha|escal/i);
   const xb = res.trazos.find((t) => t.text === 'b')!.xPt;
   expect(xb).toBeLessThan(612);
 });

@@ -2290,3 +2290,26 @@ colisionó con la de T9 (ramas paralelas, tercera colisión de números). La reg
 aparezca una vez y en orden creciente en este fichero; su test cubre duplicado, fuera
 de orden y el repo real. El orden se exige a toda entrada nueva; las 13 que ya estaban desordenadas
 (E-004, 005, 007, 008, 009, 012, 015-019, 029, 030) se toleran en una lista fija que no crece.
+
+### E-058 · El aviso de conversión decía "omitió algo" también para contenido que sí estaba en el PDF (T13)
+
+**Síntoma.** Al abrir un `.docx` con una imagen flotante (colocada, aunque sin ajuste de
+texto), el banner `#conversion-warnings` decía "La conversión omitió algo del documento
+original". Una flotante aproximada, una tabla escalada o un enlace sin clic se
+presentaban igual que una ecuación o una nota al pie que de verdad no llegan al PDF.
+
+**Causa raíz.** El contrato era `advertencias: string[]`: la clase (omitido frente a
+convertido con aproximación) vivía solo en el texto de cada mensaje y la UI no podía
+distinguirla, así que usaba un encabezado único y genérico.
+
+**Arreglo.** `Advertencia = { tipo: 'omitido' | 'aproximado', mensaje }`
+(`src/convert/advertencia.ts`), tipada EN EL ORIGEN: cada `push` de `modelo.ts`,
+`render.ts`, `flujo/layout.ts` y los conversores Word y Markdown elige su clase
+(`MENSAJES_PERDIDAS` lleva el tipo en la tupla, así que añadir una pérdida sin clasificar
+no compila). La UI muestra dos grupos, "No se pudo incluir:" e "Incluido con diferencias:",
+dentro del mismo `role="status"`/`aria-live="polite"`, y oculta el grupo vacío.
+
+**Cómo se detecta ahora.** `tests/unit/advertencia.test.ts` (clasificación por tipo; la
+flotante colocada nunca es `omitido`); los tests unitarios existentes de Word/Markdown,
+adaptados a `textosAdvertencias`, siguen comprobando que ninguna advertencia se perdió; E2E
+`word-a-pdf.spec.ts` (flotante, nota al pie + objeto incrustado, enlace rechazado).

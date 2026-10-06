@@ -1,3 +1,4 @@
+import { textosAdvertencias } from '../../src/convert/advertencia';
 import { test, expect } from 'vitest';
 import { construirModeloDocx, esParrafo, esTabla, type Parrafo } from '../../src/convert/docx/modelo';
 import { DocxError } from '../../src/convert/docx/DocxError';
@@ -174,7 +175,7 @@ test('imágenes, encabezados/pies, notas, comentarios, campos y control de cambi
     <w:sectPr><w:headerReference w:type="default" r:id="rId1"/><w:footerReference w:type="default" r:id="rId2"/></w:sectPr>
   </w:body></w:document>`;
   const modelo = construirModeloDocx(documentXml, null, null);
-  const todas = modelo.advertencias.join(' | ');
+  const todas = textosAdvertencias(modelo.advertencias).join(' | ');
   expect(todas).toMatch(/imagen/i);
   expect(todas).toMatch(/encabezado/i);
   expect(todas).toMatch(/pie/i);
@@ -223,7 +224,7 @@ test('imagen inline resuelta: refId apunta a word/media/..., tamaño convertido 
   const parrafo = soloParrafos(modelo)[0]!;
   const parte = parrafo.partes[0]!;
   expect(parte).toMatchObject({ tipo: 'imagen', refId: 'word/media/image1.png', wPt: 72, hPt: 36 });
-  expect(modelo.advertencias.some((a) => /imagen/i.test(a))).toBe(false);
+  expect(modelo.advertencias.some((a) => /imagen/i.test(a.mensaje))).toBe(false);
 });
 
 test('imagen flotante (wp:anchor) sin datos de origen se omite y se avisa (la colocada vive en docx-modelo-2b.test.ts)', () => {
@@ -232,7 +233,7 @@ test('imagen flotante (wp:anchor) sin datos de origen se omite y se avisa (la co
   </w:body></w:document>`;
   const modelo = construirModeloDocx(documentXml, null, null, RELS_UNA_IMAGEN);
   expect(soloParrafos(modelo)[0]!.partes).toEqual([]);
-  expect(modelo.advertencias.some((a) => /no se pudo insertar una imagen/i.test(a))).toBe(true);
+  expect(modelo.advertencias.some((a) => /no se pudo insertar una imagen/i.test(a.mensaje))).toBe(true);
 });
 
 test('imagen sin relación resoluble (r:embed que no existe en los rels) se omite y se avisa', () => {
@@ -241,7 +242,7 @@ test('imagen sin relación resoluble (r:embed que no existe en los rels) se omit
   </w:body></w:document>`;
   const modelo = construirModeloDocx(documentXml, null, null, RELS_UNA_IMAGEN);
   expect(soloParrafos(modelo)[0]!.partes).toEqual([]);
-  expect(modelo.advertencias.some((a) => /imagen/i.test(a))).toBe(true);
+  expect(modelo.advertencias.some((a) => /imagen/i.test(a.mensaje))).toBe(true);
 });
 
 // ---------------------------------------------------------------------------
@@ -275,7 +276,7 @@ test('w:hyperlink con esquema no permitido (javascript:) NO lleva url y se avisa
   const parte = soloParrafos(modelo)[0]!.partes[0]!;
   expect(parte).toMatchObject({ tipo: 'texto', texto: 'peligroso' });
   if (parte.tipo === 'texto') expect(parte.url).toBeUndefined();
-  expect(modelo.advertencias.some((a) => /enlace/i.test(a))).toBe(true);
+  expect(modelo.advertencias.some((a) => /enlace/i.test(a.mensaje))).toBe(true);
 });
 
 test('un run con color explícito DENTRO de un w:hyperlink respeta ese color ("si el estilo no dice otra cosa")', () => {
@@ -293,7 +294,7 @@ test('un run con color explícito DENTRO de un w:hyperlink respeta ese color ("s
 // ---------------------------------------------------------------------------
 
 function avisos(documentXml: string, rels: string | null = null): string {
-  return construirModeloDocx(documentXml, null, null, rels).advertencias.join(' | ');
+  return textosAdvertencias(construirModeloDocx(documentXml, null, null, rels).advertencias).join(' | ');
 }
 
 test('enlace interno (w:anchor) y enlace sin destino resoluble: se conserva el texto Y se avisa', () => {
@@ -304,8 +305,8 @@ test('enlace interno (w:anchor) y enlace sin destino resoluble: se conserva el t
   const modelo = construirModeloDocx(xml, null, null, RELS_ENLACES);
   const textos = soloParrafos(modelo).flatMap((p) => p.partes).map((x) => (x as { texto: string }).texto);
   expect(textos).toEqual(['ir al marcador', 'sin destino']);
-  expect(modelo.advertencias.join(' | ')).toMatch(/enlaces? interno/i);
-  expect(modelo.advertencias.join(' | ')).toMatch(/sin destino/i);
+  expect(textosAdvertencias(modelo.advertencias).join(' | ')).toMatch(/enlaces? interno/i);
+  expect(textosAdvertencias(modelo.advertencias).join(' | ')).toMatch(/sin destino/i);
 });
 
 test('contenido dentro de w:sdt en línea, w:fldSimple, w:customXml y w:moveTo NO se pierde', () => {
@@ -371,7 +372,7 @@ test('tabla anidada, imagen y salto de página dentro de una celda: el texto se 
   expect(texto).toContain('n1');
   expect(texto).toContain('n2');
   expect(partes.some((p) => p.tipo === 'imagen' || p.tipo === 'saltoPagina')).toBe(false);
-  const t = modelo.advertencias.join(' | ');
+  const t = textosAdvertencias(modelo.advertencias).join(' | ');
   expect(t).toMatch(/anidada/i);
   expect(t).toMatch(/imagen.*(tabla|celda)|(tabla|celda).*imagen/i);
   expect(t).toMatch(/salto de página.*(tabla|celda)|(tabla|celda).*salto de página/i);

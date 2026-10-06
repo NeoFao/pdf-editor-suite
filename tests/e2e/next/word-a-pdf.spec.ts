@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
+import { construirZip } from '../../unit/helpers/zipBuilder';
 
 /**
  * §9 fila #4: abrir un `.docx` desde `#file-input` lo convierte a un PDF con
@@ -164,4 +165,52 @@ test('abrir word-flotante.docx: la imagen flotante se coloca (una imagen en la c
   await expect(page.locator('#conversion-warnings')).toBeVisible();
   const aviso = (await page.locator('#conversion-warnings').textContent()) ?? '';
   expect(aviso).toMatch(/imagen flotante colocada sin ajuste de texto/i);
+});
+
+test('T13: la flotante colocada sale en "Incluido con diferencias" y no en "No se pudo incluir"', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(WORD_FLOTANTE);
+  await expect(page.locator('.image-box')).toHaveCount(1);
+
+  const aviso = page.locator('#conversion-warnings');
+  await expect(aviso).toBeVisible();
+  await expect(aviso).toHaveAttribute('role', 'status');
+  const aprox = aviso.locator('section[data-tipo="aproximado"]');
+  await expect(aprox).toBeVisible();
+  await expect(aprox.locator('strong')).toHaveText('Incluido con diferencias:');
+  await expect(aprox.locator('li')).toContainText(/imagen flotante colocada sin ajuste de texto/i);
+  await expect(aviso.locator('section[data-tipo="omitido"]')).toBeHidden();
+});
+
+test('T13: nota al pie y objeto incrustado salen en "No se pudo incluir"; el enlace rechazado, en "Incluido con diferencias"', async ({ page }) => {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:p><w:r><w:t>Texto con nota</w:t></w:r><w:r><w:footnoteReference w:id="1"/></w:r></w:p>
+  <w:p><w:r><w:object/></w:r></w:p>
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  const zip = construirZip([
+    { nombre: '[Content_Types].xml', datos: Buffer.from('<Types/>') },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') }
+  ]);
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles({ name: 'omisiones.docx', mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', buffer: Buffer.from(zip) });
+  await expect(page.locator('.run').first()).toBeVisible();
+
+  const omit = page.locator('#conversion-warnings section[data-tipo="omitido"]');
+  await expect(omit).toBeVisible();
+  await expect(omit.locator('strong')).toHaveText('No se pudo incluir:');
+  await expect(omit.locator('li')).toHaveCount(2);
+  await expect(omit).toContainText(/nota al pie/i);
+  await expect(omit).toContainText(/objeto incrustado/i);
+  await expect(page.locator('#conversion-warnings section[data-tipo="aproximado"]')).toBeHidden();
+});
+
+test('T13: word-completo.docx (enlace javascript:) lo lista en "Incluido con diferencias"', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(WORD_COMPLETO);
+  await expect(page.locator('.run').first()).toBeVisible();
+  const aprox = page.locator('#conversion-warnings section[data-tipo="aproximado"]');
+  await expect(aprox).toContainText(/enlace/i);
+  await expect(page.locator('#conversion-warnings section[data-tipo="omitido"]')).toBeHidden();
 });
