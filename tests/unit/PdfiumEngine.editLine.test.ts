@@ -373,3 +373,30 @@ test('deshacer una edición que movió un marcado devuelve el marcado a su sitio
   expect(quadsDe(eng, recargado, i)[0]![0]).toBeCloseTo(eng.findText(recargado, 0, 'seis')[0]!.xPt, 0);
   eng.close(doc);
 });
+
+/**
+ * N1 F4 (5): en texto girado (θ = 90° en la página 1; página 2 con /Rotate 90) la relectura debe devolver EXACTAMENTE
+ * el texto pedido, sin el hueco falso («girad o») que el informe de F2/F3 temía. Se probó con casi 200 ediciones (sustituir,
+ * borrar, insertar en cada posición): ninguna dejaba hueco; este test fija un barrido representativo.
+ */
+test('texto girado: la relectura devuelve el texto pedido, sin hueco falso, editando en cualquier posición', async () => {
+  const eng = await PdfiumEngine.create();
+  const casos: [number, string][] = [[0, 'Texto girado'], [1, 'Linea uno de la pagina girada']];
+  let comprobadas = 0;
+  for (const [p, base] of casos) {
+    for (let i = 0; i <= base.length; i++) {
+      const variantes = [base.slice(0, i) + 'XY' + base.slice(i + 1), base.slice(0, i) + base.slice(i + 1), base.slice(0, i) + 'Z' + base.slice(i)];
+      for (const a of variantes) {
+        if (a === base || a === '' || /\s\s/.test(a) || /^\s|\s$/.test(a)) continue;
+        const doc = await eng.open(fixture('por-glifo.pdf'));
+        const l = linea(eng, doc, base, p);
+        const res = eng.editLine(doc, p, l, a);
+        expect(res.ok, a).toBe(true);
+        expect(lineas(eng, doc, p).some((x) => x.text === a), `«${a}» debe releerse igual`).toBe(true);
+        eng.close(doc);
+        comprobadas++;
+      }
+    }
+  }
+  expect(comprobadas).toBeGreaterThan(100);
+});
