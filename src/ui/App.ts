@@ -868,6 +868,16 @@ export class App {
       e.preventDefault();
     });
 
+    // N3: si cambia el DPR (zoom del navegador, otra pantalla) se repinta a la nueva densidad. `matchMedia` solo avisa
+    // una vez por valor, así que se vuelve a armar con el DPR nuevo; `resize` cubre el zoom del navegador, que también
+    // lo dispara. Vive lo que la app: listeners únicos, no por documento.
+    const vigilarDpr = (): void => {
+      const mq = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      mq.addEventListener('change', () => { this.viewer?.repintarSiCambioDpr(); vigilarDpr(); }, { once: true });
+    };
+    vigilarDpr();
+    window.addEventListener('resize', () => this.viewer?.repintarSiCambioDpr());
+
     // N8: avisa al recargar o cerrar la pestaña SOLO si hay cambios sin guardar.
     window.addEventListener('beforeunload', (e) => {
       if (!this.sucio) return;

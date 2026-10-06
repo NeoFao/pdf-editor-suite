@@ -7,6 +7,7 @@ import type { PtPoint } from '../coords/PageGeometry';
 import type { RectPt } from '../engine/PdfEngine';
 import { pathMasCercano, normalizeRect, type PathCandidate } from './toolGeometry';
 import { contarRenderPage, fijarPaginasPintadas } from '../diagnostico';
+import { factorNitidez } from './nitidez';
 import { hayGestoEnCurso } from './gesto';
 import { SeleccionTexto } from './SeleccionTexto';
 import { marcadoBajoPunto, ordenLecturaMarcados, type MarcadoHit, type QuadPt } from '../coords/quads';
@@ -77,6 +78,8 @@ export class Viewer {
   private wrappers: HTMLElement[] = [];
   private geoms: PageGeometry[] = [];
   private rendered = new Set<number>();
+  /** N3: DPR con el que se pintaron las páginas vivas (`repintarSiCambioDpr` compara contra él). */
+  private dprPintado = window.devicePixelRatio;
   private scale = 1;
   private highlights = new Map<number, RectPt[]>();
   /** Coincidencia ACTUAL de buscar y reemplazar (la que reemplazará el próximo "Reemplazar"), en puntos PDF; se pinta más fuerte que el resto. */
@@ -1053,6 +1056,18 @@ export class Viewer {
     this.renderVisible();
   }
 
+  /**
+   * N3: el DPR cambió (zoom del navegador, mover la ventana a otra pantalla): repinta las páginas visibles al nuevo
+   * factor. Las páginas con estado vivo (edición en curso, imagen o anotación seleccionada…) no se desalojan
+   * (`evictPage`) y se repintan cuando se vuelvan a pintar.
+   */
+  repintarSiCambioDpr(): void {
+    if (window.devicePixelRatio === this.dprPintado) return;
+    this.dprPintado = window.devicePixelRatio;
+    for (const i of Array.from(this.rendered)) this.evictPage(i);
+    this.renderVisible();
+  }
+
   private cssHeights(): number[] {
     return this.session.model.pages.map((p) => p.sizePt.heightPt * this.scale);
   }
@@ -1189,10 +1204,15 @@ export class Viewer {
     if (this.marcadoSel?.pageIndex === i) { this.marcadoSel = null; this.cb.onMarcadoSelect?.(null); }
     wrapper.textContent = '';
     contarRenderPage();
-    const { width, height, data } = this.session.engine.renderPage(this.session.doc, i, this.scale);
+    // N3: bitmap a `escala × factor` (DPR acotado), CSS al tamaño de la página (`escala` px por pt).
+    const cssAncho = page.sizePt.widthPt * this.scale, cssAlto = page.sizePt.heightPt * this.scale;
+    this.dprPintado = window.devicePixelRatio;
+    const factor = factorNitidez(this.dprPintado, cssAncho, cssAlto);
+    const { width, height, data } = this.session.engine.renderPage(this.session.doc, i, this.scale * factor);
     const canvas = document.createElement('canvas');
     canvas.width = width; canvas.height = height;
     canvas.style.display = 'block';
+    canvas.style.width = `${cssAncho}px`; canvas.style.height = `${cssAlto}px`;
     // A-06 (WCAG 1.1.1): el bitmap del motor es una imagen con nombre de página.
     canvas.setAttribute('role', 'img');
     canvas.setAttribute('aria-label', `Página ${i + 1}`);

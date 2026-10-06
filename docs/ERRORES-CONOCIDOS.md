@@ -2771,3 +2771,25 @@ el tirador de mover texto. Sin herramienta o con la imagen sin seleccionar el de
 **Cómo se detecta ahora.** `tests/e2e/next/tactil.spec.ts` (390x844, `hasTouch`, toques reales por CDP que sí respetan
 `touch-action`): rectángulo con el dedo crea el `DrawRectCmd` y se deshace; con «ninguna» el dedo hace scroll; imagen
 seleccionada se mueve sin desplazar el visor. Fallaban antes. Sin regla guard: depende de la interacción táctil real.
+
+---
+
+### E-078 · La página se pintaba a 1 px de bitmap por px CSS: borrosa en pantallas de alta densidad (N3)
+
+**Síntoma.** A 390 px con DPR 2 (móviles, retina) `canvas.width` de la página era igual al ancho CSS (ratio 1,00): el texto
+del PDF salía borroso. Solo las miniaturas multiplicaban por `devicePixelRatio`.
+
+**Causa raíz.** `Viewer.renderPage` pedía el bitmap al motor a la escala CSS (`this.scale`) y dejaba que los atributos
+`width`/`height` del canvas fijaran también su tamaño CSS: bitmap y CSS eran la misma cosa.
+
+**Arreglo.** `src/ui/nitidez.ts` (`factorNitidez`): el bitmap se pinta a `escala × factor`, con `factor` = DPR acotado a 2,5 y
+reducido si la página superara 8 Mpx (32 MB RGBA; con el tope de 12 páginas pintadas de E-045 el peor caso queda en ~384 MB),
+nunca por debajo de 1. El canvas fija su tamaño CSS por separado (`style.width/height` = la página a la escala actual), así que
+las capas superpuestas (texto, notas, imágenes, formularios) no cambian de geometría. `Viewer.repintarSiCambioDpr()` repinta
+las páginas vivas cuando cambia el DPR; `App` lo llama desde `matchMedia('(resolution: …dppx)')` y desde `resize` (el zoom del
+navegador dispara ambos; la emulación por CDP solo `resize`).
+
+**Cómo se detecta ahora.** `tests/unit/nitidez.test.ts` (factor, topes, DPR no válido) y
+`tests/e2e/next/nitidez-pagina.spec.ts` (DPR 2: bitmap ≈ ancho CSS × 2 con el CSS intacto; cambio de DPR en caliente repinta;
+DPR 1 sigue 1:1; DPR 3 acotado y con límite de píxeles a zoom alto; la prueba de oro de reposo, E-029, con DPR 1 y 2).
+Fallaban antes. Sin regla guard: es cálculo de maquetación, no un patrón estático.
