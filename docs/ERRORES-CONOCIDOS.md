@@ -3015,3 +3015,23 @@ deshacer).
 se pierde, como en E-083). Las palabras nuevas no heredan el recorte (`clip`) del objeto original. Cambiar tamaño o fuente
 (`setRunFontSize`, `setLineProps`) de una línea de TeX con espacios sigue sin tratarse: con la fuente sin espacio devuelve
 `glyph-missing` en vez de perder los espacios.
+
+### E-087 · Guardar, Imprimir y Deshacer seguían activos durante una operación larga (Reemplazar todo en un documento grande)
+
+**Síntoma.** En un documento de 1256 páginas, con «Reemplazando… 260/810» en curso, Guardar seguía habilitado y descargaba un PDF mezcla
+(1108 «oracle» y 1022 «elcaro»); la operación terminaba después sin aviso. Lo mismo era posible con comprimir, OCR, filtros,
+encabezado y marca de agua y Texto…/Markdown (todas ceden el hilo), y con Deshacer/Rehacer o ediciones a mitad de operación.
+
+**Causa raíz.** Cada operación larga solo deshabilitaba su propio botón; no existía el concepto de «operación en curso» del documento, así
+que cualquier otra acción (que lee o muta el mismo documento) podía intercalarse en los cedidos de hilo.
+
+**Arreglo.** Candado único en `App.conOperacion` + `CommandBus.bloquear`: una sola operación larga a la vez. Mientras dura, el bus
+descarta `execute`/`undo`/`redo` ajenos (la operación dueña pasa `propia = true`), Guardar, Imprimir, Deshacer, Rehacer, las ediciones,
+inserciones, borrados, rotar/duplicar/eliminar/reordenar páginas y abrir/nuevo avisan en `#status` y en el `title` del botón
+(«Espera a que termine «X»…», con «o cancélalo» si se puede cancelar) y los botones quedan en `aria-disabled`. Navegación y zoom no se
+tocan. Se libera siempre en `finally` (terminar, cancelar o fallar).
+
+**Cómo se detecta ahora.** `tests/e2e/next/candado-operacion.spec.ts` (grande.pdf: botones `aria-disabled`, Ctrl+S sin descarga,
+zoom libre, y tras terminar Guardar descarga el resultado completo) y `tests/unit/CandadoOperacion.test.ts`.
+
+**Límite.** La búsqueda sigue siendo libre durante una operación (solo lee y se invalida sola, y «Reemplazar» la repite al terminar).
