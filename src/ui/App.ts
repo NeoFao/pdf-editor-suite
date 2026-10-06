@@ -14,6 +14,7 @@ import { MoveRunCmd } from '../commands/MoveRun';
 import { SetColorCmd } from '../commands/SetColor';
 import { SetRunFontSizeCmd } from '../commands/SetRunFontSize';
 import { SetRunFontCmd } from '../commands/SetRunFont';
+import { PropiedadesLineaCmd, type PropiedadesLinea } from '../commands/PropiedadesLinea';
 import { RotatePageCmd } from '../commands/RotatePage';
 import { DeletePageCmd } from '../commands/DeletePage';
 import { MovePageCmd } from '../commands/MovePage';
@@ -1769,20 +1770,41 @@ export class App {
 
     this.propSize.value = String(Math.round(run.sizeEfectivoPt * 2) / 2); // E-080: el efectivo, el que ve el usuario
     this.colorInput.value = rgbToHex(run.color[0], run.color[1], run.color[2]);
-    // Una línea compuesta (varios objetos, N1) no tiene UNA fuente, tamaño o color: hasta que el panel sepa aplicarlos
-    // a todos sus tramos (F4) se desactivan en vez de cambiar solo el primer objeto y dejar la línea desigual.
-    const compuesta = (this.selectedLinea()?.runIds.length ?? 1) > 1;
-    const aviso = 'Esta línea tiene varios tramos de texto; el panel de propiedades aún no los cambia a la vez.';
+    // Una línea compuesta (N1 F4) muestra los valores de su primer objeto y los aplica a todos sus objetos a la vez.
     for (const c of [this.propFont, this.propSize, this.colorInput]) {
-      c.disabled = compuesta;
-      if (compuesta) {
-        if (c.dataset.aviso === undefined) c.dataset.aviso = c.title;
-        c.title = aviso;
-      } else if (c.dataset.aviso !== undefined) {
-        c.title = c.dataset.aviso;
-        delete c.dataset.aviso;
-      }
+      c.disabled = false;
+      if (c.dataset.aviso !== undefined) { c.title = c.dataset.aviso; delete c.dataset.aviso; }
     }
+  }
+
+  /** La línea compuesta de la selección (más de un objeto), o `null` si es de un solo objeto: ese caso sigue por los comandos de siempre. */
+  private lineaCompuestaSeleccionada() {
+    const l = this.selectedLinea();
+    return l && l.runIds.length > 1 ? l : null;
+  }
+
+  /** Aplica `props` a todos los objetos de la línea compuesta seleccionada con `PropiedadesLineaCmd` (un paso de deshacer). */
+  private async aplicarALinea(props: PropiedadesLinea, hecho: string): Promise<boolean | null> {
+    const linea = this.lineaCompuestaSeleccionada();
+    if (!linea || !this.bus || !this.selection) return null; // no es una línea compuesta: sigue el camino de un objeto
+    const { pageIndex } = this.selection;
+    const cmd = new PropiedadesLineaCmd(pageIndex, linea, props);
+    // `execute` directo: un intento fallido no debe quedar en la pila de deshacer.
+    cmd.execute(this.session!);
+    if (cmd.ok) {
+      this.bus.pushExecuted(cmd);
+      this.selection = { pageIndex, runId: cmd.lineaRunIdInicial };
+      this.setStatus(hecho);
+    } else {
+      this.setStatus(cmd.razon === 'glyph-missing'
+        ? 'Esa fuente no tiene todos los caracteres de esta línea; sin cambios.'
+        : cmd.razon === 'invalid-size'
+          ? 'Tamaño no válido: cada tramo debe quedar entre 1 y 400 pt.'
+          : 'No se pudo cambiar esa línea.');
+    }
+    if (cmd.ok && props.fuenteEstandar !== undefined) this.appliedFontLabel = props.fuenteEstandar;
+    this.reflectPropsPanel();
+    return cmd.ok;
   }
 
   /** `#prop-font` change: aplica la fuente estándar elegida al run seleccionado. */
@@ -1792,6 +1814,7 @@ export class App {
     const chosen = this.propFont.value;
     // "Original", o la fuente que ya se había aplicado desde este panel: no hay nada que cambiar.
     if (chosen === '__original__' || chosen === this.appliedFontLabel) return;
+    if ((await this.aplicarALinea({ fuenteEstandar: chosen }, `Fuente cambiada a ${chosen}.`)) !== null) return;
     const { pageIndex, runId } = this.selection;
     const cmd = new SetRunFontCmd(pageIndex, runId, chosen);
     await this.bus.execute(cmd);
@@ -1816,6 +1839,8 @@ export class App {
       return;
     }
     if (Math.abs(value - run.sizeEfectivoPt) < 0.01) return;
+    // Línea compuesta: el valor del panel es el del primer objeto; el resto escala en la misma proporción.
+    if ((await this.aplicarALinea({ escala: value / run.sizeEfectivoPt }, 'Tamaño cambiado.')) !== null) return;
     const { pageIndex, runId } = this.selection;
     const cmd = new SetRunFontSizeCmd(pageIndex, runId, value);
     await this.bus.execute(cmd);
@@ -1834,6 +1859,7 @@ export class App {
     const nuevo = hexToRgb(this.colorInput.value);
     const viejo: [number, number, number] = [run.color[0], run.color[1], run.color[2]];
     if (nuevo[0] === viejo[0] && nuevo[1] === viejo[1] && nuevo[2] === viejo[2]) return;
+    if (this.lineaCompuestaSeleccionada()) { void this.aplicarALinea({ color: nuevo }, 'Color aplicado.'); return; }
     void this.bus.execute(new SetColorCmd(this.selection.pageIndex, this.selection.runId, nuevo, viejo));
     this.setStatus('Color aplicado.');
   }

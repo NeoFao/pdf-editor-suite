@@ -77,6 +77,14 @@ export type EditLineResult =
   | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' | 'empty-text' | 'stale' };
 
 /**
+ * Resultado de `setLineProps` (N1 F4). `glyph-missing`: la fuente estándar no cubre algún carácter de algún objeto (no se
+ * modifica nada); `invalid-size`: factor no finito o ≤ 0, o un tamaño efectivo resultante fuera de 1-400 pt.
+ */
+export type SetLinePropsResult =
+  | { ok: true; lineaRunIdInicial: number }
+  | { ok: false; reason: 'not-a-text-run' | 'invalid-size' | 'invalid-font' | 'glyph-missing' };
+
+/**
  * Resultado de `replaceRunWithStandardFont`. `fontName` es la fuente estándar
  * PDF realmente usada (de las 14) y `runId` el índice del objeto NUEVO — el
  * original se elimina, así que el runId cambia.
@@ -320,6 +328,21 @@ export interface PdfEngine {
    * solo objeto delega en `editTextRun`/`replaceRunWithStandardFont` (comportamiento idéntico al de siempre).
    */
   editLine(doc: DocHandle, pageIndex: number, linea: LineaParaEditar, textoNuevo: string, opciones?: { fuenteEstandar?: boolean }): EditLineResult;
+  /**
+   * Cambia las propiedades de TODOS los objetos de una línea editable en una sola carga de página y un solo
+   * `GenerateContent` (N1 F4). `linea` da sus objetos en orden visual y su texto. `color` RGB 0-255. `escala` es un FACTOR (nuevo / actual) aplicado respecto al origen
+   * del primer objeto: escala el tamaño efectivo (E-080) y las posiciones, así que conserva espaciado y proporciones
+   * (un superíndice sigue siendo más pequeño). `fuenteEstandar` agrupa los objetos por estilo contiguo y escribe cada grupo como UN
+   * objeto en esa fuente, a continuación del anterior con su espaciado natural (cambia la estructura de objetos:
+   * `lineaRunIdInicial` es el índice del primero tras el cambio; una línea justificada pasa a espaciado natural).
+   * Todo o nada: si algo falla no se modifica el documento.
+   */
+  setLineProps(
+    doc: DocHandle,
+    pageIndex: number,
+    linea: LineaParaEditar,
+    props: { color?: [number, number, number]; escala?: number; fuenteEstandar?: string }
+  ): SetLinePropsResult;
   /**
    * Sustituye un run cuyo `editTextRun` devolvió `glyph-missing` por un
    * objeto de texto NUEVO en la fuente estándar PDF más parecida (de las 14
