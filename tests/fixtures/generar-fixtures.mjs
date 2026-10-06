@@ -380,6 +380,25 @@ async function pdfGrande() {
   return doc.save();
 }
 
+/** Texto único de cada página de `tamanos-mixtos.pdf` (E-065). */
+export const TEXTOS_TAMANOS_MIXTOS = ['P1', 'P2', 'P3', 'P4'];
+
+/**
+ * 4 páginas de tamaños MUY distintos (A4 vertical, apaisada, diminuta, A4): el scroll
+ * y el "más visible" del IntersectionObserver ya no coinciden con el índice esperado.
+ * Fija E-065: tras Subir/Bajar/arrastrar la página actual tiene que seguir a la movida.
+ */
+async function pdfTamanosMixtos() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const tamanos = [[595.28, 841.89], [842, 400], [200, 120], [595.28, 841.89]];
+  tamanos.forEach(([w, h], i) => {
+    const p = doc.addPage([w, h]);
+    p.drawText(TEXTOS_TAMANOS_MIXTOS[i], { x: 20, y: h / 2, size: 14, font });
+  });
+  return doc.save();
+}
+
 /** Igual que `paginas-pequenas.pdf`, con un marcador por página (E-032, caso (c) de pagina-actual.spec.ts). */
 async function pdfPaginasPequenasMarcadores() {
   const doc = await PDFDocument.create();
@@ -944,6 +963,7 @@ async function main() {
     'marcadores-js.pdf': await pdfMarcadoresConAccion({ S: 'JavaScript', JS: PDFString.of('app.alert(1)') }),
     'paginas-pequenas.pdf': await pdfPaginasPequenas(),
     'grande.pdf': await pdfGrande(),
+    'tamanos-mixtos.pdf': await pdfTamanosMixtos(),
     'paginas-pequenas-marcadores.pdf': await pdfPaginasPequenasMarcadores(),
     'escaneado.pdf': await pdfEscaneado(),
     'estructurado.pdf': await pdfEstructurado(),
