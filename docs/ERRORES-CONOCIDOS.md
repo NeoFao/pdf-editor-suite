@@ -2531,3 +2531,24 @@ página; se solapa con el texto si hace falta).
 **Cómo se detecta ahora.** `tests/e2e/next/tirador-en-borde.spec.ts` con `lineas-borde.pdf` (esquina, suelo,
 centro): el tirador está dentro de la página y `elementFromPoint` en su centro es el propio tirador. Sin regla
 guard: es geometría de maquetación.
+
+### E-067 · La búsqueda contaba coincidencias pero no permitía ir a ellas
+
+**Síntoma.** En `grande.pdf` (500 págs.), «Pagina 4» daba «333 coincidencia(s)» y la vista se quedaba donde
+estaba: sin Siguiente/Anterior, sin Enter ni F3. Solo «Reemplazar» recorría coincidencias. Con la búsqueda aún
+en marcha no había progreso ni forma de ir a la primera coincidencia.
+
+**Causa raíz.** `search()` solo guardaba un mapa página → cajas para pintar; no existía el concepto de
+"coincidencia actual" navegable ni el desplazamiento del visor hasta una caja (solo `scrollToPage`, que alinea
+la página, no la caja). Además `setHighlights` borraba la coincidencia actual en cada llamada.
+
+**Arreglo.** `IteradorCoincidencias` (lista con cursor; los resultados se añaden por páginas durante la
+búsqueda, "siguiente" da la vuelta con aviso solo con la búsqueda terminada), contador `#search-count`
+(`aria-live="polite"`, progreso «Buscando… n/N · k resultados»), botones `#btn-search-prev`/`#btn-search-next`,
+Enter/Mayús+Enter en el campo y F3/Mayús+F3 en `TABLA_ATAJOS`. Ir a una coincidencia usa `goToPage` (E-032) y
+`Viewer.revelarRect`, que centra la caja con la geometría común (`geom.rectPtToCss`, E-053, válida con
+`/Rotate`) aunque la página esté desalojada (E-045); al repintarse la página `drawHighlights` restituye
+resaltados y coincidencia actual.
+
+**Cómo se detecta ahora.** `tests/e2e/next/busqueda-navegacion.spec.ts` (grande.pdf y rotada-lineas.pdf) y
+`tests/unit/iteradorCoincidencias.test.ts`. Sin regla guard: es una funcionalidad ausente, no un patrón de código.
