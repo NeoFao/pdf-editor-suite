@@ -144,7 +144,8 @@ export class ReemplazarTextoCmd implements Command {
       if (res.ok) {
         // Una línea de varios objetos cambia la estructura (objetos eliminados, sufijo trasladado): deshacer por snapshot.
         const fuente = 'fuenteEstandar' in res ? res.fuenteEstandar : undefined;
-        if (linea.runIds.length > 1 || fuente) this.usoSustitucion = true;
+        // E-086: palabras nuevas por una fuente sin glifo de espacio (`objetosAnadidos`) también cambian la estructura.
+        if (linea.runIds.length > 1 || fuente || 'objetosAnadidos' in res) this.usoSustitucion = true;
         return fuente ? { fuente } : 'ok';
       }
       if (res.reason !== 'stale' && res.reason !== 'not-a-text-run') return 'fallo';

@@ -3,6 +3,7 @@ import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
 import { validarUrlEnlace } from '../validarUrlEnlace';
 import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
+import { BEARING_EM } from '../../texto/lineasEditables';
 import type { QuadPt } from '../../coords/quads';
 import type { PdfEngine, CharBox, DocHandle, SizePt, PageBox, TextRun, EditResult, EditLineResult, LineaParaEditar, SetLinePropsResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
@@ -70,6 +71,12 @@ function fechaPdf(d: Date): string {
   const z = (n: number, w = 2): string => String(n).padStart(w, '0');
   return `D:${z(d.getFullYear(), 4)}${z(d.getMonth() + 1)}${z(d.getDate())}${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`;
 }
+
+/**
+ * Un objeto de texto lleva desplazamientos propios (`Tw`, `Tc`, `TJ`) si el final de su caja difiere del avance natural en más de
+ * esta fracción de su tamaño efectivo (em): los márgenes laterales de un glifo no pasan de ~0,1 em (E-085).
+ */
+const DESPLAZAMIENTO_MIN_EM = 0.15;
 
 export class PdfiumEngine implements PdfEngine {
   private readonly srcPtr = new Map<DocHandle, number>();
@@ -393,6 +400,9 @@ export class PdfiumEngine implements PdfEngine {
     const out = new Map<number, { texto: string; espacioAntes: boolean }>();
     const total = this.p.FPDFText_CountChars(textPage);
     let espacioPendiente = false;
+    // Objeto del último carácter real: un espacio que PDFium genera ENTRE dos caracteres del MISMO objeto es un hueco de
+    // `TJ` (pdfTeX separa las palabras así, no con un glifo): es una separación real de palabras y entra en el texto (E-086).
+    let ultimoIdx: number | undefined;
     for (let k = 0; k < total; k++) {
       const u = this.p.FPDFText_GetUnicode(textPage, k);
       if (this.p.FPDFText_IsGenerated(textPage, k) === 1) {
@@ -406,8 +416,10 @@ export class PdfiumEngine implements PdfEngine {
       try { ch = u > 0 && u <= 0x10ffff ? String.fromCodePoint(u) : ''; } catch { ch = ''; }
       let e = out.get(idx);
       if (!e) { e = { texto: '', espacioAntes: espacioPendiente }; out.set(idx, e); }
+      else if (espacioPendiente && idx === ultimoIdx && !/\s$/.test(e.texto) && !/^\s/.test(ch)) e.texto += ' ';
       e.texto += ch;
       espacioPendiente = false;
+      ultimoIdx = idx;
     }
     return out;
   }
@@ -415,12 +427,25 @@ export class PdfiumEngine implements PdfEngine {
   /** Texto real (sin caracteres generados) de UN objeto, leyendo solo los caracteres de la text page que le pertenecen. */
   private textoRealDeObjeto(textPage: number, obj: number): string {
     let texto = '';
+    let pendiente = false;
     const total = this.p.FPDFText_CountChars(textPage);
     for (let k = 0; k < total; k++) {
-      if (this.p.FPDFText_GetTextObject(textPage, k) !== obj || this.p.FPDFText_IsGenerated(textPage, k) === 1) continue;
       const u = this.p.FPDFText_GetUnicode(textPage, k);
+      if (this.p.FPDFText_IsGenerated(textPage, k) === 1) {
+        if (u === 32) pendiente = true;
+        else if (u === 10 || u === 13) pendiente = false;
+        continue;
+      }
+      if (this.p.FPDFText_GetTextObject(textPage, k) !== obj) { pendiente = false; continue; }
       if (u === 10 || u === 13) continue;
-      try { if (u > 0 && u <= 0x10ffff) texto += String.fromCodePoint(u); } catch { /* unidad suelta: se omite */ }
+      try {
+        if (u > 0 && u <= 0x10ffff) {
+          // Hueco de `TJ` entre dos caracteres del mismo objeto: separación de palabras real (E-086).
+          if (pendiente && texto !== '' && !/\s$/.test(texto) && u !== 32) texto += ' ';
+          texto += String.fromCodePoint(u);
+        }
+      } catch { /* unidad suelta: se omite */ }
+      pendiente = false;
     }
     return texto;
   }
@@ -770,7 +795,10 @@ export class PdfiumEngine implements PdfEngine {
           : { ok: false, reason: r.reason === 'invalid-font' ? 'not-a-text-run' : r.reason };
       }
       const r = this.editTextRun(doc, pageIndex, runId, textoNuevo);
-      return r.ok ? { ok: true, lineaRunIdInicial: runId, dxPt: 0 } : r;
+      if (r.ok) return { ok: true, lineaRunIdInicial: runId, dxPt: 0 };
+      // E-086: con espacios en el texto y una fuente SIN glifo de espacio (pdfTeX), el fallo no es un glifo visible ausente:
+      // el camino compuesto escribe las palabras como objetos separados por un hueco, conservando la fuente.
+      if (r.reason !== 'glyph-missing' || !/\s/.test(textoNuevo)) return r;
     }
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
@@ -861,7 +889,13 @@ export class PdfiumEngine implements PdfEngine {
     const tfU = m.malloc(4); this.p.FPDFTextObj_GetFontSize(ultimo.obj, tfU);
     const sizeU = m.getValue(tfU, 'float'); m.free(tfU);
     const textoUltimo = viejo.slice(tr[i1]!.inicio, tr[i1]!.fin);
-    const finViejoU = uDe(matU) + this.avanceNatural(fontU, sizeU, Math.hypot(matU[0], matU[1]), textoUltimo);
+    const finNatViejoU = uDe(matU) + this.avanceNatural(fontU, sizeU, Math.hypot(matU[0], matU[1]), textoUltimo);
+    // E-085: el avance natural ignora `Tw`, `Tc` y los desplazamientos de `TJ` (justificado de InDesign y Word). Si la caja
+    // del último objeto acaba lejos del avance natural, ese objeto lleva desplazamientos y el final REAL es el de la caja.
+    const emU = sizeU * Math.hypot(matU[0], matU[1]);
+    const finCajaViejoU = this.finRealU(ultimo.obj, cos, sin, theta);
+    const viejoDesplazado = finCajaViejoU !== null && Math.abs(finCajaViejoU - finNatViejoU) > DESPLAZAMIENTO_MIN_EM * emU;
+    const finViejoU = viejoDesplazado ? finCajaViejoU! : finNatViejoU;
     const nombreFuente = leerCadenaPdfium(
       m,
       (buf, len) => this.p.FPDFFont_GetBaseFontName(this.p.FPDFTextObj_GetFont(primero.obj), buf, len),
@@ -874,6 +908,8 @@ export class PdfiumEngine implements PdfEngine {
     let objEscrito = primero.obj;
     let fuenteEstandar: string | undefined;
     let finNuevoU = uDe(matP);
+    let objetosAnadidos = 0;
+    let finPalabrasU: number | null = null;
     let eliminar = afectados.slice(1);
     if (medioNuevo === '') {
       eliminar = afectados;
@@ -887,7 +923,18 @@ export class PdfiumEngine implements PdfEngine {
     } else {
       // En sitio: se escribe y se RELEE (E-079). Si no coincide, no se genera contenido y el cambio se descarta al cerrar.
       this.escribirTexto(primero.obj, medioNuevo);
-      if (!this.textoEscritoCoincide(page, primero.obj, medioNuevo)) return { ok: false, reason: 'glyph-missing' };
+      if (!this.textoEscritoCoincide(page, primero.obj, medioNuevo)) {
+        // E-086: ¿falla por el ESPACIO? En una fuente sin glifo de espacio (pdfTeX separa las palabras con desplazamientos)
+        // las palabras se escriben como objetos propios con el hueco entre ellos; un glifo VISIBLE ausente sigue siendo
+        // `glyph-missing` (E-047, fuente estándar).
+        const hueco = /\s/.test(medioNuevo) && this.fuenteSinEspacio(this.p.FPDFTextObj_GetFont(primero.obj))
+          ? this.medirEspacioPt(tr, viejo, objDe, cos, sin, theta, sizeP * Math.hypot(matP[0], matP[1]))
+          : null;
+        const porPalabras = hueco === null ? null : this.escribirPorPalabras(doc, page, primero.obj, medioNuevo, hueco, { cos, sin, uOrigen: uDe(matP) });
+        if (!porPalabras) return { ok: false, reason: 'glyph-missing' };
+        objetosAnadidos = porPalabras.extras.length;
+        finPalabrasU = porPalabras.finU;
+      }
     }
     if (medioNuevo !== '') {
       const fontN = this.p.FPDFTextObj_GetFont(objEscrito);
@@ -895,6 +942,11 @@ export class PdfiumEngine implements PdfEngine {
       const sizeN = m.getValue(tfN, 'float'); m.free(tfN);
       const matN = this.matrizDe(objEscrito);
       finNuevoU = uDe(matN) + this.avanceNatural(fontN, sizeN, Math.hypot(matN[0], matN[1]), medioNuevo);
+      // Con un final viejo medido por la caja, el nuevo se mide igual: así el hueco con el sufijo se conserva aunque el
+      // objeto reescrito conserve `Tw` o `Tc` (que el avance natural no incluye).
+      if (viejoDesplazado) finNuevoU = this.finRealU(objEscrito, cos, sin, theta) ?? finNuevoU;
+      // E-086: el final lo da el último objeto-palabra escrito, no el primero.
+      if (finPalabrasU !== null) finNuevoU = finPalabrasU;
     }
     const delta = finNuevoU - finViejoU;
 
@@ -920,7 +972,154 @@ export class PdfiumEngine implements PdfEngine {
     const total = this.p.FPDFPage_CountObjects(page);
     for (let i = 0; i < total; i++) if (this.p.FPDFPage_GetObject(page, i) === eraPrimero) { lineaRunIdInicial = i; break; }
     this.p.FPDFPage_GenerateContent(page);
-    return { ok: true, lineaRunIdInicial, dxPt: delta, ...(fuenteEstandar ? { fuenteEstandar } : {}) };
+    return { ok: true, lineaRunIdInicial, dxPt: delta, ...(fuenteEstandar ? { fuenteEstandar } : {}), ...(objetosAnadidos > 0 ? { objetosAnadidos } : {}) };
+  }
+
+  /**
+   * `true` si la fuente no tiene glifo de espacio (ancho 0 o inexistente): los subconjuntos de pdfTeX separan las palabras con
+   * desplazamientos de `TJ`, no con un carácter, y un espacio real tecleado se escribe como un código inexistente (E-086).
+   */
+  private fuenteSinEspacio(font: number): boolean {
+    const w = this.mem.malloc(4);
+    try {
+      this.mem.setValue(w, 0, 'float');
+      const ok = this.p.FPDFFont_GetGlyphWidth(font, 32, 1000, w);
+      return !ok || !(this.mem.getValue(w, 'float') > 0);
+    } finally {
+      this.mem.free(w);
+    }
+  }
+
+  /**
+   * Extremos REALES `[ini, fin]` del objeto a lo largo del texto (pt de usuario), de su caja (`FPDFPageObj_GetBounds`; es la
+   * de la tinta, así que los márgenes laterales de los glifos quedan fuera). `null` si la caja no sirve o la dirección es oblicua.
+   */
+  private extremosRealesU(obj: number, cos: number, sin: number, theta: number): { ini: number; fin: number } | null {
+    const g = Math.abs(((theta * 180) / Math.PI) % 90);
+    if (g >= 0.5 && g <= 89.5) return null;
+    const c = this.cajaUnida([obj]);
+    if (!Number.isFinite(c.l) || !(c.r > c.l) || !(c.t > c.b)) return null;
+    const us = [c.l * cos + c.b * sin, c.r * cos + c.b * sin, c.l * cos + c.t * sin, c.r * cos + c.t * sin];
+    return { ini: Math.min(...us), fin: Math.max(...us) };
+  }
+
+  /**
+   * Ancho del espacio entre palabras de una línea (pt) para escribir un espacio tecleado donde la fuente no tiene glifo
+   * (E-086). Se mide de la propia línea: el hueco entre objetos vecinos separados por un único espacio y lo que ocupa cada
+   * espacio dentro de un objeto con `TJ` (caja menos avance natural de sus letras). Mediana de las muestras entre 0,1 y 0,8 em;
+   * sin muestras, 0,25 em (el espacio de TeX en Times).
+   */
+  private medirEspacioPt(
+    tr: LineaParaEditar['tramos'],
+    viejo: string,
+    objDe: (runId: number) => number,
+    cos: number,
+    sin: number,
+    theta: number,
+    emPt: number
+  ): number {
+    const muestras: number[] = [];
+    const margen = 2 * BEARING_EM * emPt; // la caja es la de la tinta: el hueco real es mayor que el medido
+    for (let k = 0; k + 1 < tr.length; k++) {
+      if (viejo.slice(tr[k]!.fin, tr[k + 1]!.inicio) !== ' ') continue;
+      const a = this.extremosRealesU(objDe(tr[k]!.runId), cos, sin, theta);
+      const b = this.extremosRealesU(objDe(tr[k + 1]!.runId), cos, sin, theta);
+      if (a && b) muestras.push(b.ini - a.fin + margen);
+    }
+    for (const t of tr) {
+      const texto = viejo.slice(t.inicio, t.fin);
+      const n = (texto.match(/ /g) ?? []).length;
+      if (n === 0) continue;
+      const obj = objDe(t.runId);
+      const e = this.extremosRealesU(obj, cos, sin, theta);
+      if (!e) continue;
+      const font = this.p.FPDFTextObj_GetFont(obj);
+      const tf = this.mem.malloc(4); this.p.FPDFTextObj_GetFontSize(obj, tf);
+      const size = this.mem.getValue(tf, 'float'); this.mem.free(tf);
+      const mt = this.matrizDe(obj);
+      const letras = this.avanceNatural(font, size, Math.hypot(mt[0], mt[1]), texto.replace(/ /g, ''));
+      muestras.push((e.fin - e.ini + margen - letras) / n);
+    }
+    const validas = muestras.filter((v) => v >= 0.1 * emPt && v <= 0.8 * emPt).sort((x, y) => x - y);
+    return validas.length > 0 ? validas[Math.floor(validas.length / 2)]! : 0.25 * emPt;
+  }
+
+  /**
+   * Escribe `texto` palabra a palabra cuando la fuente no tiene glifo de espacio (E-086): la primera palabra va EN SITIO sobre
+   * `obj` y cada una de las siguientes en un objeto nuevo con la MISMA fuente (`CreateTextObj` con el handle prestado), color,
+   * modo de render y matriz que `obj`, desplazado a lo largo del texto por el avance natural de las palabras anteriores más
+   * `huecoPt` por cada espacio (como TeX, que separa con posicionamiento). Cada objeto se RELEE (E-079); si algo no coincide
+   * devuelve `null` y el llamante descarta el cambio sin generar contenido. `finU` es el final del último objeto en la
+   * coordenada `u` del eje del texto (pt de usuario). Los objetos nuevos se insertan a continuación de `obj`.
+   */
+  private escribirPorPalabras(
+    doc: DocHandle,
+    page: number,
+    obj: number,
+    texto: string,
+    huecoPt: number,
+    eje: { cos: number; sin: number; uOrigen: number }
+  ): { extras: number[]; finU: number } | null {
+    const m = this.mem;
+    const palabras = texto.split(/\s+/).filter((w) => w !== '');
+    if (palabras.length === 0) return null;
+    const font = this.p.FPDFTextObj_GetFont(obj);
+    const tf = m.malloc(4); this.p.FPDFTextObj_GetFontSize(obj, tf);
+    const sizeNominal = m.getValue(tf, 'float'); m.free(tf);
+    const mat = this.matrizDe(obj);
+    const escala = Math.hypot(mat[0], mat[1]);
+    this.escribirTexto(obj, palabras[0]!);
+    if (!this.textoEscritoCoincide(page, obj, palabras[0]!)) return null;
+    let cursor = this.avanceNatural(font, sizeNominal, escala, palabras[0]!);
+    let finU = eje.uOrigen + cursor;
+
+    // Atributos del objeto original que se copian a cada palabra nueva.
+    const r = m.malloc(4), g = m.malloc(4), b = m.malloc(4), a = m.malloc(4);
+    this.p.FPDFPageObj_GetFillColor(obj, r, g, b, a);
+    const relleno: [number, number, number, number] = [m.getValue(r, 'i32'), m.getValue(g, 'i32'), m.getValue(b, 'i32'), m.getValue(a, 'i32')];
+    let trazo: [number, number, number, number] | null = null;
+    if (this.p.FPDFPageObj_GetStrokeColor(obj, r, g, b, a)) trazo = [m.getValue(r, 'i32'), m.getValue(g, 'i32'), m.getValue(b, 'i32'), m.getValue(a, 'i32')];
+    [r, g, b, a].forEach((ptr) => m.free(ptr));
+    const modo = this.p.FPDFTextObj_GetTextRenderMode(obj);
+
+    const extras: number[] = [];
+    let indice = -1;
+    const total = this.p.FPDFPage_CountObjects(page);
+    for (let i = 0; i < total; i++) if (this.p.FPDFPage_GetObject(page, i) === obj) { indice = i; break; }
+    for (let k = 1; k < palabras.length; k++) {
+      const palabra = palabras[k]!;
+      const desde = cursor + huecoPt;
+      const nuevo = this.p.FPDFPageObj_CreateTextObj(doc, font, sizeNominal);
+      if (!nuevo) return null;
+      this.escribirTexto(nuevo, palabra);
+      this.p.FPDFPageObj_SetFillColor(nuevo, relleno[0], relleno[1], relleno[2], relleno[3]);
+      if (trazo) this.p.FPDFPageObj_SetStrokeColor(nuevo, trazo[0], trazo[1], trazo[2], trazo[3]);
+      if (modo >= 0) this.p.FPDFTextObj_SetTextRenderMode(nuevo, modo);
+      const buf = m.malloc(24);
+      const dest = [mat[0], mat[1], mat[2], mat[3], mat[4] + desde * eje.cos, mat[5] + desde * eje.sin];
+      dest.forEach((v, i) => m.setValue(buf + i * 4, v, 'float'));
+      this.p.FPDFPageObj_SetMatrix(nuevo, buf);
+      m.free(buf);
+      if (indice < 0 || !this.p.FPDFPage_InsertObjectAtIndex(page, nuevo, indice + k)) this.p.FPDFPage_InsertObject(page, nuevo);
+      if (!this.textoEscritoCoincide(page, nuevo, palabra)) return null;
+      extras.push(nuevo);
+      cursor = desde + this.avanceNatural(font, sizeNominal, escala, palabra);
+      finU = eje.uOrigen + cursor;
+    }
+    return { extras, finU };
+  }
+
+  /**
+   * Final REAL del objeto a lo largo del texto (coordenada `u` de la dirección `theta`, pt de usuario), de su caja
+   * (`FPDFPageObj_GetBounds`: incluye `Tw`, `Tc` y los ajustes de `TJ`). `null` si la caja no sirve o si la dirección no
+   * es múltiplo de 90° (la caja es entonces el rectángulo envolvente y no da el extremo exacto).
+   */
+  private finRealU(obj: number, cos: number, sin: number, theta: number): number | null {
+    const g = Math.abs(((theta * 180) / Math.PI) % 90);
+    if (g >= 0.5 && g <= 89.5) return null;
+    const c = this.cajaUnida([obj]);
+    if (!Number.isFinite(c.l) || !(c.r > c.l) || !(c.t > c.b)) return null;
+    return Math.max(c.l * cos + c.b * sin, c.r * cos + c.b * sin, c.l * cos + c.t * sin, c.r * cos + c.t * sin);
   }
 
   /** Caja unida (pt de usuario) de varios objetos de página: `FPDFPageObj_GetBounds`. */

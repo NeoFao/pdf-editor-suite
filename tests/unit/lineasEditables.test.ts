@@ -41,6 +41,24 @@ describe('agruparLineasEditables: criterios del diseño (runs sintéticos)', () 
     expect(textos([r({ text: 'abc', xPt: 40, yPt: 0 }), r({ text: 'def', xPt: 55, yPt: 0, anguloDeg: 0.5 })])).toEqual(['abcdef']);
   });
 
+  test('E-085: el hueco se mide con la caja REAL; Tw o TJ no parten una palabra (ni el avance natural manda)', () => {
+    // «coop|erates»: el primer objeto mide 36 pt más que su avance natural (Tw de justificación) y el segundo empieza donde acaba la caja.
+    id = 0;
+    expect(textos([
+      r({ text: 'a coop', xPt: 40, avancePt: 30, wPt: 66 }), r({ text: 'erates', xPt: 106 })
+    ])).toEqual(['a cooperates']);
+    // Al revés (InDesign apretando con TJ): la caja es 8,5 pt MÁS CORTA que el avance natural y el siguiente empieza en su borde real.
+    id = 0;
+    expect(textos([
+      r({ text: 'a coop', xPt: 40, avancePt: 30, wPt: 21.5 }), r({ text: 'erates', xPt: 61.5 })
+    ])).toEqual(['a cooperates']);
+    // Un hueco real de 0,8 em entre las cajas (columna vecina) sigue separando, sea cual sea el avance natural.
+    id = 0;
+    expect(textos([
+      r({ text: 'izq', xPt: 40, avancePt: 80, wPt: 15 }), r({ text: 'der', xPt: 63 })
+    ])).toEqual(['izq', 'der']);
+  });
+
   test('C2: la capa invisible (render 3) no se mezcla con el texto visible', () => {
     id = 0;
     expect(textos([r({ text: 'visible', xPt: 40 }), r({ text: 'oculto', xPt: 75, renderMode: 3 })])).toEqual(['visible', 'oculto']);

@@ -2951,3 +2951,67 @@ queda en su sitio, insertar texto, nota, imagen y resaltado caen donde se hace c
 
 **Límites conocidos.** `UserUnit` (escala de página) sigue sin tratarse. El OCR sobre una página con `/Rotate` ≠ 0 sigue ignorando la
 rotación (anterior a E-084).
+
+### E-085 · En líneas justificadas (InDesign, Word 365) la agrupación partía la línea a mitad de palabra y editar una mitad alteraba la otra
+
+**Síntoma.** En un PDF de InDesign o de Word 365 la línea «…and cooperates with Client…» salía como dos líneas editables
+(«coop» y «erates with…»). Reemplazar «Client» en la primera mitad la acortaba, la segunda no se movía y «cooperates» quedaba como
+«coop erates»: una palabra que el usuario NO tocó cambiaba (AGENTS.md §2.3). Lo mismo con «disass|embly», «wor|kers»,
+«appro|ach»; Reemplazar decía «coincidencia no reemplazada porque abarca varias líneas».
+
+**Causa raíz.** `lineasEditables.ts` medía el hueco entre objetos contra el avance NATURAL de los glifos (`u + avancePt`), que
+ignora `Tw` (espaciado entre palabras), `Tc` y los desplazamientos de `TJ`: justamente lo que hace la justificación. Con `Tw` la
+caja real es más ancha que el avance natural (salto +0,68 em > `SALTO_MAX_EM`); con `TJ` apretado es más estrecha (−0,71 em <
+`SALTO_MIN_EM`). Además, `editLine` trasladaba el sufijo el Δ de avances naturales, así que aun con la línea entera un objeto con
+`Tw`/`TJ` dejaba el sufijo con un hueco (o solapado) respecto a lo reescrito.
+
+**Arreglo.** (1) `medir()` toma los extremos `uIni`/`uFin` de la CAJA del objeto (`FPDFPageObj_GetBounds`, incluye `Tw`, `Tc` y `TJ`),
+proyectada sobre el eje del texto y corregida con el margen lateral típico de un glifo (`BEARING_EM`, porque la caja es la de la
+tinta); con ángulo oblicuo o sin caja cae al avance natural. El hueco, la fusión de segmentos y el orden visual usan esos extremos.
+(2) `editarLineaCompuesta`: si el último objeto del tramo editado lleva desplazamientos (su caja acaba a más de 0,15 em del avance
+natural), Δ se mide con la caja del objeto viejo y del reescrito, de modo que el sufijo mantiene el hueco que tenía con la palabra
+vecina. Medido sobre el corpus real (29 PDF): las palabras partidas por la agrupación pasan de 71 a 0 en el corpus (antes en
+InDesign, Word y pdfTeX); las líneas de Chrome/Skia no cambian.
+
+**Cómo se detecta ahora.** Fixture `justificado-tw.pdf` (dos líneas, «cooperativa» partida en dos objetos con `Tw` de 9 pt y con `TJ`
+de +250) y `tests/unit/JustificadoTw.test.ts` (una línea, no dos; reemplazar en la primera mitad deja «cooperativa» entera y el
+mismo hueco; guardar y reabrir), `tests/e2e/next/justificado-y-espacio-tex.spec.ts` (Chromium). Regla
+`agrupacion-sin-avance-natural`: prohíbe `avancePt` en `lineasEditables.ts` salvo como respaldo de `extremosReales()`.
+
+**Límites conocidos.** En una línea justificada el tramo editado sigue pasando a espaciado natural (E-083). La caja es la de la
+tinta: el margen `BEARING_EM` (0,05 em por lado) es una estimación, no el avance exacto. Con texto oblicuo (no múltiplo de 90°) se
+usa el avance natural, con su defecto. En RTL (árabe) las líneas ahora se unen en una sola (antes salían en tres piezas
+desordenadas), pero el orden visual de las letras no se trata (F6 sigue abierto).
+
+### E-086 · En LaTeX (pdfTeX) editar una línea con espacios pasaba TODA la línea a Helvetica
+
+**Síntoma.** En un PDF de pdfTeX (NimbusRomNo9L, Type 1 subconjunto), cambiar «Zakai» por «iakaZ» en «Alon Zakai» y pulsar Enter dejaba
+«La fuente original no tiene algún carácter; la línea usa Helvetica.» y la línea pasaba de Times a Helvetica; una línea sin espacio
+(«Mozilla») se editaba bien. Además el motor extraía «AlonZakai» mientras el editor mostraba «Alon Zakai».
+
+**Causa raíz.** TeX no escribe el espacio como glifo: separa las palabras con desplazamientos de `TJ` (`[(Alon)-333(Zakai)] TJ`) y el
+subconjunto no trae glifo de espacio. Al teclear un espacio, `FPDFText_SetText` lo escribe como un código inexistente (PDFium lo
+lee de vuelta como `ÿ`), así que la verificación de E-079 (releer lo escrito) lo tomaba por glifo ausente y la edición caía al camino
+de la fuente estándar (E-047) para toda la línea. Y `textoReal` descartaba los espacios que PDFium genera DENTRO de un objeto (los
+huecos de `TJ`), que en TeX son las separaciones de palabras reales.
+
+**Arreglo.** (1) `textoRealPorObjeto`/`textoRealDeObjeto` incluyen el espacio generado entre dos caracteres del MISMO objeto: la
+línea extrae «Alon Zakai». (2) Si la escritura falla, el texto tiene espacios y la fuente no tiene glifo de espacio
+(`fuenteSinEspacio`: ancho 0), `editLine` escribe PALABRA A PALABRA (`escribirPorPalabras`): la primera en sitio sobre el objeto
+original y cada una de las siguientes en un objeto nuevo con la MISMA fuente (`CreateTextObj` con el handle prestado), color, modo
+de render y matriz, desplazado por el avance natural de las anteriores más el ancho del espacio, medido de la propia línea
+(`medirEspacioPt`: hueco entre objetos vecinos y caja menos avance en objetos con `TJ`; sin muestras, 0,25 em como TeX). Cada
+palabra se relee (E-079). Un glifo VISIBLE ausente sigue siendo `glyph-missing` y entra la fuente estándar (E-047). Las líneas de un
+objeto con espacios tecleados pasan al camino compuesto (`EditarLineaCmd`, deshacer por snapshot); `editLine` devuelve
+`objetosAnadidos` y `ReemplazarTextoCmd` deshace por snapshot en ese caso.
+
+**Cómo se detecta ahora.** Fixture `sin-espacio-tex.pdf` (Type 1 incrustado escrito a mano, sin glifo de espacio, `/Widths` desde `A`,
+`Differences`, líneas con `TJ`: reproduce el `ÿ`), `tests/unit/EspacioTex.test.ts` (fuente original conservada en la línea editada y
+tras guardar y reabrir, palabras separadas por espacio, sin `.notdef`, espacio de ≈ 8 pt, 0 px distintos fuera de la franja, glifo
+visible ausente → Helvetica) y `tests/e2e/next/justificado-y-espacio-tex.spec.ts` (Chromium: estado «Editado.», fuente conservada,
+deshacer).
+
+**Límites conocidos.** La línea editada pasa a espaciado natural más un hueco medio entre palabras (la justificación original de TeX
+se pierde, como en E-083). Las palabras nuevas no heredan el recorte (`clip`) del objeto original. Cambiar tamaño o fuente
+(`setRunFontSize`, `setLineProps`) de una línea de TeX con espacios sigue sin tratarse: con la fuente sin espacio devuelve
+`glyph-missing` en vez de perder los espacios.

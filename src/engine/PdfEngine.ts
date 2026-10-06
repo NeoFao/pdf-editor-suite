@@ -71,11 +71,13 @@ export interface LineaParaEditar {
  * `lineaRunIdInicial`: índice del primer objeto de la línea tras la edición (para reapuntar la selección).
  * `dxPt`: Δ, cuánto se trasladó el sufijo a lo largo del eje del texto (pt de página, con signo).
  * `fuenteEstandar`: nombre de la fuente estándar usada para el tramo cuando se pidió esa sustitución (E-047).
+ * `objetosAnadidos`: objetos de texto nuevos (una palabra cada uno) creados porque la fuente no tiene glifo de espacio (E-086):
+ * la estructura de la página cambió y deshacer ya no puede ser reescribir el texto viejo en sitio.
  * `stale`: los objetos ya no tienen el texto de la línea (el modelo está desactualizado).
  */
 export type EditLineResult =
   | { ok: true; sinCambios: true }
-  | { ok: true; lineaRunIdInicial: number; dxPt: number; fuenteEstandar?: string }
+  | { ok: true; lineaRunIdInicial: number; dxPt: number; fuenteEstandar?: string; objetosAnadidos?: number }
   | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' | 'empty-text' | 'stale' };
 
 /**

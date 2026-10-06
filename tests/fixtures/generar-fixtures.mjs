@@ -1233,6 +1233,149 @@ async function pdfCidSubconjunto() {
 }
 
 /**
+ * `justificado-tw.pdf` (E-085): líneas justificadas como las de InDesign y Word. Cada línea son DOS objetos de texto que
+ * parten la palabra «cooperativa» («coop» | «erativa»). El segundo empieza donde acaba DE VERDAD el primero, pero el
+ * avance NATURAL de los glifos no lo sabe:
+ *   1. `Tw` de 9 pt con 4 espacios: el real es 36 pt (3 em) mayor que el natural.
+ *   2. `TJ` con tres ajustes de +250 (apretar): el real es 9 pt (0,75 em) MENOR que el natural.
+ * Helvetica estándar, 12 pt, a 72 pt del borde izquierdo.
+ */
+export const TEXTO_JUSTIFICADO = [
+  { a: 'Los clientes de la coop', b: 'erativa trabajan bien', y: 700 },
+  { a: 'Nuestros clientes acuerdan que la coop', b: 'erativa decide hoy', y: 640 }
+];
+async function pdfJustificadoTw() {
+  const doc = await PDFDocument.create();
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  const ancho = (t) => helv.widthOfTextAtSize(t, 12);
+  const page = doc.addPage([420, 780]);
+  page.node.setFontDictionary(PDFName.of('F1'), helv.ref);
+  const num = (v) => v.toFixed(4).replace(/\.?0+$/, '');
+  const L1 = TEXTO_JUSTIFICADO[0];
+  const x1 = 72 + ancho(L1.a) + 4 * 9; // 4 espacios con Tw = 9
+  const L2 = TEXTO_JUSTIFICADO[1];
+  const tramos = ['Nuestros', ' clientes', ' acuerdan que la', ' coop'];
+  const x2 = 72 + ancho(L2.a) - 3 * 0.25 * 12; // tres ajustes de +250 milésimas de em
+  const cuerpo = [
+    `BT /F1 12 Tf 9 Tw 72 ${L1.y} Td (${L1.a}) Tj ET`,
+    `BT /F1 12 Tf 9 Tw 1 0 0 1 ${num(x1)} ${L1.y} Tm (${L1.b}) Tj ET`,
+    `BT /F1 12 Tf 0 Tw 72 ${L2.y} Td [(${tramos[0]}) 250 (${tramos[1]}) 250 (${tramos[2]}) 250 (${tramos[3]})] TJ ET`,
+    `BT /F1 12 Tf 0 Tw 1 0 0 1 ${num(x2)} ${L2.y} Tm (${L2.b}) Tj ET`
+  ].join('\n');
+  page.node.set(PDFName.of('Contents'), doc.context.register(doc.context.stream(cuerpo)));
+  return doc.save({ useObjectStreams: false });
+}
+
+/** Cifrado de Type 1 (Adobe Type 1 Font Format, cap. 7): `r` es la clave (4330 para charstrings, 55665 para eexec). */
+function cifrarType1(bytes, r) {
+  const out = Buffer.alloc(bytes.length);
+  for (let i = 0; i < bytes.length; i++) {
+    const c = bytes[i] ^ (r >> 8);
+    out[i] = c;
+    r = ((c + r) * 52845 + 22719) & 0xffff;
+  }
+  return out;
+}
+
+/** Entero de un charstring Type 1. */
+function numeroType1(v) {
+  if (v >= -107 && v <= 107) return [v + 139];
+  if (v >= 108 && v <= 1131) { const w = v - 108; return [247 + (w >> 8), w & 255]; }
+  const w = -v - 108;
+  return [251 + (w >> 8), w & 255];
+}
+
+/**
+ * Fuente Type 1 mínima construida a mano (PFA con eexec): un rectángulo por glifo y SIN glifo de espacio, como los
+ * subconjuntos que escribe pdfTeX. El código de cada carácter sale del `/Encoding` incorporado (códigos ASCII).
+ */
+function type1SinEspacio(nombre, glifos) {
+  const cs = (adv, ruta) => {
+    const bytes = [0, 0, 0, 0]; // lenIV = 4
+    const num = (v) => bytes.push(...numeroType1(v));
+    const op = (...o) => bytes.push(...o);
+    num(50); num(adv); op(13); // sbx wx hsbw
+    for (const [x, y, o] of ruta) { num(x); if (y !== null) num(y); op(o); }
+    op(9, 14); // closepath endchar
+    return cifrarType1(Buffer.from(bytes), 4330);
+  };
+  const notdef = cifrarType1(Buffer.from([0, 0, 0, 0, ...numeroType1(0), ...numeroType1(500), 13, 14]), 4330);
+  const partes = [];
+  const push = (t) => partes.push(Buffer.from(t, 'latin1'));
+  push('dup /Private 8 dict dup begin\n/RD {string currentfile exch readstring pop} executeonly def\n');
+  push('/ND {noaccess def} executeonly def\n/NP {noaccess put} executeonly def\n');
+  push('/BlueValues [] def\n/MinFeature {16 16} def\n/password 5839 def\n');
+  push(`2 index /CharStrings ${glifos.length + 1} dict dup begin\n`);
+  const entrada = (n, b) => { push(`/${n} ${b.length} RD `); partes.push(b); push(' ND\n'); };
+  entrada('.notdef', notdef);
+  for (const g of glifos) {
+    const w = g.adv - 100;
+    entrada(g.ch, cs(g.adv, [[50, 0, 21], [w, 0, 5], [0, 700, 5], [-w, 0, 5]])); // rmoveto, rlineto x3
+  }
+  push('end\nend\nreadonly put\nnoaccess put\ndup /FontName get exch definefont pop\nmark currentfile closefile\n');
+  const privado = Buffer.concat(partes);
+  const cifrado = cifrarType1(Buffer.concat([Buffer.from([0x4a, 0x7b, 0x21, 0x9c]), privado]), 55665);
+  const codigos = glifos.map((g) => `dup ${g.ch.charCodeAt(0)} /${g.ch} put`).join('\n');
+  const claro = Buffer.from([
+    '%!PS-AdobeFont-1.0: TeXSinEspacio 001.000', '11 dict begin',
+    '/FontInfo 3 dict dup begin /version (001.000) readonly def /FullName (TeXSinEspacio) readonly def /FamilyName (TeXSinEspacio) readonly def end readonly def',
+    `/FontName /${nombre} def`, '/PaintType 0 def', '/FontType 1 def', '/FontMatrix [0.001 0 0 0.001 0 0] readonly def',
+    '/Encoding 256 array', '0 1 255 {1 index exch /.notdef put} for', codigos, 'readonly def',
+    '/FontBBox {0 0 900 700} readonly def', 'currentdict end', 'currentfile eexec\n'
+  ].join('\n'), 'latin1');
+  const cola = Buffer.from(`${'0'.repeat(64)}\n`.repeat(8) + 'cleartomark\n', 'latin1');
+  return { programa: Buffer.concat([claro, cifrado, cola]), l1: claro.length, l2: cifrado.length, l3: cola.length };
+}
+
+/**
+ * Glifos de la fuente de `sin-espacio-tex.pdf`: Type 1 subconjunto SIN glifo de espacio, como los de pdfTeX (TeX separa las
+ * palabras con desplazamientos, no con un carácter). Cada glifo se llama como su letra.
+ */
+const GLIFOS_SIN_ESPACIO = [
+  { ch: 'A', adv: 700 }, { ch: 'D', adv: 750 }, { ch: 'H', adv: 700 }, { ch: 'L', adv: 550 },
+  { ch: 'M', adv: 850 }, { ch: 'N', adv: 750 }, { ch: 'O', adv: 750 }, { ch: 'U', adv: 700 }
+];
+/** Líneas de `sin-espacio-tex.pdf`: un `TJ` cada una, con un desplazamiento de 333 milésimas donde hay espacio. */
+export const TEXTO_TEX = ['HOLA MUNDO', 'UNA MANO', 'AMO HOLA UNA DAMA'];
+/**
+ * `sin-espacio-tex.pdf` (E-086): Type 1 incrustado (FontFile) sin glifo de espacio, con `/Encoding` por `Differences`, `/Widths`
+ * desde `A` y flag simbólico, como lo escribe pdfTeX. Cada línea es UN objeto con `TJ` (`[(HOLA)-333(MUNDO)] TJ`): PDFium
+ * extrae «HOLA MUNDO» por el hueco, pero escribir un espacio real con esa fuente no es posible (el código 32 no existe).
+ */
+async function pdfSinEspacioTex() {
+  const doc = await PDFDocument.create();
+  const ctx = doc.context;
+  const nombre = 'AAAAAA+TeXSinEspacio';
+  const t1 = type1SinEspacio(nombre, GLIFOS_SIN_ESPACIO);
+  const fontFile = ctx.register(ctx.flateStream(t1.programa, { Length1: t1.l1, Length2: t1.l2, Length3: t1.l3 }));
+  const descriptor = ctx.register(ctx.obj({
+    Type: 'FontDescriptor', FontName: nombre, Flags: 4, FontBBox: [0, 0, 900, 700], ItalicAngle: 0,
+    Ascent: 700, Descent: 0, CapHeight: 700, StemV: 80, FontFile: fontFile
+  }));
+  const primero = 'A'.charCodeAt(0), ultimo = 'U'.charCodeAt(0);
+  const anchos = [];
+  for (let c = primero; c <= ultimo; c++) anchos.push(GLIFOS_SIN_ESPACIO.find((g) => g.ch === String.fromCharCode(c))?.adv ?? 0);
+  const diferencias = [];
+  let previo = -2;
+  for (const g of GLIFOS_SIN_ESPACIO) {
+    const c = g.ch.charCodeAt(0);
+    if (c !== previo + 1) diferencias.push(c);
+    diferencias.push(PDFName.of(g.ch));
+    previo = c;
+  }
+  const font = ctx.register(ctx.obj({
+    Type: 'Font', Subtype: 'Type1', BaseFont: nombre, FirstChar: primero, LastChar: ultimo, Widths: anchos,
+    FontDescriptor: descriptor, Encoding: { Type: 'Encoding', Differences: diferencias }
+  }));
+  const linea = (t) => '[' + t.split(' ').map((w) => `(${w})`).join('-333') + '] TJ';
+  const page = doc.addPage([420, 300]);
+  page.node.setFontDictionary(PDFName.of('F1'), font);
+  const cuerpo = TEXTO_TEX.map((t, i) => `BT /F1 24 Tf 40 ${240 - i * 60} Td ${linea(t)} ET`).join('\n');
+  page.node.set(PDFName.of('Contents'), ctx.register(ctx.stream(cuerpo)));
+  return doc.save({ useObjectStreams: false });
+}
+
+/**
  * E-084: tres páginas cuya caja VISIBLE no tiene origen (0,0), como las plantillas de Acrobat Distiller.
  *   1: MediaBox [0 0 595.28 841.89] y CropBox [36 36 436 336] (400x300 visibles, origen (36,36)).
  *   2: MediaBox [-50 -80 350 220] (origen negativo, 400x300), sin CropBox.
@@ -1272,6 +1415,8 @@ async function main() {
     'subconjunto.pdf': await pdfSubconjunto(),
     'por-glifo.pdf': await pdfPorGlifo(),
     'cid-subconjunto.pdf': await pdfCidSubconjunto(),
+    'justificado-tw.pdf': await pdfJustificadoTw(),
+    'sin-espacio-tex.pdf': await pdfSinEspacioTex(),
     'marcadores.pdf': await pdfMarcadores(),
     'outline-ciclo.pdf': await pdfOutlineCiclo(),
     'marcadores-uri.pdf': await pdfMarcadoresConAccion({ S: 'URI', URI: PDFString.of('https://example.com/') }),
