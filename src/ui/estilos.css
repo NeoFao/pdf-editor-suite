@@ -496,6 +496,8 @@ select, input[type="text"], input[type="search"], input[type="number"] {
 }
 .image-box.selected {
   border-color: var(--ed-accent);
+  /* N2: arrastrar con el dedo la imagen seleccionada la mueve; sin esto el navegador hace scroll y manda pointercancel. */
+  touch-action: none;
 }
 .image-handle {
   position: absolute;

@@ -445,6 +445,8 @@ export class Viewer {
     const cursor = tool === 'eraser' ? 'cell' : 'crosshair';
     this.root.querySelectorAll<HTMLElement>('.tool-layer').forEach((el) => {
       el.style.pointerEvents = activo ? 'auto' : 'none';
+      // N2: con una herramienta de dibujo el dedo dibuja, no hace scroll (si no, el navegador manda `pointercancel`).
+      el.style.touchAction = activo ? 'none' : '';
       el.style.cursor = cursor;
     });
   }
@@ -1228,6 +1230,7 @@ export class Viewer {
     Object.assign(toolLayer.style, {
       position: 'absolute', inset: '0',
       pointerEvents: activo ? 'auto' : 'none',
+      touchAction: activo ? 'none' : '',
       cursor: this.tool === 'eraser' ? 'cell' : 'crosshair'
     });
     this.attachToolCapture(toolLayer, i);

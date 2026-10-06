@@ -268,7 +268,7 @@ export class TextLayer {
     const sobresale = 9;
     const bloqueX = parseFloat(block.style.left) || 0, bloqueY = parseFloat(block.style.top) || 0;
     Object.assign(handle.style, {
-      position: 'absolute', width: '14px', height: '14px',
+      position: 'absolute', width: '14px', height: '14px', touchAction: 'none', // N2: el dedo arrastra el tirador, no hace scroll
       left: `${-Math.min(sobresale, Math.max(0, bloqueX))}px`,
       top: `${-Math.min(sobresale, Math.max(0, bloqueY))}px`
     });

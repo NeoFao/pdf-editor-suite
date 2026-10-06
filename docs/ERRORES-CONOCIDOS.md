@@ -2751,3 +2751,23 @@ herramienta. Sin herramienta, un clic sigue editando.
 
 **Cómo se detecta ahora.** `tests/e2e/next/colocar-sobre-texto.spec.ts` (Nota e Insertar sobre una línea colocan y no editan;
 sin herramienta se edita). Fallaban antes. Sin regla guard: es comportamiento de interacción.
+
+---
+
+### E-077 · En móvil, Rectángulo, Pluma y mover imagen no funcionaban con el dedo: el navegador se quedaba el gesto (N2)
+
+**Síntoma.** A 390 px con pantalla táctil, arrastrar con el dedo con Rectángulo o Pluma activos no dibujaba nada («No hay
+nada que deshacer») y arrastrar una firma/imagen desplazaba el visor en vez de moverla. El registro de eventos mostraba
+`pointerdown`, un `pointermove` y `pointercancel`. Con ratón todo funcionaba.
+
+**Causa raíz.** Ni `.tool-layer`, ni `.image-box`, ni el tirador de mover texto declaraban `touch-action: none`, así que el
+navegador interpretaba el arrastre como scroll y cancelaba el puntero (el gesto termina en `pointercancel`, E-034). Los tests
+móviles solo hacían toques, nunca arrastres.
+
+**Arreglo.** `touch-action: none` SOLO donde el dedo debe dibujar o arrastrar, para no romper el scroll normal: `.tool-layer`
+mientras la herramienta es pluma/rectángulo/borrador (`Viewer.setTool` y al crear la capa), `.image-box.selected` (estilos) y
+el tirador de mover texto. Sin herramienta o con la imagen sin seleccionar el dedo sigue haciendo scroll.
+
+**Cómo se detecta ahora.** `tests/e2e/next/tactil.spec.ts` (390x844, `hasTouch`, toques reales por CDP que sí respetan
+`touch-action`): rectángulo con el dedo crea el `DrawRectCmd` y se deshace; con «ninguna» el dedo hace scroll; imagen
+seleccionada se mueve sin desplazar el visor. Fallaban antes. Sin regla guard: depende de la interacción táctil real.
