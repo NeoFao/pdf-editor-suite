@@ -399,6 +399,20 @@ async function pdfTamanosMixtos() {
   return doc.save();
 }
 
+/**
+ * Una página con líneas pegadas a los bordes (E-066): el tirador de mover (-9 px fuera de la caja)
+ * de la línea de la esquina superior izquierda y de la del borde inferior caerían fuera de la página.
+ */
+async function pdfLineasBorde() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const p = doc.addPage([400, 300]);
+  p.drawText('ESQUINA', { x: 1, y: 300 - 11, size: 10, font });
+  p.drawText('SUELO', { x: 1, y: 1, size: 10, font });
+  p.drawText('CENTRO', { x: 150, y: 150, size: 10, font });
+  return doc.save();
+}
+
 /** Igual que `paginas-pequenas.pdf`, con un marcador por página (E-032, caso (c) de pagina-actual.spec.ts). */
 async function pdfPaginasPequenasMarcadores() {
   const doc = await PDFDocument.create();
@@ -964,6 +978,7 @@ async function main() {
     'paginas-pequenas.pdf': await pdfPaginasPequenas(),
     'grande.pdf': await pdfGrande(),
     'tamanos-mixtos.pdf': await pdfTamanosMixtos(),
+    'lineas-borde.pdf': await pdfLineasBorde(),
     'paginas-pequenas-marcadores.pdf': await pdfPaginasPequenasMarcadores(),
     'escaneado.pdf': await pdfEscaneado(),
     'estructurado.pdf': await pdfEstructurado(),
