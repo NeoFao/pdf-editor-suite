@@ -54,7 +54,7 @@ import { registrarGesto } from './gesto';
 import { resolverAtajo, esCampoEditable, type AccionAtajo } from './atajos';
 import { AtajosPanel } from './AtajosPanel';
 import { parseRange } from './pageRange';
-import { Viewer, type ToolMode } from './Viewer';
+import { Viewer, ETIQUETA_MARCADO, type ToolMode, type MarcadoKind } from './Viewer';
 import { calcularEscalaAjusteAncho } from './layout';
 import type { EditRequest } from './TextLayer';
 import { PageGeometry, type PtPoint } from '../coords/PageGeometry';
@@ -117,7 +117,7 @@ const TOOL_STATUS: Record<ToolMode, string> = {
   pen: 'Modo pluma: arrastra para dibujar.',
   note: 'Modo nota: haz clic donde quieras la nota.',
   rect: 'Modo rectángulo: arrastra para dibujarlo.',
-  eraser: 'Modo borrador: haz clic sobre un trazo o un rectángulo para borrarlo.'
+  eraser: 'Modo borrador: haz clic sobre un trazo, un rectángulo o un resaltado, subrayado o tachado para borrarlo.'
 };
 
 /**
@@ -795,6 +795,8 @@ export class App {
       if (e.key === 'Escape' && this.moreOpen) { e.preventDefault(); this.closeMore(); return; }
       // Escape descarta la selección de texto por arrastre (T12) si no se está editando un campo.
       if (e.key === 'Escape' && !esCampoEditable(e.target) && this.viewer?.seleccionTexto()) { this.viewer.limpiarSeleccionTexto(); return; }
+      // Escape suelta la anotación seleccionada con un clic (T14).
+      if (e.key === 'Escape' && !esCampoEditable(e.target) && this.viewer?.marcadoSeleccionado()) { this.viewer.limpiarMarcadoSeleccionado(); return; }
 
       const def = resolverAtajo({
         key: e.key,
@@ -1108,6 +1110,15 @@ export class App {
         this.reflectPropsPanel();
       },
       onBackgroundClick: (pageIndex, at) => { this.selectedImage = null; this.handleBackgroundClick(pageIndex, at); },
+      onEraseMarcado: (pageIndex, annotIndex, kind) => { this.borrarMarcado(pageIndex, annotIndex, kind); },
+      onMarcadoSelect: (sel) => {
+        if (!sel) return;
+        this.selection = null; // la anotación sustituye a la selección de una línea o imagen
+        this.selectedImage = null;
+        this.viewer?.deselectImage();
+        this.reflectPropsPanel();
+        this.setStatus(`${ETIQUETA_MARCADO[sel.kind]} seleccionad${sel.kind === 'note' ? 'a' : 'o'}. Pulsa Supr para borrarl${sel.kind === 'note' ? 'a' : 'o'} o Escape para soltarl${sel.kind === 'note' ? 'a' : 'o'}.`);
+      },
       onTextSelectionStart: () => {
         this.selection = null; // la selección de texto sustituye a la de una línea o imagen
         this.selectedImage = null;
@@ -1292,6 +1303,27 @@ export class App {
     this.setStatus('Nota añadida.');
   }
 
+  /** ¿El foco está en el cuerpo o en el visor (su contenedor con scroll o una página) (no en un panel, botón o campo)? */
+  private focoEnVisor(target: EventTarget | null): boolean {
+    return target === document.body || (target instanceof HTMLElement && target.closest('#viewer, .page') !== null);
+  }
+
+  /** Borra la anotación seleccionada con un clic (Supr/Retroceso); con deshacer. */
+  private borrarMarcadoSeleccionado(): void {
+    const sel = this.viewer?.marcadoSeleccionado();
+    if (!sel) return;
+    this.borrarMarcado(sel.pageIndex, sel.annotIndex, sel.kind);
+  }
+
+  /** Borra una nota/resaltado/subrayado/tachado (índice entre todas las anotaciones de la página), con deshacer. */
+  private borrarMarcado(pageIndex: number, annotIndex: number, kind: MarcadoKind): void {
+    if (!this.bus) return;
+    this.viewer?.limpiarMarcadoSeleccionado();
+    const nombre = ETIQUETA_MARCADO[kind];
+    void this.bus.execute(new RemoveNoteCmd(pageIndex, annotIndex, `Borrar ${nombre.toLowerCase()}`));
+    this.setStatus(`${nombre} borrad${kind === 'note' ? 'a' : 'o'}.`);
+  }
+
   private async deleteSelected(): Promise<void> {
     if (!this.bus || !this.selection) { this.setStatus('Selecciona primero una línea (haz clic en ella).'); return; }
     const { pageIndex, runId } = this.selection;
@@ -1372,6 +1404,9 @@ export class App {
         // Igual que antes de este PR: solo si hay una imagen seleccionada
         // (#20/#21) — si no, no hay nada que hacer aquí y el navegador
         // conserva su comportamiento por defecto.
+        // T14: con una anotación seleccionada (clic), Supr/Retroceso la borra. Solo si el foco está en el visor o en el
+        // cuerpo: con el foco en un panel o un botón no se roba la tecla.
+        if (this.viewer?.marcadoSeleccionado() && this.focoEnVisor(e.target)) { e.preventDefault(); this.borrarMarcadoSeleccionado(); break; }
         if (this.selectedImage) { e.preventDefault(); void this.deleteSelectedImage(); }
         break;
       case 'escape':

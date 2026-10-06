@@ -736,3 +736,11 @@ dialog.encabezado-panel::backdrop { background: rgba(0, 0, 0, .12); }
 .eh-mensaje { min-height: 1.2em; font-size: 13px; }
 .eh-barra { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .encabezado-panel [hidden] { display: none !important; }
+
+/* Anotación (resaltado, subrayado, tachado, nota) seleccionada con un clic (T14): contorno visible, sin tapar el texto. */
+.marcado-sel-quad {
+  box-sizing: border-box;
+  border: 2px solid var(--ed-focus-ring);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px #fff;
+}

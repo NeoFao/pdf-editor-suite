@@ -65,3 +65,58 @@ export function quadsPorLinea(cajas: readonly CajaMarcable[], geo: PageGeometry)
     return [si.xPt, si.yPt, sd.xPt, sd.yPt, ii.xPt, ii.yPt, id.xPt, id.yPt] as const;
   });
 }
+
+/**
+ * ¿El punto (x, y) cae dentro del quad? TODO en pt PDF de usuario (Y arriba, sin
+ * girar: el punto sale de `geom.cssToPt`, que ya deshace /Rotate, E-053).
+ *
+ * No supone un orden de vértices (Acrobat escribe sup-izq, sup-der, inf-izq,
+ * inf-der pero otros productores usan el orden cíclico) ni que el quad esté
+ * alineado con los ejes (texto girado): se ordenan las 4 esquinas por ángulo
+ * alrededor del centroide y se comprueba que el punto queda del mismo lado de
+ * las 4 aristas. Un quad degenerado (área 0) no contiene ningún punto.
+ */
+export function puntoEnQuad(x: number, y: number, q: QuadPt): boolean {
+  const v = [0, 2, 4, 6].map((k) => ({ x: q[k]!, y: q[k + 1]! }));
+  const cx = (v[0]!.x + v[1]!.x + v[2]!.x + v[3]!.x) / 4;
+  const cy = (v[0]!.y + v[1]!.y + v[2]!.y + v[3]!.y) / 4;
+  v.sort((a, b) => Math.atan2(a.y - cy, a.x - cx) - Math.atan2(b.y - cy, b.x - cx));
+  let area2 = 0;
+  for (let i = 0; i < 4; i++) { const a = v[i]!, b = v[(i + 1) % 4]!; area2 += a.x * b.y - b.x * a.y; }
+  if (Math.abs(area2) < 1e-9) return false;
+  const eps = 1e-6 * Math.sqrt(Math.abs(area2));
+  let positivos = 0, negativos = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = v[i]!, b = v[(i + 1) % 4]!;
+    const cruz = (b.x - a.x) * (y - a.y) - (b.y - a.y) * (x - a.x);
+    if (cruz > eps) positivos++; else if (cruz < -eps) negativos++;
+  }
+  return positivos === 0 || negativos === 0;
+}
+
+/** Lo que `marcadoBajoPunto` necesita de una anotación de la página. */
+export interface MarcadoHit {
+  index: number;
+  kind: 'note' | 'highlight' | 'underline' | 'strikeout';
+  /** QuadPoints (pt de usuario); vacío en una nota. */
+  quads: readonly QuadPt[];
+  rectPt: RectPt;
+}
+
+/**
+ * La anotación de marcado (resaltado, subrayado, tachado) o nota bajo el punto
+ * (pt de usuario), o `null`. Un marcado se acierta con SUS QUADS (un subrayado de
+ * dos líneas no responde en el hueco entre ellas, que sí está dentro de su /Rect);
+ * una nota, con su /Rect. Si varias coinciden gana la de mayor índice (la última
+ * dibujada, la de encima).
+ */
+export function marcadoBajoPunto<T extends MarcadoHit>(items: readonly T[], xPt: number, yPt: number): T | null {
+  let mejor: T | null = null;
+  for (const it of items) {
+    const dentro = it.kind === 'note' || it.quads.length === 0
+      ? xPt >= it.rectPt.xPt && xPt <= it.rectPt.xPt + it.rectPt.wPt && yPt >= it.rectPt.yPt && yPt <= it.rectPt.yPt + it.rectPt.hPt
+      : it.quads.some((q) => puntoEnQuad(xPt, yPt, q));
+    if (dentro && (!mejor || it.index > mejor.index)) mejor = it;
+  }
+  return mejor;
+}
