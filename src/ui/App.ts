@@ -52,7 +52,7 @@ import { rgbaAPngDataUrl, pngDataUrlARgba } from './firmasImagen';
 import { MisFirmasPanel } from './MisFirmasPanel';
 import { formatoBytes } from './formatoBytes';
 import { registrarGesto } from './gesto';
-import { resolverAtajo, esCampoEditable, type AccionAtajo } from './atajos';
+import { resolverAtajo, resolverAtajoContextual, esCampoEditable, type AccionAtajo } from './atajos';
 import { resumirParaAnunciar } from './anuncio';
 import { AtajosPanel } from './AtajosPanel';
 import { parseRange } from './pageRange';
@@ -118,8 +118,8 @@ const TOOL_STATUS: Record<ToolMode, string> = {
   none: '',
   insert: 'Modo insertar: haz clic donde quieras el texto.',
   pen: 'Modo pluma: arrastra para dibujar.',
-  note: 'Modo nota: haz clic donde quieras la nota.',
-  rect: 'Modo rectángulo: arrastra para dibujarlo.',
+  note: 'Modo nota: haz clic donde quieras la nota, o pulsa Enter para colocarla en la zona visible.',
+  rect: 'Modo rectángulo: arrastra para dibujarlo, o pulsa Enter para crear uno en la zona visible.',
   eraser: 'Modo borrador: haz clic sobre un trazo, un rectángulo o un resaltado, subrayado o tachado para borrarlo.'
 };
 
@@ -190,6 +190,8 @@ export class App {
   private appliedFontLabel: string | null = null;
   private viewer: Viewer | null = null;
   private scale = 1;
+  /** 'ancho' = ajustar al ancho (por defecto al abrir; se reajusta al rotar); 'manual' = el usuario eligió zoom. */
+  private modoZoom: 'ancho' | 'manual' = 'ancho';
   /** Limpieza pendiente (iframe + oyentes) del intento de impresión anterior, si quedó alguno sin cerrar. Ver `print`. */
   private limpiarImpresionAnterior: (() => void) | null = null;
   private readonly viewerEl: HTMLElement;
@@ -509,8 +511,8 @@ export class App {
     const btnSplit = this.iconBoton('dividir', 'Dividir', 'btn-split', () => this.splitByRange(), { mostrarEtiqueta: true });
     const btnSave = this.iconBoton('guardar', 'Guardar', 'btn-save', () => { void this.save(); });
     const btnPrint = this.iconBoton('imprimir', 'Imprimir', 'btn-print', () => { void this.print(); });
-    const btnUndo = this.iconBoton('deshacer', 'Deshacer', 'btn-undo', () => { void this.bus?.undo(); });
-    const btnRedo = this.iconBoton('rehacer', 'Rehacer', 'btn-redo', () => { void this.bus?.redo(); });
+    const btnUndo = this.iconBoton('deshacer', 'Deshacer', 'btn-undo', () => { void this.deshacer(); });
+    const btnRedo = this.iconBoton('rehacer', 'Rehacer', 'btn-redo', () => { void this.rehacer(); });
 
     this.status = document.createElement('span');
     this.status.id = 'status';
@@ -840,6 +842,16 @@ export class App {
       });
       if (def) this.ejecutarAtajo(def.accion, e);
     });
+
+    // E-073 (WCAG 2.1.1): Nota y Rectángulo por teclado. En FASE DE CAPTURA para adelantarse al Enter de una línea
+    // enfocada (que empezaría a editarla) y a las flechas/Mayús+flechas de la selección de texto.
+    document.addEventListener('keydown', (e) => {
+      if (e.defaultPrevented || (this.tool !== 'note' && this.tool !== 'rect') || !this.viewer) return;
+      if (esCampoEditable(e.target) || !this.focoEnVisor(e.target)) return;
+      const def = resolverAtajoContextual({ key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey, editable: false });
+      if (!def) return;
+      if (this.ejecutarHerramientaTeclado(def.accion, e)) { e.preventDefault(); e.stopPropagation(); }
+    }, true);
 
     // Ctrl/Cmd+C con una selección de texto por arrastre (T12): copia exactamente ese tramo.
     // Con el foco en un campo editable (una línea en edición, un input) manda el copiar nativo.
@@ -1335,6 +1347,50 @@ export class App {
     this.setStatus('Nota añadida.');
   }
 
+  /** Deshace y lo anuncia en `#status` (B1: un lector de pantalla no recibía confirmación). */
+  private async deshacer(): Promise<void> {
+    const label = await this.bus?.undo();
+    this.setStatus(label ? `Deshecho: ${label}` : 'No hay nada que deshacer.');
+  }
+
+  private async rehacer(): Promise<void> {
+    const label = await this.bus?.redo();
+    this.setStatus(label ? `Rehecho: ${label}` : 'No hay nada que rehacer.');
+  }
+
+  /**
+   * Nota y Rectángulo por teclado (E-073). Devuelve true si consumió la tecla. Página: la de la línea (o página)
+   * enfocada, si no la actual. Nota: sobre la línea enfocada o, si no hay, en la esquina superior izquierda de lo
+   * visible. Rectángulo: borrador en la zona visible que se mueve/redimensiona y se confirma con Enter.
+   */
+  private ejecutarHerramientaTeclado(accion: AccionAtajo, e: KeyboardEvent): boolean {
+    const v = this.viewer;
+    if (!v) return false;
+    const destino = e.target instanceof HTMLElement ? e.target : null;
+    const enPagina = Number(destino?.closest<HTMLElement>('.page')?.dataset.page);
+    const pageIndex = Number.isFinite(enPagina) ? enPagina : this.currentPage;
+    if (accion === 'herramienta-mover') {
+      if (this.tool !== 'rect' || !v.hayBorradorRect()) return false;
+      const dx = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      const dy = e.key === 'ArrowDown' ? 1 : e.key === 'ArrowUp' ? -1 : 0;
+      const aviso = v.moverRectTeclado(dx, dy, e.shiftKey);
+      if (aviso) this.setStatus(aviso);
+      return true;
+    }
+    if (accion !== 'herramienta-colocar') return false;
+    if (this.tool === 'note') {
+      const run = destino?.closest<HTMLElement>('.run') ?? null;
+      const at = (run ? v.puntoDeElementoPt(pageIndex, run) : null) ?? v.esquinaVisiblePt(pageIndex);
+      if (!at) { this.setStatus('No hay ninguna parte de la página a la vista.'); return true; }
+      void this.handleNote(pageIndex, at);
+      return true;
+    }
+    if (v.hayBorradorRect()) { v.confirmarRectTeclado(); return true; }
+    const aviso = v.iniciarRectTeclado(pageIndex);
+    this.setStatus(aviso ?? 'No hay ninguna parte de la página a la vista.');
+    return true;
+  }
+
   /** ¿El foco está en el cuerpo o en el visor (su contenedor con scroll o una página) (no en un panel, botón o campo)? */
   private focoEnVisor(target: EventTarget | null): boolean {
     return target === document.body || (target instanceof HTMLElement && target.closest('#viewer, .page') !== null);
@@ -1377,11 +1433,11 @@ export class App {
     switch (accion) {
       case 'deshacer':
         e.preventDefault();
-        void this.bus?.undo();
+        void this.deshacer();
         break;
       case 'rehacer':
         e.preventDefault();
-        void this.bus?.redo();
+        void this.rehacer();
         break;
       case 'guardar':
         e.preventDefault();
@@ -1949,6 +2005,8 @@ export class App {
     const idx = this.currentPage;
     await this.bus.execute(new RotatePageCmd(idx, 90));
     this.goToPage(idx);
+    // E-072: la página pasó de vertical a apaisada (o al revés): en modo "ancho" se reajusta; el zoom manual se respeta.
+    if (this.modoZoom === 'ancho') this.fitWidth();
   }
 
   private moveCurrentPage(delta: number): void {
@@ -2683,6 +2741,7 @@ export class App {
   }
 
   private zoom(factor: number): void {
+    this.modoZoom = 'manual';
     this.scale = Math.min(4, Math.max(0.25, Math.round(this.scale * factor * 100) / 100));
     this.viewer?.setScale(this.scale);
     this.zoomPctEl.textContent = `${Math.round(this.scale * 100)}%`;
@@ -2722,6 +2781,7 @@ export class App {
     const paddingX = parseFloat(cs.paddingLeft || '0') + parseFloat(cs.paddingRight || '0');
     const disponible = this.viewerEl.clientWidth - paddingX;
     if (disponible <= 0) return;
+    this.modoZoom = 'ancho';
     this.scale = calcularEscalaAjusteAncho(disponible, page.sizePt.widthPt);
     this.viewer.setScale(this.scale);
     this.zoomPctEl.textContent = `${Math.round(this.scale * 100)}%`;

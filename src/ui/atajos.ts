@@ -63,7 +63,9 @@ export type AccionAtajo =
   | 'tool-pen'
   | 'tool-rect'
   | 'tool-eraser'
-  | 'tool-note';
+  | 'tool-note'
+  | 'herramienta-colocar'
+  | 'herramienta-mover';
 
 export interface DefinicionAtajo {
   /** Texto para el panel de ayuda (`AtajosPanel`), no usado por `resolverAtajo`. */
@@ -73,6 +75,12 @@ export interface DefinicionAtajo {
   /** true: no se dispara si `evento.editable` — ver la regla de oro de arriba. */
   bloqueaEnEditable: boolean;
   coincide: (e: EventoAtajo) => boolean;
+  /**
+   * true: depende de la herramienta activa (Nota/Rectángulo), que `atajos.ts` no conoce. `resolverAtajo` la
+   * ignora (no choca con p. ej. Mayús+flechas de la selección de texto); `resolverAtajoContextual` solo mira estas,
+   * y `App` decide si aplica según la herramienta y el foco (E-073).
+   */
+  contextual?: boolean;
 }
 
 /** `KeyboardEvent.key` en minúsculas: normaliza 'Z'/'z' y deja 'Home'/'PageDown'/'Escape'/etc. comparables en minúsculas. */
@@ -293,6 +301,23 @@ export const TABLA_ATAJOS: DefinicionAtajo[] = [
     descripcion: 'Herramienta Nota',
     bloqueaEnEditable: true,
     coincide: (e) => !ctrlOMeta(e) && !e.alt && tecla(e) === 'n'
+  },
+  // E-073 (WCAG 2.1.1): Nota y Rectángulo sin ratón. Solo con la herramienta activa y el foco en el visor.
+  {
+    combinacion: 'Enter (con Nota o Rectángulo activa)',
+    accion: 'herramienta-colocar',
+    descripcion: 'Nota: la coloca en la zona visible (sobre la línea enfocada, si la hay) y pide su texto. Rectángulo: crea uno de tamaño por defecto en la zona visible; Enter de nuevo lo confirma y Esc lo cancela',
+    bloqueaEnEditable: true,
+    contextual: true,
+    coincide: (e) => !ctrlOMeta(e) && !e.alt && !e.shift && tecla(e) === 'enter'
+  },
+  {
+    combinacion: 'Flechas  ·  Mayús + flechas (rectángulo en preparación)',
+    accion: 'herramienta-mover',
+    descripcion: 'Mover el rectángulo (flechas) o redimensionarlo (Mayús + flechas: ← → ancho, ↑ ↓ alto)',
+    bloqueaEnEditable: true,
+    contextual: true,
+    coincide: (e) => !ctrlOMeta(e) && !e.alt && (tecla(e) === 'arrowleft' || tecla(e) === 'arrowright' || tecla(e) === 'arrowup' || tecla(e) === 'arrowdown')
   }
 ];
 
@@ -303,7 +328,15 @@ export const TABLA_ATAJOS: DefinicionAtajo[] = [
  * efectos — quien la llama decide qué hacer con el resultado (`App.ts`).
  */
 export function resolverAtajo(e: EventoAtajo): DefinicionAtajo | null {
-  const def = TABLA_ATAJOS.find((d) => d.coincide(e));
+  const def = TABLA_ATAJOS.find((d) => !d.contextual && d.coincide(e));
+  if (!def) return null;
+  if (def.bloqueaEnEditable && e.editable) return null;
+  return def;
+}
+
+/** Como `resolverAtajo`, pero solo entre los atajos contextuales (Nota/Rectángulo por teclado, E-073). */
+export function resolverAtajoContextual(e: EventoAtajo): DefinicionAtajo | null {
+  const def = TABLA_ATAJOS.find((d) => d.contextual && d.coincide(e));
   if (!def) return null;
   if (def.bloqueaEnEditable && e.editable) return null;
   return def;

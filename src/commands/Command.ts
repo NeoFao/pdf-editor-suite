@@ -60,18 +60,22 @@ export class CommandBus {
     this.redoStack = [];
   }
 
-  async undo(): Promise<void> {
+  /** Deshace el último comando y devuelve su `label` (`null` si no había nada que deshacer). */
+  async undo(): Promise<string | null> {
     const cmd = this.undoStack.pop();
-    if (!cmd) return;
+    if (!cmd) return null;
     await cmd.undo(this.ctx);
     this.redoStack.push(cmd);
+    return cmd.label;
   }
 
-  async redo(): Promise<void> {
+  /** Rehace el último comando deshecho y devuelve su `label` (`null` si no había nada que rehacer). */
+  async redo(): Promise<string | null> {
     const cmd = this.redoStack.pop();
-    if (!cmd) return;
+    if (!cmd) return null;
     await cmd.execute(this.ctx);
     this.undoStack.push(cmd);
+    return cmd.label;
   }
 
   canUndo(): boolean { return this.undoStack.length > 0; }

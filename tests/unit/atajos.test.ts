@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { resolverAtajo, esCampoEditable, TABLA_ATAJOS } from '../../src/ui/atajos';
+import { resolverAtajo, resolverAtajoContextual, esCampoEditable, TABLA_ATAJOS } from '../../src/ui/atajos';
 
 /** Construye un evento normalizado con los campos por defecto en `false`/vacíos. */
 function ev(over: Partial<Parameters<typeof resolverAtajo>[0]>) {
@@ -253,4 +253,13 @@ test('F3 y Mayús+F3 resuelven a siguiente/anterior coincidencia, también con e
   expect(resolverAtajo(ev({ key: 'F3', shift: true }))?.accion).toBe('busqueda-anterior');
   expect(resolverAtajo(ev({ key: 'F3', shift: true, editable: true }))?.accion).toBe('busqueda-anterior');
   expect(resolverAtajo(ev({ key: 'F3', ctrl: true }))).toBeNull();
+});
+
+test('E-073: Enter y las flechas son atajos contextuales: resolverAtajo los ignora y no pisa Mayús+flechas de la selección', () => {
+  expect(resolverAtajo(ev({ key: 'Enter' }))).toBeNull();
+  expect(resolverAtajoContextual(ev({ key: 'Enter' }))?.accion).toBe('herramienta-colocar');
+  expect(resolverAtajoContextual(ev({ key: 'ArrowLeft', shift: true }))?.accion).toBe('herramienta-mover');
+  expect(resolverAtajo(ev({ key: 'ArrowLeft', shift: true }))?.accion).toBe('seleccion-caracter');
+  expect(resolverAtajoContextual(ev({ key: 'Enter', editable: true }))).toBeNull();
+  expect(resolverAtajoContextual(ev({ key: 'Enter', ctrl: true }))).toBeNull();
 });
