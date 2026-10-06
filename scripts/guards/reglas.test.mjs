@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -810,6 +810,31 @@ describe('no-setisactive-como-borrado', () => {
 
   test('no señala los comentarios que lo mencionan', () => {
     assert.deepEqual(analizarSetIsActive('src/x.ts', '   * `FPDFPageObj_SetIsActive(false)` no sirve\n// FPDFPageObj_SetIsActive(o, 0)'), []);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('busqueda-por-linea-editable', () => {
+  const regla = detectarEn('busqueda-por-linea-editable');
+
+  test('detecta buscarEnRuns() sobre objetos de texto crudos (E-083)', () => {
+    assert.equal(analizarBusquedaPorLinea('src/ui/App.ts', '      const r = buscarEnRuns(runs, q, opts);').length, 1);
+  });
+
+  test('acepta líneas editables', () => {
+    assert.deepEqual(analizarBusquedaPorLinea('src/ui/App.ts', '      const r = buscarEnRuns(lineas.map((l) => ({ runId: l.runIds[0], text: l.text })), q, opts);'), []);
+  });
+
+  test('no señala el propio módulo ni los comentarios', () => {
+    assert.deepEqual(analizarBusquedaPorLinea('src/texto/buscarReemplazar.ts', 'export function buscarEnRuns(runs) {'), []);
+    assert.deepEqual(analizarBusquedaPorLinea('src/x.ts', '// buscarEnRuns(runs, q)'), []);
+  });
+
+  test('un escape con razón la silencia', () => {
+    assert.deepEqual(analizarBusquedaPorLinea('src/x.ts', '// guard-disable-next-line busqueda-por-linea-editable: texto plano de una sola línea\nbuscarEnRuns(x, q, o);'), []);
   });
 
   test('sobre el repo real no encuentra nada', () => {
