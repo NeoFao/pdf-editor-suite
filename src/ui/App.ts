@@ -53,6 +53,7 @@ import { MisFirmasPanel } from './MisFirmasPanel';
 import { formatoBytes } from './formatoBytes';
 import { registrarGesto } from './gesto';
 import { resolverAtajo, esCampoEditable, type AccionAtajo } from './atajos';
+import { resumirParaAnunciar } from './anuncio';
 import { AtajosPanel } from './AtajosPanel';
 import { parseRange } from './pageRange';
 import { Viewer, ETIQUETA_MARCADO, type ToolMode, type MarcadoKind } from './Viewer';
@@ -1410,6 +1411,33 @@ export class App {
         if (this.viewer?.marcadoSeleccionado() && this.focoEnVisor(e.target)) { e.preventDefault(); this.borrarMarcadoSeleccionado(); break; }
         if (this.selectedImage) { e.preventDefault(); void this.deleteSelectedImage(); }
         break;
+      case 'seleccion-caracter':
+      case 'seleccion-linea': {
+        // T16: Mayús+flecha con una línea (`.run`) enfocada y sin editar: amplía/reduce la selección de texto.
+        const run = (e.target as HTMLElement | null)?.closest<HTMLElement>('.run');
+        const pageIndex = Number(run?.closest<HTMLElement>('.page')?.dataset.page);
+        const runId = Number(run?.dataset.runId);
+        if (!run || run.isContentEditable || !this.viewer || !Number.isFinite(pageIndex) || !Number.isFinite(runId)) break;
+        e.preventDefault();
+        const dir = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1;
+        const texto = this.viewer.extenderSeleccionTeclado(pageIndex, runId, accion === 'seleccion-caracter' ? 'caracter' : 'linea', dir);
+        if (texto === null) break;
+        // Región aria-live (#status): el lector anuncia lo seleccionado, truncado para no leer páginas enteras.
+        this.setStatus(texto ? `Seleccionado: «${resumirParaAnunciar(texto)}»` : 'Selección vacía.');
+        break;
+      }
+      case 'anotacion-recorrer': {
+        // T16: Alt+↓/↑ recorre las anotaciones de la página enfocada (o de la actual) en orden de lectura.
+        if (!this.viewer || !this.focoEnVisor(e.target)) break;
+        const enPagina = Number(e.target instanceof HTMLElement ? e.target.closest<HTMLElement>('.page')?.dataset.page : undefined);
+        const pageIndex = Number.isFinite(enPagina) ? enPagina : this.currentPage;
+        e.preventDefault();
+        const info = this.viewer.seleccionarMarcadoPorTeclado(pageIndex, e.key === 'ArrowUp' ? -1 : 1);
+        if (!info) { this.setStatus('No hay anotaciones en esta página.'); break; }
+        const extracto = info.texto.trim() ? `: «${resumirParaAnunciar(info.texto)}»` : '';
+        this.setStatus(`${ETIQUETA_MARCADO[info.kind]} ${info.posicion} de ${info.total}${extracto}. Pulsa Supr para borrar${info.kind === 'note' ? 'la' : 'lo'} o Escape para soltar${info.kind === 'note' ? 'la' : 'lo'}.`);
+        break;
+      }
       case 'escape':
         // Sale de cualquier herramienta activa (§1). No interfiere con el
         // Escape que ya maneja TextLayer para cancelar una edición en curso:

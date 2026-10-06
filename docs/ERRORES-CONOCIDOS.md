@@ -2282,7 +2282,7 @@ quads por línea, también con /Rotate 270; altura de línea frente a glifo),
 `PdfiumEngine.charBoxes.test.ts` (coincide con `getPageText`), `EditSession.test.ts`
 (caché) y `tests/e2e/next/seleccion-texto.spec.ts` (3 quads recortados, copiar, clic
 corto sigue editando, tirador, herramienta pluma, páginas /Rotate).
-Pendiente: ampliar la selección con Mayús+flechas desde una línea enfocada.
+Mayús+flechas desde una línea enfocada: resuelto en E-061 (T16).
 
 **Regla determinista de registro (misma PR).** Esta entrada se escribió como E-055 y
 colisionó con la de T9 (ramas paralelas, tercera colisión de números). La regla
@@ -2376,3 +2376,36 @@ imagen entera, avanzan frames de un `requestAnimationFrame` encadenado; más fal
 real, 0 violaciones y las operaciones se resuelven en el worker. **Límite conocido:** PDFium
 decodificando la imagen (`getImagePixels`) y reinsertándola sigue en el hilo principal. Los filtros
 (grises, B/N, color mágico) siguen en el hilo principal: moverlos es el siguiente paso.
+
+### E-061 · Seleccionar texto y seleccionar una anotación exigían ratón (WCAG 2.1.1) (T16)
+
+**Síntoma.** La selección de texto (T12) solo nacía de un arrastre y las anotaciones de marcado (T14)
+solo se seleccionaban con un clic: quien usa solo teclado o un lector de pantalla no podía copiar un tramo,
+marcarlo ni borrar un resaltado. Las anotaciones no son enfocables (no tienen nodo DOM en reposo, E-029).
+
+**Causa raíz.** Los dos modelos de selección se diseñaron desde el puntero: una selección de texto es un
+rango de índices de carácter fijado por dos puntos de ratón; una anotación seleccionada, el resultado de
+`marcadoBajoPunto(x, y)`. Ninguno tenía una forma de "moverse" sin puntero. Al añadirla aparecieron tres
+trampas: (1) el rango por índices INCLUSIVOS no distingue "nada seleccionado" de "un carácter": el foco
+que se mueve con Mayús+flecha es una posición ENTRE caracteres (caret), y la conversión (`rangoACarets`/
+`caretsARango`) es la única frontera entre ambos modelos; (2) PDFium intercala `\r\n` SIN caja entre líneas:
+una pulsación debe atravesarlos y no gastarse en un carácter invisible (`caretSiguiente`); (3) `bandasDeLinea`
+devolvía un array NUEVO por carácter, así que "misma línea" no se podía comparar por referencia y Mayús+↓
+trataba cada carácter como su propia línea (ahora todos los de una línea comparten el mismo array).
+
+**Arreglo.** Teclas documentadas en `TABLA_ATAJOS` (y, por tanto, en el panel de ayuda `?`), elegidas para no
+chocar con el navegador ni con otros atajos: Mayús+→/← (un carácter) y Mayús+↓/↑ (una línea) con una línea
+enfocada por el roving tabindex (A-03, que ahora ignora las flechas con modificador); Alt+↓/↑ recorre las
+anotaciones de la página enfocada en ORDEN DE LECTURA (`ordenLecturaMarcados`, no el de creación), con el
+mismo estado que el clic de T14 (contorno, `aria-selected`, Supr borra con deshacer, Escape suelta). Se
+descartó F6 (el navegador lo usa para cambiar de zona) y Alt+←/→ (atrás/adelante). El anuncio sale por
+`#status` (`role="status"`, `aria-live="polite"`): «Seleccionado: «…»» y «Resaltado 2 de 5: «extracto»»,
+colapsando blancos y truncando a 80 caracteres (`resumirParaAnunciar`). Nada pinta en reposo: la selección
+y el contorno solo existen mientras se usa la tecla (prueba de oro de E-029 intacta).
+
+**Cómo se detecta ahora.** `tests/unit/seleccionTeclado.test.ts` (caret por carácter y por línea,
+conversión de rangos, orden de lectura, texto de una anotación), `anuncio.test.ts` (una regresión real: el
+colapso de blancos escrito sin la barra invertida se comía las "s"), `atajos.test.ts` (teclas nuevas y que
+no se interceptan en un campo editable) y `tests/e2e/next/teclado-seleccion.spec.ts`, que no usa el ratón.
+Límite conocido: la selección vive en UNA página; Mayús+↓ más allá de la última línea de la página selecciona
+hasta el final de su texto.

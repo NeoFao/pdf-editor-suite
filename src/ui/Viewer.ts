@@ -9,7 +9,8 @@ import { pathMasCercano, normalizeRect, type PathCandidate } from './toolGeometr
 import { contarRenderPage, fijarPaginasPintadas } from '../diagnostico';
 import { hayGestoEnCurso } from './gesto';
 import { SeleccionTexto } from './SeleccionTexto';
-import { marcadoBajoPunto, type MarcadoHit, type QuadPt } from '../coords/quads';
+import { marcadoBajoPunto, ordenLecturaMarcados, type MarcadoHit, type QuadPt } from '../coords/quads';
+import { textoDeMarcado } from '../texto/seleccionTexto';
 
 const GAP = 16;
 
@@ -152,6 +153,43 @@ export class Viewer {
   limpiarSeleccionTexto(): void { this.textoSel.limpiar(); }
 
   /**
+   * Mayús+flecha desde la línea enfocada `runId` de la página `pageIndex` (T16): amplía o reduce la selección
+   * de texto un carácter o una línea. Devuelve el texto seleccionado ('' si queda vacía) o `null` si no
+   * procede (otra herramienta activa, línea desconocida o sin caracteres).
+   */
+  extenderSeleccionTeclado(pageIndex: number, runId: number, mov: 'caracter' | 'linea', dir: 1 | -1): string | null {
+    if (this.tool !== 'none') return null;
+    const run = this.session.model.pages[pageIndex]?.runs.find((r) => r.runId === runId);
+    if (!run) return null;
+    this.limpiarMarcadoSeleccionado(); // la selección de texto sustituye a la de una anotación
+    return this.textoSel.extender(pageIndex, run.boxPt, mov, dir) ? this.textoSel.texto() : null;
+  }
+
+  /**
+   * Alt+↓/↑ (T16): selecciona la anotación siguiente/anterior de la página `pageIndex` en ORDEN DE LECTURA,
+   * con el mismo estado que un clic (contorno, `aria-selected`, Supr/Escape). Sin ninguna seleccionada
+   * empieza por la primera (↓) o la última (↑); al llegar al final da la vuelta. Devuelve lo necesario para
+   * anunciarla, o `null` si la página no tiene anotaciones (o hay otra herramienta activa).
+   */
+  seleccionarMarcadoPorTeclado(pageIndex: number, dir: 1 | -1): { kind: MarcadoKind; posicion: number; total: number; texto: string } | null {
+    if (this.tool !== 'none' || !this.geoms[pageIndex]) return null;
+    const hits = ordenLecturaMarcados(this.marcadosDePagina(pageIndex), this.geoms[pageIndex]!);
+    if (hits.length === 0) return null;
+    const actual = this.marcadoSel?.pageIndex === pageIndex ? hits.findIndex((h) => h.index === this.marcadoSel!.annotIndex) : -1;
+    const i = actual < 0 ? (dir > 0 ? 0 : hits.length - 1) : (actual + dir + hits.length) % hits.length;
+    const hit = hits[i]!;
+    this.limpiarMarcadoSeleccionado();
+    this.textoSel.limpiar();
+    this.root.querySelectorAll('.run.selected').forEach((el) => el.classList.remove('selected'));
+    this.marcadoSel = { pageIndex, annotIndex: hit.index, kind: hit.kind };
+    this.pintarMarcadoSel(hit);
+    this.wrappers[pageIndex]?.querySelector('.marcado-sel-quad')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    this.cb.onMarcadoSelect?.(this.marcadoSel);
+    const texto = hit.kind === 'note' ? (hit.contenido ?? '') : textoDeMarcado(this.session.ensureChars(pageIndex), hit);
+    return { kind: hit.kind, posicion: i + 1, total: hits.length, texto };
+  }
+
+  /**
    * Anotación de marcado seleccionada con un clic (T14), o `null`. Solo con la herramienta
    * "ninguna". Se descarta al repintar su página (los índices de anotación pueden haberse
    * desplazado), al reconstruir el visor y al cambiar de herramienta.
@@ -175,7 +213,7 @@ export class Viewer {
     const out: MarcadoHit[] = [];
     for (const c of eng.getComments(doc, i)) {
       if (c.kind !== 'note' && c.kind !== 'highlight' && c.kind !== 'underline' && c.kind !== 'strikeout') continue;
-      out.push({ index: c.index, kind: c.kind, rectPt: c.rectPt, quads: c.kind === 'note' ? [] : eng.getMarkupQuads(doc, i, c.index) });
+      out.push({ index: c.index, kind: c.kind, rectPt: c.rectPt, contenido: c.text, quads: c.kind === 'note' ? [] : eng.getMarkupQuads(doc, i, c.index) });
     }
     return out;
   }

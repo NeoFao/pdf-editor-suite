@@ -51,6 +51,9 @@ export type AccionAtajo =
   | 'pagina-anterior'
   | 'pagina-siguiente'
   | 'suprimir'
+  | 'seleccion-caracter'
+  | 'seleccion-linea'
+  | 'anotacion-recorrer'
   | 'escape'
   | 'ayuda'
   | 'tool-none'
@@ -187,14 +190,36 @@ export const TABLA_ATAJOS: DefinicionAtajo[] = [
   {
     combinacion: 'Supr',
     accion: 'suprimir',
-    descripcion: 'Borrar la imagen seleccionada',
+    descripcion: 'Borrar la imagen o la anotación seleccionada',
     bloqueaEnEditable: true,
     coincide: (e) => !ctrlOMeta(e) && (tecla(e) === 'delete' || tecla(e) === 'backspace')
   },
   {
+    combinacion: 'Mayús + →  ·  Mayús + ←',
+    accion: 'seleccion-caracter',
+    descripcion: 'Con una línea enfocada: ampliar o reducir la selección de texto un carácter (luego Resaltar, Subrayar, Tachar o Ctrl/Cmd + C)',
+    bloqueaEnEditable: true,
+    coincide: (e) => e.shift && !e.alt && !ctrlOMeta(e) && (tecla(e) === 'arrowright' || tecla(e) === 'arrowleft')
+  },
+  {
+    combinacion: 'Mayús + ↓  ·  Mayús + ↑',
+    accion: 'seleccion-linea',
+    descripcion: 'Con una línea enfocada: ampliar o reducir la selección de texto una línea',
+    bloqueaEnEditable: true,
+    coincide: (e) => e.shift && !e.alt && !ctrlOMeta(e) && (tecla(e) === 'arrowdown' || tecla(e) === 'arrowup')
+  },
+  {
+    combinacion: 'Alt + ↓  ·  Alt + ↑',
+    accion: 'anotacion-recorrer',
+    descripcion: 'Seleccionar la anotación siguiente o anterior de la página (en orden de lectura); Supr la borra y Esc la suelta',
+    bloqueaEnEditable: true,
+    // Alt+←/→ son atrás/adelante del navegador: no se tocan.
+    coincide: (e) => e.alt && !e.shift && !ctrlOMeta(e) && (tecla(e) === 'arrowdown' || tecla(e) === 'arrowup')
+  },
+  {
     combinacion: 'Esc',
     accion: 'escape',
-    descripcion: 'Salir de la herramienta activa',
+    descripcion: 'Salir de la herramienta activa, descartar la selección de texto o soltar la anotación seleccionada',
     bloqueaEnEditable: true,
     coincide: (e) => !ctrlOMeta(e) && tecla(e) === 'escape'
   },

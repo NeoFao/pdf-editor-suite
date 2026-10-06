@@ -101,6 +101,8 @@ export interface MarcadoHit {
   /** QuadPoints (pt de usuario); vacío en una nota. */
   quads: readonly QuadPt[];
   rectPt: RectPt;
+  /** Texto de la nota (solo para anunciarla). */
+  contenido?: string;
 }
 
 /**
@@ -119,4 +121,29 @@ export function marcadoBajoPunto<T extends MarcadoHit>(items: readonly T[], xPt:
     if (dentro && (!mejor || it.index > mejor.index)) mejor = it;
   }
   return mejor;
+}
+
+/**
+ * Las anotaciones en ORDEN DE LECTURA (de arriba abajo y, dentro de la misma línea, de izquierda a
+ * derecha), no en el de creación. La posición de cada una es la esquina superior izquierda de su
+ * primer quad (o de su /Rect, si es una nota) en px CSS visuales, vía la geometría común (E-053).
+ */
+export function ordenLecturaMarcados<T extends MarcadoHit>(items: readonly T[], geo: PageGeometry): T[] {
+  const pos = new Map<T, { left: number; top: number; alto: number }>();
+  for (const it of items) {
+    const q = it.kind === 'note' || it.quads.length === 0 ? null : it.quads[0]!;
+    if (q) {
+      const pts = [0, 2, 4, 6].map((k) => geo.ptToCss(q[k]!, q[k + 1]!));
+      const top = Math.min(...pts.map((p) => p.y));
+      pos.set(it, { left: Math.min(...pts.map((p) => p.x)), top, alto: Math.max(...pts.map((p) => p.y)) - top });
+    } else {
+      const r = geo.rectPtToCss(it.rectPt);
+      pos.set(it, { left: r.left, top: r.top, alto: r.height });
+    }
+  }
+  return [...items].sort((a, b) => {
+    const pa = pos.get(a)!, pb = pos.get(b)!;
+    const mismaLinea = Math.abs(pa.top - pb.top) < 0.5 * Math.min(pa.alto, pb.alto);
+    return mismaLinea ? pa.left - pb.left || a.index - b.index : pa.top - pb.top;
+  });
 }

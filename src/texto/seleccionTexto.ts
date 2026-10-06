@@ -1,6 +1,6 @@
 import type { CharBox } from '../engine/PdfEngine';
 import type { PageGeometry } from '../coords/PageGeometry';
-import { quadsPorLinea, type QuadPt } from '../coords/quads';
+import { puntoEnQuad, quadsPorLinea, rectToQuad, type QuadPt } from '../coords/quads';
 
 /**
  * Selección de texto por carácter (T12). Funciones PURAS: no tocan el DOM ni el
@@ -73,7 +73,7 @@ function bandasDeLinea(chars: readonly CharBox[], geo: PageGeometry): ([number, 
   const out: ([number, number] | undefined)[] = new Array(chars.length);
   let grupo: number[] = [];
   let top = 0, bottom = 0;
-  const cerrar = (): void => { for (const i of grupo) out[i] = [top, bottom]; grupo = []; };
+  const cerrar = (): void => { const b: [number, number] = [top, bottom]; for (const i of grupo) out[i] = b; grupo = []; }; // misma referencia = misma línea
   chars.forEach((c, i) => {
     if (!tieneCaja(c)) return;
     const r = geo.rectPtToCss(c.boxPt);
@@ -94,5 +94,118 @@ export function textoDeRango(chars: readonly CharBox[], a: number, b: number): s
   const desde = Math.max(0, Math.min(a, b)), hasta = Math.min(chars.length - 1, Math.max(a, b));
   let s = '';
   for (let i = desde; i <= hasta; i++) s += chars[i]!.ch;
+  return s.replace(/\r\n?/g, '\n');
+}
+
+// ---------------------------------------------------------------------------------------------
+// Selección por TECLADO (T16). Un "caret" es una posición ENTRE caracteres: el caret `c` está justo
+// antes de `chars[c]` (0 = inicio del texto, `chars.length` = final). Con Mayús+flecha se mueve el
+// FOCO (un caret) y el ANCLA (otro caret) se queda quieta; los caracteres seleccionados son los que
+// quedan entre ambos. El modelo guardado sigue siendo el de T12 (índices de carácter inclusivos,
+// `Seleccion.ancla`/`foco`); estas funciones convierten de un modelo al otro.
+// ---------------------------------------------------------------------------------------------
+
+/** Caracteres [ancla, foco] (inclusive, en cualquier orden) → carets (ancla, foco). */
+export function rangoACarets(r: { ancla: number; foco: number }): { ancla: number; foco: number } {
+  return r.ancla <= r.foco ? { ancla: r.ancla, foco: r.foco + 1 } : { ancla: r.ancla + 1, foco: r.foco };
+}
+
+/** Carets (ancla, foco) → caracteres seleccionados (inclusive); `null` si coinciden (selección vacía). */
+export function caretsARango(ancla: number, foco: number): { ancla: number; foco: number } | null {
+  if (ancla === foco) return null;
+  return foco > ancla ? { ancla, foco: foco - 1 } : { ancla: ancla - 1, foco };
+}
+
+/**
+ * Caret tras mover el foco UN carácter. Los caracteres sin caja (\r\n entre líneas) se atraviesan
+ * sin detenerse: una pulsación siempre mueve el foco sobre un carácter visible. Al final/inicio del
+ * texto no se mueve.
+ */
+export function caretSiguiente(chars: readonly CharBox[], caret: number, dir: 1 | -1): number {
+  if (dir > 0) {
+    let j = caret;
+    while (j < chars.length && !tieneCaja(chars[j]!)) j++;
+    return j >= chars.length ? caret : j + 1;
+  }
+  let j = caret - 1;
+  if (j >= 0 && tieneCaja(chars[j]!)) return j;
+  while (j >= 0 && !tieneCaja(chars[j]!)) j--;
+  return j < 0 ? caret : j + 1; // justo detrás del último carácter visible anterior
+}
+
+/**
+ * Caret tras mover el foco UNA línea visual arriba (`dir` -1) o abajo (+1) conservando la columna
+ * (x visual en px CSS). Sin línea siguiente/anterior va al final/inicio del texto, como un campo de
+ * texto. La agrupación en líneas es la de `bandasDeLinea` (espacio visual, E-053), y `geo` es la
+ * geometría a escala 1 (px CSS = pt visuales).
+ */
+export function caretLinea(chars: readonly CharBox[], caret: number, dir: 1 | -1, geo: PageGeometry): number {
+  const banda = bandasDeLinea(chars, geo);
+  const idxCaja: number[] = [];
+  chars.forEach((c, i) => { if (tieneCaja(c)) idxCaja.push(i); });
+  if (idxCaja.length === 0) return caret;
+  // Líneas: caracteres con caja consecutivos que comparten la misma banda (misma referencia).
+  const lineas: number[][] = [];
+  for (const i of idxCaja) {
+    const ult = lineas[lineas.length - 1];
+    if (ult && banda[ult[0]!] === banda[i]) ult.push(i); else lineas.push([i]);
+  }
+  const izq = (i: number): number => geo.rectPtToCss(chars[i]!.boxPt).left;
+  const der = (i: number): number => { const r = geo.rectPtToCss(chars[i]!.boxPt); return r.left + r.width; };
+  // Carácter de referencia del caret: el que tiene justo delante; si no hay (fin de línea), el de detrás.
+  let x: number, linea: number;
+  if (caret < chars.length && tieneCaja(chars[caret]!)) {
+    x = izq(caret);
+    linea = lineas.findIndex((l) => l.includes(caret));
+  } else {
+    let k = caret - 1;
+    while (k >= 0 && !tieneCaja(chars[k]!)) k--;
+    if (k < 0) return caret;
+    x = der(k);
+    linea = lineas.findIndex((l) => l.includes(k));
+  }
+  const destino = linea + dir;
+  if (destino < 0) return idxCaja[0]!;
+  if (destino >= lineas.length) return idxCaja[idxCaja.length - 1]! + 1;
+  const l = lineas[destino]!;
+  let mejor = l[0]!, mejorD = Math.abs(izq(l[0]!) - x);
+  for (const i of l) {
+    const d = Math.abs(izq(i) - x);
+    if (d < mejorD) { mejorD = d; mejor = i; }
+  }
+  const fin = l[l.length - 1]! + 1;
+  if (Math.abs(der(fin - 1) - x) < mejorD) mejor = fin;
+  return mejor;
+}
+
+/**
+ * Caret al `inicio` o al `final` de la línea cuya caja es `caja` (pt de usuario): el primer/último
+ * carácter con caja cuyo centro cae dentro. `-1` si ninguno (la línea no tiene caracteres con caja).
+ */
+export function caretInicioDe(chars: readonly CharBox[], caja: { xPt: number; yPt: number; wPt: number; hPt: number }, donde: 'inicio' | 'final'): number {
+  const dentro = (c: CharBox): boolean => {
+    const cx = c.boxPt.xPt + c.boxPt.wPt / 2, cy = c.boxPt.yPt + c.boxPt.hPt / 2;
+    return cx >= caja.xPt - 0.5 && cx <= caja.xPt + caja.wPt + 0.5 && cy >= caja.yPt - 0.5 && cy <= caja.yPt + caja.hPt + 0.5;
+  };
+  let primero = -1, ultimo = -1;
+  for (let i = 0; i < chars.length; i++) {
+    const c = chars[i]!;
+    if (!tieneCaja(c) || !dentro(c)) continue;
+    if (primero < 0) primero = i;
+    ultimo = i;
+  }
+  if (primero < 0) return -1;
+  return donde === 'inicio' ? primero : ultimo + 1;
+}
+
+/** Texto bajo una anotación de marcado: los caracteres cuyo centro (pt de usuario) cae dentro de alguno de sus quads. */
+export function textoDeMarcado(chars: readonly CharBox[], hit: { quads: readonly QuadPt[]; rectPt: { xPt: number; yPt: number; wPt: number; hPt: number } }): string {
+  const quads = hit.quads.length > 0 ? hit.quads : [rectToQuad(hit.rectPt)];
+  let s = '';
+  for (const c of chars) {
+    if (!tieneCaja(c)) continue;
+    const cx = c.boxPt.xPt + c.boxPt.wPt / 2, cy = c.boxPt.yPt + c.boxPt.hPt / 2;
+    if (quads.some((q) => puntoEnQuad(cx, cy, q))) s += c.ch;
+  }
   return s.replace(/\r\n?/g, '\n');
 }
