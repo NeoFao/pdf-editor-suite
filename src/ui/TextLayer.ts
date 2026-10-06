@@ -9,6 +9,8 @@ export interface TextLayerCallbacks {
   onEdit: (req: EditRequest) => void;
   onSelect: (pageIndex: number, runId: number) => void;
   onMove: (pageIndex: number, runId: number, dxCss: number, dyCss: number) => void;
+  /** true si hay una herramienta de colocación activa (nota, insertar…): un clic sobre la línea coloca, no edita (N7). */
+  colocando?: () => boolean;
 }
 
 /**
@@ -186,6 +188,8 @@ export class TextLayer {
         }
       };
       block.addEventListener('click', (e) => {
+        // N7: con una herramienta de colocación activa el clic sube al fondo de la página (que coloca) y no edita.
+        if (!block.isContentEditable && this.cb.colocando?.()) return;
         e.stopPropagation();
         editadoConTeclado = false;
         empezarEdicion();

@@ -1073,7 +1073,8 @@ export class Viewer {
       // Clic en el fondo (no en un run ni en el marco de una imagen) → insertar en ese punto y deseleccionar la imagen activa.
       w.addEventListener('click', (e) => {
         const target = e.target as HTMLElement;
-        if (target.classList.contains('run')) return;
+        // N7: con una herramienta de colocación activa un clic sobre una línea también coloca.
+        if (target.classList.contains('run') && this.tool === 'none') return;
         if (target.closest('.image-box')) return;
         this.deselectImage();
         const rect = w.getBoundingClientRect();
@@ -1205,6 +1206,7 @@ export class Viewer {
     wrapper.appendChild(layer);
     const geom = this.geoms[i]!;
     new TextLayer(layer, page, geom, {
+      colocando: () => this.tool !== 'none',
       onEdit: this.cb.onEdit,
       onSelect: (pageIndex, runId) => { this.textoSel.limpiar(); this.cb.onSelect(pageIndex, runId); },
       onMove: (pageIndex, runId, dxCss, dyCss) => {

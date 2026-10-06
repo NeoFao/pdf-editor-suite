@@ -2733,3 +2733,21 @@ lo gestiona el propio `<dialog>`.
 **Cómo se detecta ahora.** `tests/unit/atajos.test.ts` (regla pura) y `tests/e2e/next/atajos-con-modal.spec.ts` (Ayuda
 abierta: Ctrl+Z, n, r, End, Ctrl+Y no tocan el documento ni `#status`; al cerrar, Ctrl+Z vuelve a funcionar). Fallaban
 antes. Sin regla guard: es una regla de comportamiento de teclado.
+
+---
+
+### E-076 · En modo Nota o Insertar texto, un clic sobre una línea la editaba en vez de colocar (N7)
+
+**Síntoma.** Con «Nota» activa, un clic en el centro de una línea de texto dejaba el estado en «Modo nota…», ponía la línea en
+edición y no creaba ninguna nota. Igual con «Insertar texto». Con un clic en un hueco sí colocaba.
+
+**Causa raíz.** En esos modos `.tool-layer` tiene `pointer-events: none` (el clic debe llegar al fondo de la página) pero los
+`.run` capturan el clic: su manejador llama a `stopPropagation()` y empieza a editar, y el manejador del fondo ignoraba además
+cualquier clic cuyo objetivo fuera un `.run`. Ninguno de los dos conocía la herramienta activa.
+
+**Arreglo.** `TextLayer` recibe `colocando()` (el visor devuelve `tool !== 'none'`): con una herramienta activa el clic de la
+línea no edita ni detiene la propagación, y el manejador del fondo del `Viewer` solo ignora los `.run` cuando no hay
+herramienta. Sin herramienta, un clic sigue editando.
+
+**Cómo se detecta ahora.** `tests/e2e/next/colocar-sobre-texto.spec.ts` (Nota e Insertar sobre una línea colocan y no editan;
+sin herramienta se edita). Fallaban antes. Sin regla guard: es comportamiento de interacción.
