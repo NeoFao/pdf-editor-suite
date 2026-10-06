@@ -63,11 +63,11 @@ test('Reemplazar cambia UNA coincidencia cada vez (la siguiente desde la anterio
   await page.locator('#btn-replace').click();
   await expect(page.locator('#replace-result')).toContainText('1 reemplazo');
   await expect(page.locator('#replace-result')).toContainText('quedan 4');
-  expect(await runsConTexto(page, 'fila')).toBe(1);
+  await expect(page.locator('.run', { hasText: 'fila' })).toHaveCount(1);
 
   await page.locator('#btn-replace').click();
   await expect(page.locator('#replace-result')).toContainText('quedan 3');
-  expect(await runsConTexto(page, 'fila')).toBe(2);
+  await expect(page.locator('.run', { hasText: 'fila' })).toHaveCount(2);
 });
 
 test('Reemplazar con un texto que contiene la consulta no se repite sobre sí mismo', async ({ page }) => {
@@ -79,8 +79,9 @@ test('Reemplazar con un texto que contiene la consulta no se repite sobre sí mi
   await page.locator('#btn-replace').click();
   await expect(page.locator('#replace-result')).toContainText('quedan 4');
   // Dos líneas distintas cambiadas, ninguna con "linea nueva nueva".
-  expect(await runsConTexto(page, 'linea nueva')).toBe(2);
-  expect(await runsConTexto(page, 'nueva nueva')).toBe(0);
+  // Aserciones que reintentan: el repintado de las líneas cambiadas llega un instante después del aviso.
+  await expect(page.locator('.run', { hasText: 'linea nueva' })).toHaveCount(2);
+  await expect(page.locator('.run', { hasText: 'nueva nueva' })).toHaveCount(0);
 });
 
 test('Reemplazar todo cambia todo el documento y UN Deshacer lo restaura todo', async ({ page }) => {

@@ -28,7 +28,16 @@ async function guardar(page: Page, nombre: string): Promise<string[]> {
   return orden(destino);
 }
 
-async function abrir(page: Page): Promise<void> {
+/** E-068: `E2E_CPU_LENTA=6` ralentiza la CPU del navegador (CDP) para destapar carreras de orden de eventos. */
+async function ralentizar(page: Page, forzada = 0): Promise<void> {
+  const tasa = forzada || Number(process.env.E2E_CPU_LENTA ?? 0);
+  if (!(tasa > 1)) return;
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: tasa });
+}
+
+async function abrir(page: Page, cpuLenta = 0): Promise<void> {
+  await ralentizar(page, cpuLenta);
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(MIXTOS);
   await expect(page.locator('.run').first()).toBeVisible();
@@ -125,5 +134,34 @@ test.describe('E-065: la página actual sigue a la página movida con tamaños m
     await page.locator('#btn-insert-pdf').setInputFiles(MIXTOS);
     await expect(page.locator('#thumbs canvas')).toHaveCount(8);
     await esperaActual(page, 3, 8); // la primera página insertada (índice 2)
+  });
+});
+
+// E-068: con la CPU cargada el primer evento de scroll del `scrollIntoView` suave llegaba tras el
+// temporizador de 150 ms; se leía como scroll del usuario, soltaba el pin y el observer elegía otra página.
+test.describe('E-068: la página actual no se pierde con la CPU cargada (x6)', () => {
+  test('Duplicar la 3 deja la actual en la copia y Eliminar borra esa copia', async ({ page }) => {
+    await abrir(page, 6);
+    await page.locator('#thumbs canvas').nth(2).click();
+    await esperaActual(page, 3);
+    await abrirPestana(page, 'organizar');
+    await page.locator('#btn-duplicate').click();
+    await esperaActual(page, 4, 5);
+    page.on('dialog', (d) => d.accept());
+    await page.locator('#btn-delete-page').click();
+    await expect(page.locator('#thumbs canvas')).toHaveCount(4);
+    expect(await guardar(page, 'duplicar-lento.pdf')).toEqual(['P1', 'P2', 'P3', 'P4']);
+  });
+
+  test('Bajar dos veces desde la 2 deja P1,P3,P4,P2', async ({ page }) => {
+    await abrir(page, 6);
+    await page.locator('#thumbs canvas').nth(1).click();
+    await esperaActual(page, 2);
+    await abrirPestana(page, 'organizar');
+    await page.locator('#btn-page-down').click();
+    await esperaActual(page, 3);
+    await page.locator('#btn-page-down').click();
+    await esperaActual(page, 4);
+    expect(await guardar(page, 'bajar-lento.pdf')).toEqual(['P1', 'P3', 'P4', 'P2']);
   });
 });

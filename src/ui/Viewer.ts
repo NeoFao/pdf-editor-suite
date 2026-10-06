@@ -13,6 +13,8 @@ import { marcadoBajoPunto, ordenLecturaMarcados, type MarcadoHit, type QuadPt } 
 import { textoDeMarcado } from '../texto/seleccionTexto';
 
 const GAP = 16;
+/** E-068: espera máxima hasta el PRIMER evento de scroll de `scrollToPage` (con la CPU cargada tarda más de 150 ms). */
+const ESPERA_INICIO_SCROLL_MS = 1500;
 
 /**
  * Desalojo de páginas lejanas (E-045, docs/ERRORES-CONOCIDOS.md): el visor
@@ -106,6 +108,12 @@ export class Viewer {
    * que E-032, con otro disparador).
    */
   private programmaticScroll = false;
+  /**
+   * E-068: `scrollTop` (px CSS de scroll) al que debe llegar el scroll de `scrollToPage`, o `null`
+   * si no hay navegación pendiente. Es la referencia que distingue "scroll programático que llega
+   * tarde" de "scroll del usuario", en vez de fiarse solo de un temporizador.
+   */
+  private pinTop: number | null = null;
   /** Respaldo de `scrollend` (no todos los navegadores lo emiten todavía) y red de seguridad para cuando el scroll programático no mueve nada. */
   private scrollEndFallback: ReturnType<typeof setTimeout> | null = null;
   /** Herramienta activa (§1 del lote D): fijada SIEMPRE por `App.setTool` vía `setTool()`. */
@@ -303,23 +311,26 @@ export class Viewer {
     this.root.addEventListener('scroll', () => {
       this.renderVisible();
       if (this.programmaticScroll) {
-        // Sigue en vuelo el scroll que disparó `scrollToPage`: reinicia el
-        // respaldo (se resuelve ~150ms después del ÚLTIMO evento de scroll,
-        // no del primero) y no toques el pin todavía.
-        this.armScrollEndFallback();
+        // Sigue en vuelo el scroll que disparó `scrollToPage`. Si ya está en el destino, se cierra
+        // aquí; si no, el respaldo se reinicia (~150ms tras el ÚLTIMO evento, no del primero).
+        if (this.llegoAlPin()) this.finishProgrammaticScroll();
+        else this.armScrollEndFallback();
         return;
       }
+      // E-068: un evento de scroll "rezagado" que deja el visor exactamente donde la navegación
+      // explícita lo quería (p. ej. el que provoca el vaciado del DOM en `rebuild`) no es del usuario.
+      if (this.pinnedPage !== null && this.llegoAlPin()) return;
       // No hay ningún scroll programático en curso: esto es scroll real del
       // usuario (teclado, arrastre de la barra de scroll, rueda que
       // `wheel` ya liberó más abajo, gesto táctil que `touchmove` ya
       // liberó...). Libera el pin.
-      this.pinnedPage = null;
+      this.pinnedPage = null; this.pinTop = null;
     });
     // `wheel`/`touchmove` liberan el pin de inmediato, incluso si ocurren
     // DURANTE un scroll programático en curso: también son intención real
     // del usuario (p. ej. mueve la rueda mientras el smooth-scroll de
     // `scrollToPage` todavía está animando).
-    const liberarPin = (): void => { this.pinnedPage = null; };
+    const liberarPin = (): void => { this.pinnedPage = null; this.pinTop = null; };
     this.root.addEventListener('wheel', liberarPin, { passive: true });
     this.root.addEventListener('touchmove', liberarPin, { passive: true });
     // Fin real del scroll programático (Chromium/Firefox): cierra la ventana
@@ -332,9 +343,14 @@ export class Viewer {
   }
 
   /** Reinicia el temporizador de respaldo de `scrollend` (~150ms sin nuevos eventos `scroll`). */
-  private armScrollEndFallback(): void {
+  private armScrollEndFallback(ms = 150): void {
     if (this.scrollEndFallback !== null) clearTimeout(this.scrollEndFallback);
-    this.scrollEndFallback = setTimeout(() => this.finishProgrammaticScroll(), 150);
+    this.scrollEndFallback = setTimeout(() => this.finishProgrammaticScroll(), ms);
+  }
+
+  /** true si `scrollTop` ya está (±1 px CSS) en el destino de la navegación explícita pendiente. */
+  private llegoAlPin(): boolean {
+    return this.pinTop !== null && Math.abs(this.root.scrollTop - this.pinTop) <= 1;
   }
 
   /** Cierra la ventana de "scroll programático en curso". Idempotente. */
@@ -373,9 +389,21 @@ export class Viewer {
   scrollToPage(i: number): void {
     this.currentPage = i;
     this.pinnedPage = i;
+    const wrapper = this.wrappers[i];
+    if (!wrapper) return;
+    // Destino del scroll (px CSS de scroll de `root`), acotado como lo acota el navegador.
+    const bruto = this.root.scrollTop + wrapper.getBoundingClientRect().top - this.root.getBoundingClientRect().top - this.root.clientTop;
+    this.pinTop = Math.max(0, Math.min(bruto, this.root.scrollHeight - this.root.clientHeight));
+    if (this.llegoAlPin()) {
+      // Ya estamos ahí: no habrá scroll ni `scrollend`; no hay nada que esperar.
+      this.finishProgrammaticScroll();
+      return;
+    }
+    // E-068: el primer evento de un scroll suave puede tardar más de 150 ms con la CPU cargada. Hasta
+    // que llegue, el respaldo es largo; después se reinicia con los 150 ms de siempre en cada evento.
     this.programmaticScroll = true;
-    this.armScrollEndFallback();
-    this.wrappers[i]?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    this.armScrollEndFallback(ESPERA_INICIO_SCROLL_MS);
+    wrapper.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
 
   /**
@@ -892,7 +920,7 @@ export class Viewer {
     // Una operación de página (eliminar/insertar/deshacer) puede renumerar
     // las páginas: un pin apuntando al índice antiguo ya no significa nada.
     // `App.onReload` recalcula y vuelve a fijar `currentPage` por su cuenta.
-    this.pinnedPage = null;
+    this.pinnedPage = null; this.pinTop = null;
     this.textoSel.limpiar();
     this.marcadoSel = null; // el DOM del visor se descarta entero justo debajo
     this.finishProgrammaticScroll(); // limpia también el temporizador de respaldo
