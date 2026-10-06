@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS, analizarRegistroErrores } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores, analizarPuertosE2E } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -747,5 +747,51 @@ describe('cobertura de las reglas', () => {
     for (const regla of TODAS) {
       assert.ok(doc.includes(regla.id), `docs/ERRORES-CONOCIDOS.md no documenta "${regla.id}"`);
     }
+  });
+});
+
+describe('puertos-e2e-sincronizados (E-062)', () => {
+  const regla = TODAS.find((r) => r.id === 'puertos-e2e-sincronizados');
+  const claves = ['appVieja', 'appNueva', 'despliegue'];
+  const puertos = [3100, 4173, 4174];
+  const importaConfig = "import { PUERTOS_E2E } from './scripts/puertos-e2e.mjs';\n";
+  const importaLiberar = "import { LISTA_PUERTOS_E2E } from './puertos-e2e.mjs';\n";
+
+  test('acepta un config cuyos port salen todos de PUERTOS_E2E', () => {
+    const config = importaConfig + 'webServer: [{ port: PUERTOS_E2E.appVieja,\n}, { port: PUERTOS_E2E.despliegue }]';
+    assert.deepEqual(analizarPuertosE2E(config, importaLiberar, claves, puertos), []);
+  });
+
+  test('detecta un puerto nuevo escrito a mano que e2e:liberar no conoce (el 4174 de E-062)', () => {
+    const config = importaConfig + 'webServer: [{ port: 4175,\n}]';
+    const p = analizarPuertosE2E(config, importaLiberar, claves, puertos);
+    assert.equal(p.length, 1);
+    assert.match(p[0].mensaje, /4175 no sale de PUERTOS_E2E/);
+  });
+
+  test('detecta un puerto literal aunque coincida con la lista (debe usar la fuente única)', () => {
+    const p = analizarPuertosE2E(importaConfig + 'webServer: [{ port: 4174,\n}]', importaLiberar, claves, puertos);
+    assert.match(p[0].mensaje, /escrito a mano/);
+  });
+
+  test('detecta una clave inexistente de PUERTOS_E2E', () => {
+    const p = analizarPuertosE2E(importaConfig + '{ port: PUERTOS_E2E.otra,\n}', importaLiberar, claves, puertos);
+    assert.match(p[0].mensaje, /PUERTOS_E2E\.otra no existe/);
+  });
+
+  test('detecta que el config o liberar-puertos no importan el módulo compartido', () => {
+    const sinConfig = analizarPuertosE2E('{ port: PUERTOS_E2E.appVieja,\n}', importaLiberar, claves, puertos);
+    assert.match(sinConfig[0].mensaje, /playwright\.config\.js no importa/);
+    const sinLiberar = analizarPuertosE2E(importaConfig + '{ port: PUERTOS_E2E.appVieja,\n}', 'const PUERTOS = [4173];', claves, puertos);
+    assert.match(sinLiberar[0].mensaje, /liberar-puertos\.mjs no importa/);
+  });
+
+  test('detecta un config sin ningún port', () => {
+    const p = analizarPuertosE2E(importaConfig, importaLiberar, claves, puertos);
+    assert.match(p[0].mensaje, /ningún `port:`/);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
   });
 });
