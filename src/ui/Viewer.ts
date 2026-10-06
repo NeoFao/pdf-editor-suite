@@ -586,9 +586,9 @@ export class Viewer {
   }
 
   /** Fija las coincidencias de búsqueda a resaltar por página y las repinta. */
-  setHighlights(byPage: Map<number, RectPt[]>): void {
+  setHighlights(byPage: Map<number, RectPt[]>, conservarActual = false): void {
     this.highlights = byPage;
-    this.currentMatch = null;
+    if (!conservarActual) this.currentMatch = null;
     for (let i = 0; i < this.wrappers.length; i++) this.drawHighlights(i);
   }
 
@@ -598,6 +598,55 @@ export class Viewer {
     this.currentMatch = m;
     if (previa !== undefined && previa !== m?.pageIndex) this.drawHighlights(previa);
     if (m) this.drawHighlights(m.pageIndex);
+  }
+
+  /**
+   * Caja CSS (px de página, ya con /Rotate: `geom.rectPtToCss`, E-053) de un
+   * rect en puntos PDF, y su posición dentro del contenido desplazable de
+   * `root` (px CSS de scroll). `null` si la página no existe.
+   */
+  private cajaEnScroll(pageIndex: number, rect: RectPt): { left: number; top: number; width: number; height: number } | null {
+    const wrapper = this.wrappers[pageIndex];
+    const geom = this.geoms[pageIndex];
+    if (!wrapper || !geom) return null;
+    const c = geom.rectPtToCss(rect);
+    const w = wrapper.getBoundingClientRect();
+    const r = this.root.getBoundingClientRect();
+    return {
+      left: w.left - r.left + this.root.scrollLeft + c.left,
+      top: w.top - r.top + this.root.scrollTop + c.top,
+      width: c.width, height: c.height
+    };
+  }
+
+  /** true si la caja del rect (puntos PDF) está entera dentro de lo que el visor muestra ahora. */
+  rectVisible(pageIndex: number, rect: RectPt): boolean {
+    const b = this.cajaEnScroll(pageIndex, rect);
+    if (!b) return false;
+    const { scrollTop: st, scrollLeft: sl, clientHeight: ch, clientWidth: cw } = this.root;
+    return b.top >= st && b.top + b.height <= st + ch && b.left >= sl && b.left + b.width <= sl + cw;
+  }
+
+  /**
+   * Desplaza el visor para que la caja del rect (puntos PDF) quede visible,
+   * centrada en el eje que haga falta. Tras `goToPage` (que fija el pin de la
+   * página, E-032): el desplazamiento es inmediato y sustituye al suave de
+   * `scrollToPage`. Funciona con páginas aún sin pintar (el wrapper conserva
+   * su tamaño) y con /Rotate.
+   */
+  revelarRect(pageIndex: number, rect: RectPt): void {
+    const b = this.cajaEnScroll(pageIndex, rect);
+    if (!b) return;
+    const { scrollTop: st, scrollLeft: sl, clientHeight: ch, clientWidth: cw } = this.root;
+    const dentroV = b.top >= st && b.top + b.height <= st + ch;
+    const dentroH = b.left >= sl && b.left + b.width <= sl + cw;
+    this.programmaticScroll = true;
+    this.armScrollEndFallback();
+    this.root.scrollTo({
+      top: dentroV ? st : Math.max(0, b.top + b.height / 2 - ch / 2),
+      left: dentroH ? sl : Math.max(0, b.left + b.width / 2 - cw / 2),
+      behavior: 'instant'
+    });
   }
 
   private drawHighlights(i: number): void {

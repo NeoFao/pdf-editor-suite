@@ -61,6 +61,7 @@ import { calcularEscalaAjusteAncho } from './layout';
 import type { EditRequest } from './TextLayer';
 import { PageGeometry, type PtPoint } from '../coords/PageGeometry';
 import type { RectPt } from '../engine/PdfEngine';
+import { IteradorCoincidencias, type SaltoCoincidencia } from '../texto/iteradorCoincidencias';
 import { PanelMarcadores } from './PanelMarcadores';
 import { SetOutlineCmd } from '../commands/SetOutline';
 import { STANDARD_FONTS } from '../engine/standardFontFor';
@@ -234,6 +235,14 @@ export class App {
   private readonly searchInput: HTMLInputElement;
   /** Incrementado en cada `search()`: una búsqueda vieja que sigue en vuelo se abandona en cuanto detecta que ya no es la última (ver `search`). */
   private searchSeq = 0;
+  /** Coincidencias de la búsqueda vigente, con cursor para Siguiente/Anterior; se rellena por páginas mientras `search()` recorre el documento. */
+  private coincidencias = new IteradorCoincidencias();
+  private searchCount!: HTMLElement;
+  private btnSearchPrev!: HTMLButtonElement;
+  private btnSearchNext!: HTMLButtonElement;
+  /** Salto pedido (Enter/F3) cuando todavía no había adónde ir: se atiende en cuanto lleguen resultados o termine la búsqueda. */
+  private saltoPendiente: 'siguiente' | 'anterior' | null = null;
+  private buscando = false;
   // ── Buscar y reemplazar (Ctrl/Cmd+H) ──
   private replaceBar!: HTMLElement;
   private replaceInput!: HTMLInputElement;
@@ -443,6 +452,21 @@ export class App {
     searchBox.className = 'search-box';
     searchBox.appendChild(crearIcono('buscar'));
     searchBox.appendChild(this.searchInput);
+    // Contador "N de M" (región viva, cortés) y botones Anterior/Siguiente, como en Acrobat.
+    this.searchCount = document.createElement('span');
+    this.searchCount.id = 'search-count';
+    this.searchCount.className = 'search-count';
+    this.searchCount.setAttribute('role', 'status');
+    this.searchCount.setAttribute('aria-live', 'polite');
+    this.btnSearchPrev = this.iconBoton('flecha-izq', 'Coincidencia anterior (Mayús+F3)', 'btn-search-prev', () => this.saltarCoincidencia('anterior'));
+    this.btnSearchNext = this.iconBoton('flecha-der', 'Coincidencia siguiente (F3)', 'btn-search-next', () => this.saltarCoincidencia('siguiente'));
+    for (const b of [this.btnSearchPrev, this.btnSearchNext]) { b.classList.add('search-nav-btn'); b.disabled = true; }
+    searchBox.append(this.searchCount, this.btnSearchPrev, this.btnSearchNext);
+    this.searchInput.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      this.saltarCoincidencia(e.shiftKey ? 'anterior' : 'siguiente');
+    });
 
     this.searchInput.addEventListener('input', () => { this.cursorReemplazo = null; });
     this.construirBarraReemplazo();
@@ -1370,6 +1394,14 @@ export class App {
         this.searchInput.focus();
         this.searchInput.select();
         break;
+      case 'busqueda-siguiente':
+        e.preventDefault();
+        this.saltarCoincidencia('siguiente');
+        break;
+      case 'busqueda-anterior':
+        e.preventDefault();
+        this.saltarCoincidencia('anterior');
+        break;
       case 'reemplazar':
         e.preventDefault();
         this.abrirReemplazo();
@@ -2283,23 +2315,89 @@ export class App {
     const token = ++this.searchSeq;
     const q = this.searchInput.value.trim();
     const byPage = new Map<number, RectPt[]>();
-    let total = 0;
+    const it = new IteradorCoincidencias();
+    this.coincidencias = it;
+    this.saltoPendiente = null;
+    this.buscando = !!q;
+    this.viewer.setHighlights(byPage); // limpia lo de la consulta anterior (y la coincidencia actual)
+    this.actualizarContador();
     if (q) {
       const pages = this.session.model.pages;
       for (let i = 0; i < pages.length; i++) {
         if (this.searchSeq !== token) return; // una búsqueda más reciente ya la reemplazó
         const page = pages[i]!;
         const rects = this.session.engine.findText(this.session.doc, page.index, q, this.opcionesBusqueda());
-        if (rects.length) { byPage.set(page.index, rects); total += rects.length; }
+        if (rects.length) { byPage.set(page.index, rects); it.añadir(page.index, rects); }
         if ((i + 1) % PAGE_YIELD_CHUNK === 0 || i === pages.length - 1) {
           if (pages.length > PAGE_YIELD_CHUNK) this.setStatus(`Buscando… ${i + 1}/${pages.length}`);
+          // Resaltado y contador progresivos: la primera coincidencia ya es navegable sin esperar al resto.
+          this.viewer.setHighlights(byPage, true);
+          this.actualizarContador(i + 1, pages.length);
+          if (this.saltoPendiente && it.total > 0) this.saltarCoincidencia(this.saltoPendiente);
           await cederHilo();
         }
       }
     }
     if (this.searchSeq !== token) return;
-    this.viewer.setHighlights(byPage);
-    this.setStatus(q ? `${total} coincidencia(s)` : '');
+    it.terminar();
+    this.buscando = false;
+    this.viewer.setHighlights(byPage, true);
+    this.setStatus(q ? `${it.total} coincidencia(s)` : '');
+    this.actualizarContador();
+    const pendiente = this.saltoPendiente;
+    this.saltoPendiente = null;
+    if (pendiente && it.total > 0) this.saltarCoincidencia(pendiente);
+  }
+
+  /** Texto del contador: progreso mientras se busca, "N de M" con una coincidencia actual, o el total. */
+  private actualizarContador(hechas?: number, paginas?: number): void {
+    const it = this.coincidencias;
+    const q = this.searchInput.value.trim();
+    let t = '';
+    if (!q) t = '';
+    else if (this.buscando && hechas !== undefined && paginas !== undefined && paginas > PAGE_YIELD_CHUNK) {
+      t = `Buscando… ${hechas}/${paginas} · ${it.total} resultado${it.total === 1 ? '' : 's'}`;
+    } else if (it.total === 0) t = this.buscando ? 'Buscando…' : 'Sin resultados';
+    else if (it.posicion > 0) t = `${it.posicion} de ${it.total}${this.buscando ? '…' : ''}`;
+    else t = `${it.total} resultado${it.total === 1 ? '' : 's'}${this.buscando ? '…' : ''}`;
+    this.searchCount.textContent = t;
+    const hay = !!q && (it.total > 0 || this.buscando);
+    this.btnSearchPrev.disabled = !hay;
+    this.btnSearchNext.disabled = !hay;
+  }
+
+  /**
+   * Va a la coincidencia siguiente/anterior: lleva la vista a su página con
+   * `goToPage` (E-032) y deja la caja visible (`Viewer.revelarRect`), con la
+   * actual en naranja. Si aún no hay a dónde ir pero la búsqueda sigue en
+   * marcha, el salto queda pendiente y se hace al llegar el primer resultado.
+   */
+  private saltarCoincidencia(dir: 'siguiente' | 'anterior'): void {
+    if (!this.session || !this.viewer || !this.searchInput.value.trim()) return;
+    const it = this.coincidencias;
+    const salto = dir === 'siguiente' ? it.siguiente() : it.anterior();
+    if (!salto) {
+      if (this.buscando) this.saltoPendiente = dir;
+      return;
+    }
+    this.saltoPendiente = null;
+    this.irACoincidencia(salto);
+    this.actualizarContador();
+    if (salto.vuelta) {
+      const aviso = dir === 'siguiente' ? 'Se volvió al principio del documento' : 'Se volvió al final del documento';
+      this.searchCount.textContent = `${this.searchCount.textContent} · ${aviso}`;
+      this.setStatus(`${aviso}.`);
+    }
+  }
+
+  private irACoincidencia(c: SaltoCoincidencia): void {
+    const v = this.viewer;
+    if (!v) return;
+    if (c.pageIndex !== this.currentPage || !v.rectVisible(c.pageIndex, c.rect)) {
+      this.goToPage(c.pageIndex);
+      v.revelarRect(c.pageIndex, c.rect);
+    }
+    v.setCurrentMatch({ pageIndex: c.pageIndex, rect: c.rect });
   }
 
   // ───────────────────────── Buscar y reemplazar ─────────────────────────

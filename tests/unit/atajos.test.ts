@@ -246,3 +246,11 @@ test('con el foco en un campo editable, las flechas con modificador no se interc
   expect(resolverAtajo(ev({ key: 'ArrowRight', shift: true, editable: true }))).toBeNull();
   expect(resolverAtajo(ev({ key: 'ArrowDown', alt: true, editable: true }))).toBeNull();
 });
+
+test('F3 y Mayús+F3 resuelven a siguiente/anterior coincidencia, también con el foco en un campo editable', () => {
+  expect(resolverAtajo(ev({ key: 'F3' }))?.accion).toBe('busqueda-siguiente');
+  expect(resolverAtajo(ev({ key: 'F3', editable: true }))?.accion).toBe('busqueda-siguiente');
+  expect(resolverAtajo(ev({ key: 'F3', shift: true }))?.accion).toBe('busqueda-anterior');
+  expect(resolverAtajo(ev({ key: 'F3', shift: true, editable: true }))?.accion).toBe('busqueda-anterior');
+  expect(resolverAtajo(ev({ key: 'F3', ctrl: true }))).toBeNull();
+});

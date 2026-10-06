@@ -206,6 +206,15 @@ button { font-family: inherit; }
   font-size: var(--ed-font-sm);
   width: 150px;
 }
+.search-count {
+  font-size: var(--ed-font-sm);
+  color: var(--ed-text-muted);
+  white-space: nowrap;
+  min-width: 4ch;
+}
+.search-nav-btn { width: 24px; height: 24px; }
+.search-nav-btn svg { transform: rotate(90deg); }
+.search-nav-btn:disabled { opacity: .4; cursor: default; }
 .search-box:focus-within { border-color: var(--ed-accent); color: var(--ed-accent); }
 
 /* ── Botones de icono (comunes a barra superior y contextual) ───────────── */

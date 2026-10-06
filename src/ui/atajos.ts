@@ -42,6 +42,8 @@ export type AccionAtajo =
   | 'abrir'
   | 'imprimir'
   | 'buscar'
+  | 'busqueda-siguiente'
+  | 'busqueda-anterior'
   | 'reemplazar'
   | 'zoom-in'
   | 'zoom-out'
@@ -128,6 +130,21 @@ export const TABLA_ATAJOS: DefinicionAtajo[] = [
     descripcion: 'Ir al buscador',
     bloqueaEnEditable: false,
     coincide: (e) => ctrlOMeta(e) && tecla(e) === 'f'
+  },
+  // F3 no inserta texto, así que no choca con la regla de oro: funciona también con el foco en el buscador.
+  {
+    combinacion: 'F3  ·  Enter (en el buscador)',
+    accion: 'busqueda-siguiente',
+    descripcion: 'Ir a la siguiente coincidencia de la búsqueda',
+    bloqueaEnEditable: false,
+    coincide: (e) => !ctrlOMeta(e) && !e.alt && !e.shift && tecla(e) === 'f3'
+  },
+  {
+    combinacion: 'Mayús + F3  ·  Mayús + Enter (en el buscador)',
+    accion: 'busqueda-anterior',
+    descripcion: 'Ir a la coincidencia anterior de la búsqueda',
+    bloqueaEnEditable: false,
+    coincide: (e) => !ctrlOMeta(e) && !e.alt && e.shift && tecla(e) === 'f3'
   },
   {
     combinacion: 'Ctrl/Cmd + H',
