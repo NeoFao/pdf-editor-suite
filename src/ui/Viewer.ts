@@ -7,6 +7,7 @@ import type { PtPoint } from '../coords/PageGeometry';
 import type { RectPt } from '../engine/PdfEngine';
 import { pathMasCercano, normalizeRect, type PathCandidate } from './toolGeometry';
 import { contarRenderPage, fijarPaginasPintadas } from '../diagnostico';
+import { factorNitidez } from './nitidez';
 import { hayGestoEnCurso } from './gesto';
 import { SeleccionTexto } from './SeleccionTexto';
 import { marcadoBajoPunto, ordenLecturaMarcados, type MarcadoHit, type QuadPt } from '../coords/quads';
@@ -77,6 +78,8 @@ export class Viewer {
   private wrappers: HTMLElement[] = [];
   private geoms: PageGeometry[] = [];
   private rendered = new Set<number>();
+  /** N3: DPR con el que se pintaron las páginas vivas (`repintarSiCambioDpr` compara contra él). */
+  private dprPintado = window.devicePixelRatio;
   private scale = 1;
   private highlights = new Map<number, RectPt[]>();
   /** Coincidencia ACTUAL de buscar y reemplazar (la que reemplazará el próximo "Reemplazar"), en puntos PDF; se pinta más fuerte que el resto. */
@@ -445,6 +448,8 @@ export class Viewer {
     const cursor = tool === 'eraser' ? 'cell' : 'crosshair';
     this.root.querySelectorAll<HTMLElement>('.tool-layer').forEach((el) => {
       el.style.pointerEvents = activo ? 'auto' : 'none';
+      // N2: con una herramienta de dibujo el dedo dibuja, no hace scroll (si no, el navegador manda `pointercancel`).
+      el.style.touchAction = activo ? 'none' : '';
       el.style.cursor = cursor;
     });
   }
@@ -1051,6 +1056,18 @@ export class Viewer {
     this.renderVisible();
   }
 
+  /**
+   * N3: el DPR cambió (zoom del navegador, mover la ventana a otra pantalla): repinta las páginas visibles al nuevo
+   * factor. Las páginas con estado vivo (edición en curso, imagen o anotación seleccionada…) no se desalojan
+   * (`evictPage`) y se repintan cuando se vuelvan a pintar.
+   */
+  repintarSiCambioDpr(): void {
+    if (window.devicePixelRatio === this.dprPintado) return;
+    this.dprPintado = window.devicePixelRatio;
+    for (const i of Array.from(this.rendered)) this.evictPage(i);
+    this.renderVisible();
+  }
+
   private cssHeights(): number[] {
     return this.session.model.pages.map((p) => p.sizePt.heightPt * this.scale);
   }
@@ -1073,7 +1090,8 @@ export class Viewer {
       // Clic en el fondo (no en un run ni en el marco de una imagen) → insertar en ese punto y deseleccionar la imagen activa.
       w.addEventListener('click', (e) => {
         const target = e.target as HTMLElement;
-        if (target.classList.contains('run')) return;
+        // N7: con una herramienta de colocación activa un clic sobre una línea también coloca.
+        if (target.classList.contains('run') && this.tool === 'none') return;
         if (target.closest('.image-box')) return;
         this.deselectImage();
         const rect = w.getBoundingClientRect();
@@ -1186,10 +1204,15 @@ export class Viewer {
     if (this.marcadoSel?.pageIndex === i) { this.marcadoSel = null; this.cb.onMarcadoSelect?.(null); }
     wrapper.textContent = '';
     contarRenderPage();
-    const { width, height, data } = this.session.engine.renderPage(this.session.doc, i, this.scale);
+    // N3: bitmap a `escala × factor` (DPR acotado), CSS al tamaño de la página (`escala` px por pt).
+    const cssAncho = page.sizePt.widthPt * this.scale, cssAlto = page.sizePt.heightPt * this.scale;
+    this.dprPintado = window.devicePixelRatio;
+    const factor = factorNitidez(this.dprPintado, cssAncho, cssAlto);
+    const { width, height, data } = this.session.engine.renderPage(this.session.doc, i, this.scale * factor);
     const canvas = document.createElement('canvas');
     canvas.width = width; canvas.height = height;
     canvas.style.display = 'block';
+    canvas.style.width = `${cssAncho}px`; canvas.style.height = `${cssAlto}px`;
     // A-06 (WCAG 1.1.1): el bitmap del motor es una imagen con nombre de página.
     canvas.setAttribute('role', 'img');
     canvas.setAttribute('aria-label', `Página ${i + 1}`);
@@ -1205,6 +1228,7 @@ export class Viewer {
     wrapper.appendChild(layer);
     const geom = this.geoms[i]!;
     new TextLayer(layer, page, geom, {
+      colocando: () => this.tool !== 'none',
       onEdit: this.cb.onEdit,
       onSelect: (pageIndex, runId) => { this.textoSel.limpiar(); this.cb.onSelect(pageIndex, runId); },
       onMove: (pageIndex, runId, dxCss, dyCss) => {
@@ -1226,6 +1250,7 @@ export class Viewer {
     Object.assign(toolLayer.style, {
       position: 'absolute', inset: '0',
       pointerEvents: activo ? 'auto' : 'none',
+      touchAction: activo ? 'none' : '',
       cursor: this.tool === 'eraser' ? 'cell' : 'crosshair'
     });
     this.attachToolCapture(toolLayer, i);

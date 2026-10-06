@@ -33,17 +33,20 @@ export interface Command {
 export class CommandBus {
   private undoStack: Command[] = [];
   private redoStack: Command[] = [];
-  constructor(private readonly ctx: Ctx) {}
+  /** `onCambio` se avisa tras ejecutar, registrar, deshacer o rehacer (N8: marca el documento como modificado). */
+  constructor(private readonly ctx: Ctx, private readonly onCambio?: () => void) {}
 
   /** Aplica el comando y lo registra. */
   async execute(cmd: Command): Promise<void> {
     await cmd.execute(this.ctx);
     this.record(cmd);
+    this.onCambio?.();
   }
 
   /** Registra un comando ya aplicado por fuera (p. ej. la UI validó y aplicó la edición). */
   pushExecuted(cmd: Command): void {
     this.record(cmd);
+    this.onCambio?.();
   }
 
   private record(cmd: Command): void {
@@ -66,6 +69,7 @@ export class CommandBus {
     if (!cmd) return null;
     await cmd.undo(this.ctx);
     this.redoStack.push(cmd);
+    this.onCambio?.();
     return cmd.label;
   }
 
@@ -75,6 +79,7 @@ export class CommandBus {
     if (!cmd) return null;
     await cmd.execute(this.ctx);
     this.undoStack.push(cmd);
+    this.onCambio?.();
     return cmd.label;
   }
 

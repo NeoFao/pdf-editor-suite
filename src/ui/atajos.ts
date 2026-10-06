@@ -33,6 +33,8 @@ export interface EventoAtajo {
   alt: boolean;
   /** true si `document.activeElement`/`event.target` es un campo editable (ver `esCampoEditable`). */
   editable: boolean;
+  /** true si hay un `<dialog open>` modal: los atajos globales no actúan sobre el documento de detrás (E-075). Ver `hayModalAbierto`. */
+  modalAbierto?: boolean;
 }
 
 export type AccionAtajo =
@@ -328,6 +330,7 @@ export const TABLA_ATAJOS: DefinicionAtajo[] = [
  * efectos — quien la llama decide qué hacer con el resultado (`App.ts`).
  */
 export function resolverAtajo(e: EventoAtajo): DefinicionAtajo | null {
+  if (e.modalAbierto) return null;
   const def = TABLA_ATAJOS.find((d) => !d.contextual && d.coincide(e));
   if (!def) return null;
   if (def.bloqueaEnEditable && e.editable) return null;
@@ -336,10 +339,16 @@ export function resolverAtajo(e: EventoAtajo): DefinicionAtajo | null {
 
 /** Como `resolverAtajo`, pero solo entre los atajos contextuales (Nota/Rectángulo por teclado, E-073). */
 export function resolverAtajoContextual(e: EventoAtajo): DefinicionAtajo | null {
+  if (e.modalAbierto) return null;
   const def = TABLA_ATAJOS.find((d) => d.contextual && d.coincide(e));
   if (!def) return null;
   if (def.bloqueaEnEditable && e.editable) return null;
   return def;
+}
+
+/** true si hay un diálogo modal abierto (`<dialog open>`, abierto con `showModal`): ahí manda el diálogo, no el documento (E-075). */
+export function hayModalAbierto(): boolean {
+  return document.querySelector('dialog[open]') !== null;
 }
 
 /**

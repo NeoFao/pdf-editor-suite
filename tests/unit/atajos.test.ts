@@ -263,3 +263,25 @@ test('E-073: Enter y las flechas son atajos contextuales: resolverAtajo los igno
   expect(resolverAtajoContextual(ev({ key: 'Enter', editable: true }))).toBeNull();
   expect(resolverAtajoContextual(ev({ key: 'Enter', ctrl: true }))).toBeNull();
 });
+
+// N4 (E-075): con un diálogo modal abierto, los atajos globales no actúan sobre el documento de detrás.
+test('con un modal abierto ningún atajo global se resuelve (Ctrl+Z, n, End, ?)', () => {
+  for (const e of [
+    ev({ key: 'z', ctrl: true }),
+    ev({ key: 'y', ctrl: true }),
+    ev({ key: 'n' }),
+    ev({ key: 't' }),
+    ev({ key: 'r' }),
+    ev({ key: 'End' }),
+    ev({ key: '?', shift: true })
+  ]) {
+    expect(resolverAtajo(e)?.accion, `${e.key} sin modal`).toBeTruthy();
+    expect(resolverAtajo({ ...e, modalAbierto: true }), `${e.key} con modal`).toBeNull();
+  }
+});
+
+test('con un modal abierto tampoco se resuelven los atajos contextuales (Enter de Nota/Rectángulo)', () => {
+  const enter = ev({ key: 'Enter' });
+  expect(resolverAtajoContextual(enter)).not.toBeNull();
+  expect(resolverAtajoContextual({ ...enter, modalAbierto: true })).toBeNull();
+});

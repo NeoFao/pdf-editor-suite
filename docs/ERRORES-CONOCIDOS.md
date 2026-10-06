@@ -2693,3 +2693,103 @@ la herramienta activa y el foco en el visor, en fase de captura para adelantarse
 **Cómo se detecta ahora.** `tests/e2e/next/herramientas-teclado.spec.ts` (sin `page.mouse` ni clics: nota con y sin
 línea enfocada, rectángulo crear/mover/redimensionar/confirmar con el PDF guardado, Esc, Enter sigue editando sin
 herramienta, ayuda) y `tests/unit/atajos.test.ts`. Fallaban antes. Sin regla guard: es cobertura funcional.
+
+---
+
+### E-074 · Recargar, cerrar o abrir otro documento con cambios sin guardar perdía el trabajo sin aviso (N8)
+
+**Síntoma.** Tras editar una línea y resaltar, recargar la pestaña (o abrir otro PDF, o «Nuevo») descartaba todo sin
+preguntar. No había manejador `beforeunload` ni noción de «documento modificado».
+
+**Causa raíz.** El estado «sucio» no existía: el `CommandBus` solo guardaba pilas de deshacer/rehacer y la UI no sabía
+si lo hecho desde el último guardado estaba a salvo. Nadie revisó los caminos que destruyen la sesión (recarga, cierre,
+`openFile`, `openImage`, `newBlank`) desde el punto de vista de «qué se pierde».
+
+**Arreglo.** `CommandBus` acepta un `onCambio` que se llama tras ejecutar, registrar (`pushExecuted`), deshacer y rehacer.
+`App.marcarSucio()` lo refleja con un «• » en `.doc-name` (y `data-sucio`) y en `document.title`; guardar (`#btn-save`) o
+abrir un documento lo dejan limpio. `beforeunload` hace `preventDefault()` SOLO si está sucio. Abrir un fichero o imagen,
+o «Nuevo», con cambios pide `window.confirm` y, si se cancela, no toca nada.
+
+**Cómo se detecta ahora.** `tests/e2e/next/cambios-sin-guardar.spec.ts` (limpio al abrir, sucio tras ejecutar y tras
+deshacer, limpio al guardar, `beforeunload` solo cuando está sucio —con diálogo real—, confirmación de Nuevo/abrir y
+silencio con el documento limpio). Fallaban antes. Sin regla guard: es estado de interfaz, no un patrón estático.
+
+---
+
+### E-075 · Con un diálogo modal abierto, los atajos globales actuaban sobre el documento de detrás (N4)
+
+**Síntoma.** Con Ayuda, Texto…, Comprimir, firma o Encabezado abiertos y el foco en un botón del diálogo, `n`/`t`/`r`
+cambiaban la herramienta, `End` saltaba de página, Ctrl+Z/Ctrl+Y deshacían y rehacían el documento sin que se viera y `?`
+apilaba la ayuda encima de otro diálogo.
+
+**Causa raíz.** El manejador global de `keydown` solo conocía una regla de exclusión, «el foco está en un campo
+editable». Un diálogo modal con el foco en un botón no es un campo editable, y los diálogos declaran `aria-modal` pero
+nada en la app lo respetaba al resolver atajos.
+
+**Arreglo.** `EventoAtajo.modalAbierto` (`resolverAtajo` y `resolverAtajoContextual` devuelven `null`) y
+`hayModalAbierto()` (`<dialog open>`); `App` sale del manejador global y del de Nota/Rectángulo cuando hay modal. Escape
+lo gestiona el propio `<dialog>`.
+
+**Cómo se detecta ahora.** `tests/unit/atajos.test.ts` (regla pura) y `tests/e2e/next/atajos-con-modal.spec.ts` (Ayuda
+abierta: Ctrl+Z, n, r, End, Ctrl+Y no tocan el documento ni `#status`; al cerrar, Ctrl+Z vuelve a funcionar). Fallaban
+antes. Sin regla guard: es una regla de comportamiento de teclado.
+
+---
+
+### E-076 · En modo Nota o Insertar texto, un clic sobre una línea la editaba en vez de colocar (N7)
+
+**Síntoma.** Con «Nota» activa, un clic en el centro de una línea de texto dejaba el estado en «Modo nota…», ponía la línea en
+edición y no creaba ninguna nota. Igual con «Insertar texto». Con un clic en un hueco sí colocaba.
+
+**Causa raíz.** En esos modos `.tool-layer` tiene `pointer-events: none` (el clic debe llegar al fondo de la página) pero los
+`.run` capturan el clic: su manejador llama a `stopPropagation()` y empieza a editar, y el manejador del fondo ignoraba además
+cualquier clic cuyo objetivo fuera un `.run`. Ninguno de los dos conocía la herramienta activa.
+
+**Arreglo.** `TextLayer` recibe `colocando()` (el visor devuelve `tool !== 'none'`): con una herramienta activa el clic de la
+línea no edita ni detiene la propagación, y el manejador del fondo del `Viewer` solo ignora los `.run` cuando no hay
+herramienta. Sin herramienta, un clic sigue editando.
+
+**Cómo se detecta ahora.** `tests/e2e/next/colocar-sobre-texto.spec.ts` (Nota e Insertar sobre una línea colocan y no editan;
+sin herramienta se edita). Fallaban antes. Sin regla guard: es comportamiento de interacción.
+
+---
+
+### E-077 · En móvil, Rectángulo, Pluma y mover imagen no funcionaban con el dedo: el navegador se quedaba el gesto (N2)
+
+**Síntoma.** A 390 px con pantalla táctil, arrastrar con el dedo con Rectángulo o Pluma activos no dibujaba nada («No hay
+nada que deshacer») y arrastrar una firma/imagen desplazaba el visor en vez de moverla. El registro de eventos mostraba
+`pointerdown`, un `pointermove` y `pointercancel`. Con ratón todo funcionaba.
+
+**Causa raíz.** Ni `.tool-layer`, ni `.image-box`, ni el tirador de mover texto declaraban `touch-action: none`, así que el
+navegador interpretaba el arrastre como scroll y cancelaba el puntero (el gesto termina en `pointercancel`, E-034). Los tests
+móviles solo hacían toques, nunca arrastres.
+
+**Arreglo.** `touch-action: none` SOLO donde el dedo debe dibujar o arrastrar, para no romper el scroll normal: `.tool-layer`
+mientras la herramienta es pluma/rectángulo/borrador (`Viewer.setTool` y al crear la capa), `.image-box.selected` (estilos) y
+el tirador de mover texto. Sin herramienta o con la imagen sin seleccionar el dedo sigue haciendo scroll.
+
+**Cómo se detecta ahora.** `tests/e2e/next/tactil.spec.ts` (390x844, `hasTouch`, toques reales por CDP que sí respetan
+`touch-action`): rectángulo con el dedo crea el `DrawRectCmd` y se deshace; con «ninguna» el dedo hace scroll; imagen
+seleccionada se mueve sin desplazar el visor. Fallaban antes. Sin regla guard: depende de la interacción táctil real.
+
+---
+
+### E-078 · La página se pintaba a 1 px de bitmap por px CSS: borrosa en pantallas de alta densidad (N3)
+
+**Síntoma.** A 390 px con DPR 2 (móviles, retina) `canvas.width` de la página era igual al ancho CSS (ratio 1,00): el texto
+del PDF salía borroso. Solo las miniaturas multiplicaban por `devicePixelRatio`.
+
+**Causa raíz.** `Viewer.renderPage` pedía el bitmap al motor a la escala CSS (`this.scale`) y dejaba que los atributos
+`width`/`height` del canvas fijaran también su tamaño CSS: bitmap y CSS eran la misma cosa.
+
+**Arreglo.** `src/ui/nitidez.ts` (`factorNitidez`): el bitmap se pinta a `escala × factor`, con `factor` = DPR acotado a 2,5 y
+reducido si la página superara 8 Mpx (32 MB RGBA; con el tope de 12 páginas pintadas de E-045 el peor caso queda en ~384 MB),
+nunca por debajo de 1. El canvas fija su tamaño CSS por separado (`style.width/height` = la página a la escala actual), así que
+las capas superpuestas (texto, notas, imágenes, formularios) no cambian de geometría. `Viewer.repintarSiCambioDpr()` repinta
+las páginas vivas cuando cambia el DPR; `App` lo llama desde `matchMedia('(resolution: …dppx)')` y desde `resize` (el zoom del
+navegador dispara ambos; la emulación por CDP solo `resize`).
+
+**Cómo se detecta ahora.** `tests/unit/nitidez.test.ts` (factor, topes, DPR no válido) y
+`tests/e2e/next/nitidez-pagina.spec.ts` (DPR 2: bitmap ≈ ancho CSS × 2 con el CSS intacto; cambio de DPR en caliente repinta;
+DPR 1 sigue 1:1; DPR 3 acotado y con límite de píxeles a zoom alto; la prueba de oro de reposo, E-029, con DPR 1 y 2).
+Fallaban antes. Sin regla guard: es cálculo de maquetación, no un patrón estático.

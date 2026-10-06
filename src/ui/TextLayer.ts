@@ -9,6 +9,8 @@ export interface TextLayerCallbacks {
   onEdit: (req: EditRequest) => void;
   onSelect: (pageIndex: number, runId: number) => void;
   onMove: (pageIndex: number, runId: number, dxCss: number, dyCss: number) => void;
+  /** true si hay una herramienta de colocación activa (nota, insertar…): un clic sobre la línea coloca, no edita (N7). */
+  colocando?: () => boolean;
 }
 
 /**
@@ -186,6 +188,8 @@ export class TextLayer {
         }
       };
       block.addEventListener('click', (e) => {
+        // N7: con una herramienta de colocación activa el clic sube al fondo de la página (que coloca) y no edita.
+        if (!block.isContentEditable && this.cb.colocando?.()) return;
         e.stopPropagation();
         editadoConTeclado = false;
         empezarEdicion();
@@ -264,7 +268,7 @@ export class TextLayer {
     const sobresale = 9;
     const bloqueX = parseFloat(block.style.left) || 0, bloqueY = parseFloat(block.style.top) || 0;
     Object.assign(handle.style, {
-      position: 'absolute', width: '14px', height: '14px',
+      position: 'absolute', width: '14px', height: '14px', touchAction: 'none', // N2: el dedo arrastra el tirador, no hace scroll
       left: `${-Math.min(sobresale, Math.max(0, bloqueX))}px`,
       top: `${-Math.min(sobresale, Math.max(0, bloqueY))}px`
     });
