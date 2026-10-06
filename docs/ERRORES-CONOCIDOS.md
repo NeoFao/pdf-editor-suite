@@ -2623,3 +2623,28 @@ queda fuera, desplaza el visor (`revelarRect`).
 desde imagen y guardada) y a media página de `grande.pdf`, la caja `.image-box.selected` está entera dentro del
 visor. Fallaba antes (la dibujada no se seleccionaba; las otras desbordaban el visor). Sin regla guard: es
 colocación en pantalla, no un patrón de código.
+
+---
+
+### E-071 · Borrar una página con marcadores dejaba un marcador colgante y bloqueaba la edición de marcadores con un mensaje engañoso
+
+**Síntoma.** `paginas-pequenas-marcadores.pdf` → borrar la página 2: «Marcador 2» seguía en el panel (y navegaba a
+otra página) y aparecía «Este documento tiene marcadores con acciones que este editor aún no puede conservar;
+la edición está desactivada». El documento no tiene ninguna acción: solo un destino huérfano.
+
+**Causa raíz.** `DeletePageCmd` solo llamaba a `FPDFPage_Delete`. El destino del marcador apunta al OBJETO de la
+página borrada; al releer, `FPDFDest_GetDestPageIndex` devuelve -1 y `bookmarkTarget` lo clasifica como acción
+`no-soportada` («Destino sin página resoluble»), lo que bloquea la edición (E-031/T4b).
+
+**Arreglo.** El mismo comando lee el outline ANTES de borrar y, si algún marcador apuntaba a esa página, lo
+reescribe después con `sinPaginaBorrada` (`src/outline/arbol.ts`) y avisa al panel. Decisión sobre los hijos:
+SUBEN un nivel, ocupando el lugar del padre en orden; un hijo que apunta a una página viva no debe perderse
+porque su encabezado desaparezca (los que apuntaban a la misma página borrada se quitan también). Los destinos de
+páginas posteriores se reindexan (-1). Un outline con acciones `no-soportada` no se toca (no se puede reescribir
+sin perderlas); si ningún marcador apuntaba a la página, tampoco se reescribe (PDFium ya mantiene el resto por
+referencia). Deshacer sigue siendo por snapshot, así que devuelve el árbol exacto.
+
+**Cómo se detecta ahora.** `tests/e2e/next/marcadores-borrar-pagina.spec.ts` (outline releído con el motor del
+PDF guardado: borrar p.2, borrar p.1 con hijo que sube, JavaScript sin tocar, URI conservado, deshacer exacto,
+edición habilitada) y `tests/unit/arbolMarcadores.test.ts`. Fallaba antes. Sin regla guard: es lógica de
+dominio, no un patrón estático.
