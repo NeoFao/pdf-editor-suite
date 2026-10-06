@@ -116,3 +116,26 @@ for (const { pagina, rot } of CASOS) {
     expect(Math.abs(l3.originPt.yPt - (841.89 - 100 - 64)), msg).toBeLessThan(4); // y de usuario no cambia
   });
 }
+
+// Texto contragirado (rotada.pdf: /Rotate 90/270/180 con el texto girado para que se lea horizontal): la línea
+// gira en el espacio de usuario además de la página; el editor debe quedar horizontal y sobre la línea.
+const ROTADA_CONTRAGIRADA = path.resolve(AQUI, '../../fixtures/generados/rotada.pdf');
+for (const { pagina, rot } of CASOS) {
+  test(`capa-texto-rotada ${rot}: con el texto contragirado el editor queda horizontal sobre la línea`, async ({ page }) => {
+    await page.goto('/index.next.html');
+    await page.locator('#file-input').setInputFiles(ROTADA_CONTRAGIRADA);
+    const wrapper = page.locator('.page').nth(pagina);
+    await wrapper.scrollIntoViewIfNeeded();
+    const run = wrapper.locator('.run', { hasText: 'ESQUINA-SUP-IZQ' });
+    await run.scrollIntoViewIfNeeded();
+    const reposo = (await run.boundingBox())!;
+    await run.click();
+    await expect(run).toHaveClass(/editing/);
+    const e = (await run.boundingBox())!;
+    const msg = `reposo=${JSON.stringify(reposo)} editor=${JSON.stringify(e)}`;
+    expect(e.width, `el editor no es horizontal: ${msg}`).toBeGreaterThan(e.height * 3);
+    // El centro del editor cae dentro de la caja de reposo de la línea (misma línea, no desplazado).
+    const cx = e.x + e.width / 2, cy = e.y + e.height / 2;
+    expect(cx > reposo.x - 10 && cx < reposo.x + reposo.width + 10 && cy > reposo.y - 10 && cy < reposo.y + reposo.height + 10, msg).toBe(true);
+  });
+}

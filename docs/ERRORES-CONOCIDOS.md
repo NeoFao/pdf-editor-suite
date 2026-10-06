@@ -2468,3 +2468,11 @@ visual, que no cambia, así que no dependen de la capa.
 línea 3 edita la 3 y el PDF guardado conserva las demás), `tests/unit/PageGeometry.test.ts` (la matriz coincide
 con `ptToCss`) y la regla guard `capa-texto-sin-rotacion-por-run` (ni aritmética de rotación ni conversiones
 visuales por run dentro de `TextLayer.ts`).
+
+**Detalles que importan (E-063).** (1) Mover la rotación a la capa deja el texto girado EN EL ESPACIO DE USUARIO
+(p. ej. páginas /Rotate con el texto contragirado para leerse horizontal, o texto girado en una página sin
+rotar) con la caja de la línea vertical en la capa: por eso `TextRun.anguloDeg` (atan2(b, a) de la matriz del
+objeto de texto) permite editar la línea girada sobre su origen (`rotate(-ángulo)`), y en reposo la caja mide
+EXACTAMENTE la línea (`width` fijo + `overflow: clip`): con `min-width` el texto horizontal desbordaba la caja
+girada y volvía a taparse con sus vecinas (lo vio `anotaciones-seleccion.spec.ts`, caso /Rotate). (2) Solo se
+tratan múltiplos de 90°; otros ángulos se siguen editando como horizontales (limitación previa, E-030).

@@ -86,6 +86,11 @@ export class TextLayer {
       // Es la geometría a la que el bloque vuelve al salir de edición y la
       // que usa la máscara — nunca se recalcula desde el DOM (E-002).
       const r = this.geom.rectPtToCss(run.boxPt);
+      // Dirección del texto en el espacio de usuario (múltiplos de 90, E-063): con 90/270 el texto es
+      // vertical en la capa sin girar, así que su LARGO es el alto de la caja y no el ancho.
+      const anguloDeg = ((run.anguloDeg ?? 0) % 360 + 360) % 360;
+      const anguloCss = anguloDeg % 90 === 0 ? anguloDeg : 0; // otros ángulos: se tratan como horizontal
+      const largoCss = anguloCss % 180 !== 0 ? r.height : r.width; // px CSS de la capa
 
       // Máscara aparte, fija en `r` para siempre: aunque el bloque se mueva
       // al entrar en edición (E-030), esto sigue tapando el texto original.
@@ -116,7 +121,7 @@ export class TextLayer {
         position: 'absolute',
         left: `${r.left}px`,
         top: `${r.top}px`,
-        minWidth: `${r.width}px`,
+        width: `${r.width}px`,
         height: `${r.height}px`,
         lineHeight: `${r.height}px`
       });
@@ -151,11 +156,16 @@ export class TextLayer {
         const baselineCss = origin.y;
         const lineHeightCss = ascentCss + descentCss;
         block.dataset.baselineCss = String(baselineCss);
+        // El texto girado en el espacio de usuario (no es /Rotate de página) se edita girado sobre su origen.
         Object.assign(block.style, {
           left: `${origin.x}px`,
           top: `${baselineCss - ascentCss}px`,
+          width: '',
+          minWidth: `${largoCss}px`,
           height: `${lineHeightCss}px`,
-          lineHeight: `${lineHeightCss}px`
+          lineHeight: `${lineHeightCss}px`,
+          transformOrigin: `0px ${ascentCss}px`,
+          transform: anguloCss === 0 ? '' : `rotate(${-anguloCss}deg)`
         });
 
         mask.classList.add('active');
@@ -183,8 +193,12 @@ export class TextLayer {
         Object.assign(block.style, {
           left: `${r.left}px`,
           top: `${r.top}px`,
+          width: `${r.width}px`,
+          minWidth: '',
           height: `${r.height}px`,
-          lineHeight: `${r.height}px`
+          lineHeight: `${r.height}px`,
+          transformOrigin: '',
+          transform: ''
         });
         const newText = block.textContent ?? '';
         if (newText !== oldText) {
