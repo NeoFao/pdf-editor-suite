@@ -218,3 +218,31 @@ test('regla de oro: escribir "t"/"p"/"v" en un campo editable no cambia de herra
 test('Ctrl+P sigue resolviendo a imprimir, no a la herramienta Pluma (P sin modificador)', () => {
   expect(resolverAtajo(ev({ key: 'p', ctrl: true }))?.accion).toBe('imprimir');
 });
+
+// T16: paridad de teclado para lo que antes exigía ratón (WCAG 2.1.1).
+test('Mayús+→ / Mayús+← resuelven a ampliar o reducir la selección por carácter', () => {
+  expect(resolverAtajo(ev({ key: 'ArrowRight', shift: true }))?.accion).toBe('seleccion-caracter');
+  expect(resolverAtajo(ev({ key: 'ArrowLeft', shift: true }))?.accion).toBe('seleccion-caracter');
+});
+
+test('Mayús+↓ / Mayús+↑ resuelven a ampliar o reducir la selección por línea', () => {
+  expect(resolverAtajo(ev({ key: 'ArrowDown', shift: true }))?.accion).toBe('seleccion-linea');
+  expect(resolverAtajo(ev({ key: 'ArrowUp', shift: true }))?.accion).toBe('seleccion-linea');
+});
+
+test('Alt+↓ / Alt+↑ recorren las anotaciones de la página', () => {
+  expect(resolverAtajo(ev({ key: 'ArrowDown', alt: true }))?.accion).toBe('anotacion-recorrer');
+  expect(resolverAtajo(ev({ key: 'ArrowUp', alt: true }))?.accion).toBe('anotacion-recorrer');
+});
+
+test('las flechas sin modificador, con Ctrl o con Mayús+Alt no disparan nada (ni chocan con otros atajos)', () => {
+  expect(resolverAtajo(ev({ key: 'ArrowDown' }))).toBeNull();
+  expect(resolverAtajo(ev({ key: 'ArrowDown', ctrl: true, shift: true }))).toBeNull();
+  expect(resolverAtajo(ev({ key: 'ArrowDown', alt: true, shift: true }))).toBeNull();
+  expect(resolverAtajo(ev({ key: 'ArrowRight', alt: true }))).toBeNull(); // Alt+→ es "adelante" del navegador
+});
+
+test('con el foco en un campo editable, las flechas con modificador no se interceptan', () => {
+  expect(resolverAtajo(ev({ key: 'ArrowRight', shift: true, editable: true }))).toBeNull();
+  expect(resolverAtajo(ev({ key: 'ArrowDown', alt: true, editable: true }))).toBeNull();
+});

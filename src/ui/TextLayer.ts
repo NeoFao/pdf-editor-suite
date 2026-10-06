@@ -189,7 +189,9 @@ export class TextLayer {
           if (e.key === 'Escape') { block.textContent = oldText; salirDeEdicion(); }
           return;
         }
-        // Reposo: navegación entre runs y activación con teclado (A-03).
+        // Reposo: navegación entre runs y activación con teclado (A-03). Con Mayús/Alt/Ctrl/Cmd las flechas
+        // NO mueven el foco: son la selección de texto (Mayús) y el recorrido de anotaciones (Alt) de T16.
+        if (e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return;
         const i = this.bloques.indexOf(block);
         if (e.key === 'ArrowDown') { e.preventDefault(); this.moverTabstop(this.bloques[i + 1]); }
         else if (e.key === 'ArrowUp') { e.preventDefault(); this.moverTabstop(this.bloques[i - 1]); }

@@ -1,7 +1,9 @@
 import { PageGeometry } from '../coords/PageGeometry';
 import type { QuadPt } from '../coords/quads';
-import type { CharBox, SizePt } from '../engine/PdfEngine';
-import { indiceCaracterMasCercano, quadsDeRango, textoDeRango } from '../texto/seleccionTexto';
+import type { CharBox, RectPt, SizePt } from '../engine/PdfEngine';
+import {
+  caretInicioDe, caretLinea, caretSiguiente, caretsARango, indiceCaracterMasCercano, quadsDeRango, rangoACarets, textoDeRango
+} from '../texto/seleccionTexto';
 import { registrarGesto } from './gesto';
 
 /** Lo que `SeleccionTexto` necesita del visor, sin conocer al visor. */
@@ -84,6 +86,33 @@ export class SeleccionTexto {
       onUp: () => { if (arrastrando) tragarSiguienteClic(); },
       onCancel: () => { if (arrastrando) this.limpiar(); }
     });
+  }
+
+  /**
+   * Selección por TECLADO (T16): Mayús+→/← (`caracter`) o Mayús+↓/↑ (`linea`) desde la línea enfocada,
+   * cuya caja es `cajaLinea` (pt de usuario). Sin selección en esa página, el ancla es el inicio de la
+   * línea (hacia delante) o su final (hacia atrás); con selección vigente se mueve solo el FOCO y el ancla
+   * se conserva, también si la selección venía del ratón. Si el foco vuelve al ancla la selección queda
+   * vacía y se descarta. Devuelve false si no hay nada que seleccionar (línea sin caracteres con caja).
+   */
+  extender(pageIndex: number, cajaLinea: RectPt, mov: 'caracter' | 'linea', dir: 1 | -1): boolean {
+    const chars = this.deps.chars(pageIndex);
+    let car: { ancla: number; foco: number };
+    if (this.sel && this.sel.pageIndex === pageIndex) {
+      car = rangoACarets(this.sel);
+    } else {
+      const c0 = caretInicioDe(chars, cajaLinea, dir > 0 ? 'inicio' : 'final');
+      if (c0 < 0) return false;
+      this.limpiar();
+      this.deps.alEmpezar();
+      car = { ancla: c0, foco: c0 };
+    }
+    const foco = mov === 'caracter' ? caretSiguiente(chars, car.foco, dir) : caretLinea(chars, car.foco, dir, this.geoUnidad(pageIndex));
+    const r = caretsARango(car.ancla, foco);
+    if (!r) { this.limpiar(); return true; }
+    this.sel = { pageIndex, ...r };
+    this.pintar();
+    return true;
   }
 
   /** ¿Hay una selección con algún carácter? */
