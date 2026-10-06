@@ -511,8 +511,8 @@ export class App {
     const btnSplit = this.iconBoton('dividir', 'Dividir', 'btn-split', () => this.splitByRange(), { mostrarEtiqueta: true });
     const btnSave = this.iconBoton('guardar', 'Guardar', 'btn-save', () => { void this.save(); });
     const btnPrint = this.iconBoton('imprimir', 'Imprimir', 'btn-print', () => { void this.print(); });
-    const btnUndo = this.iconBoton('deshacer', 'Deshacer', 'btn-undo', () => { void this.bus?.undo(); });
-    const btnRedo = this.iconBoton('rehacer', 'Rehacer', 'btn-redo', () => { void this.bus?.redo(); });
+    const btnUndo = this.iconBoton('deshacer', 'Deshacer', 'btn-undo', () => { void this.deshacer(); });
+    const btnRedo = this.iconBoton('rehacer', 'Rehacer', 'btn-redo', () => { void this.rehacer(); });
 
     this.status = document.createElement('span');
     this.status.id = 'status';
@@ -1347,6 +1347,17 @@ export class App {
     this.setStatus('Nota añadida.');
   }
 
+  /** Deshace y lo anuncia en `#status` (B1: un lector de pantalla no recibía confirmación). */
+  private async deshacer(): Promise<void> {
+    const label = await this.bus?.undo();
+    this.setStatus(label ? `Deshecho: ${label}` : 'No hay nada que deshacer.');
+  }
+
+  private async rehacer(): Promise<void> {
+    const label = await this.bus?.redo();
+    this.setStatus(label ? `Rehecho: ${label}` : 'No hay nada que rehacer.');
+  }
+
   /**
    * Nota y Rectángulo por teclado (E-073). Devuelve true si consumió la tecla. Página: la de la línea (o página)
    * enfocada, si no la actual. Nota: sobre la línea enfocada o, si no hay, en la esquina superior izquierda de lo
@@ -1422,11 +1433,11 @@ export class App {
     switch (accion) {
       case 'deshacer':
         e.preventDefault();
-        void this.bus?.undo();
+        void this.deshacer();
         break;
       case 'rehacer':
         e.preventDefault();
-        void this.bus?.redo();
+        void this.rehacer();
         break;
       case 'guardar':
         e.preventDefault();

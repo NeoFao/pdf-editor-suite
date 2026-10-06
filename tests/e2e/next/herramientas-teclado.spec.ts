@@ -115,3 +115,23 @@ test('la ayuda (?) lista las teclas nuevas y documenta que la pluma no tiene equ
   await expect(tabla).toContainText('Mayús + flechas');
   await expect(page.locator('#shortcuts-pluma')).toContainText('2.1.1');
 });
+
+// Bajos del informe exploratorio: B1 (deshacer/rehacer anuncian) y B2 (foco inicial de la ayuda).
+test('deshacer y rehacer anuncian en #status qué comando afectaron', async ({ page }) => {
+  await abrir(page);
+  await page.keyboard.press('r');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#status')).toHaveText('Rectángulo dibujado.');
+  await page.keyboard.press('Control+z');
+  await expect(page.locator('#status')).toHaveText('Deshecho: Rectángulo');
+  await page.keyboard.press('Control+y');
+  await expect(page.locator('#status')).toHaveText('Rehecho: Rectángulo');
+});
+
+test('la ayuda (?) abre con el foco en el título, no en el enlace «Versión anterior»', async ({ page }) => {
+  await abrir(page);
+  await page.keyboard.press('?');
+  await expect(page.locator('#shortcuts-dialog')).toBeVisible();
+  await expect(page.locator('#shortcuts-title')).toBeFocused();
+});
