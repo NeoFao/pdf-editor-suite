@@ -2951,3 +2951,34 @@ queda en su sitio, insertar texto, nota, imagen y resaltado caen donde se hace c
 
 **Límites conocidos.** `UserUnit` (escala de página) sigue sin tratarse. El OCR sobre una página con `/Rotate` ≠ 0 sigue ignorando la
 rotación (anterior a E-084).
+
+### E-085 · En líneas justificadas (InDesign, Word 365) la agrupación partía la línea a mitad de palabra y editar una mitad alteraba la otra
+
+**Síntoma.** En un PDF de InDesign o de Word 365 la línea «…and cooperates with Client…» salía como dos líneas editables
+(«coop» y «erates with…»). Reemplazar «Client» en la primera mitad la acortaba, la segunda no se movía y «cooperates» quedaba como
+«coop erates»: una palabra que el usuario NO tocó cambiaba (AGENTS.md §2.3). Lo mismo con «disass|embly», «wor|kers»,
+«appro|ach»; Reemplazar decía «coincidencia no reemplazada porque abarca varias líneas».
+
+**Causa raíz.** `lineasEditables.ts` medía el hueco entre objetos contra el avance NATURAL de los glifos (`u + avancePt`), que
+ignora `Tw` (espaciado entre palabras), `Tc` y los desplazamientos de `TJ`: justamente lo que hace la justificación. Con `Tw` la
+caja real es más ancha que el avance natural (salto +0,68 em > `SALTO_MAX_EM`); con `TJ` apretado es más estrecha (−0,71 em <
+`SALTO_MIN_EM`). Además, `editLine` trasladaba el sufijo el Δ de avances naturales, así que aun con la línea entera un objeto con
+`Tw`/`TJ` dejaba el sufijo con un hueco (o solapado) respecto a lo reescrito.
+
+**Arreglo.** (1) `medir()` toma los extremos `uIni`/`uFin` de la CAJA del objeto (`FPDFPageObj_GetBounds`, incluye `Tw`, `Tc` y `TJ`),
+proyectada sobre el eje del texto y corregida con el margen lateral típico de un glifo (`BEARING_EM`, porque la caja es la de la
+tinta); con ángulo oblicuo o sin caja cae al avance natural. El hueco, la fusión de segmentos y el orden visual usan esos extremos.
+(2) `editarLineaCompuesta`: si el último objeto del tramo editado lleva desplazamientos (su caja acaba a más de 0,15 em del avance
+natural), Δ se mide con la caja del objeto viejo y del reescrito, de modo que el sufijo mantiene el hueco que tenía con la palabra
+vecina. Medido sobre el corpus real (29 PDF): las palabras partidas por la agrupación pasan de 71 a 0 en el corpus (antes en
+InDesign, Word y pdfTeX); las líneas de Chrome/Skia no cambian.
+
+**Cómo se detecta ahora.** Fixture `justificado-tw.pdf` (dos líneas, «cooperativa» partida en dos objetos con `Tw` de 9 pt y con `TJ`
+de +250) y `tests/unit/JustificadoTw.test.ts` (una línea, no dos; reemplazar en la primera mitad deja «cooperativa» entera y el
+mismo hueco; guardar y reabrir), `tests/e2e/next/justificado-y-espacio-tex.spec.ts` (Chromium). Regla
+`agrupacion-sin-avance-natural`: prohíbe `avancePt` en `lineasEditables.ts` salvo como respaldo de `extremosReales()`.
+
+**Límites conocidos.** En una línea justificada el tramo editado sigue pasando a espaciado natural (E-083). La caja es la de la
+tinta: el margen `BEARING_EM` (0,05 em por lado) es una estimación, no el avance exacto. Con texto oblicuo (no múltiplo de 90°) se
+usa el avance natural, con su defecto. En RTL (árabe) las líneas ahora se unen en una sola (antes salían en tres piezas
+desordenadas), pero el orden visual de las letras no se trata (F6 sigue abierto).

@@ -38,6 +38,8 @@ export const SALTO_MIN_EM = -0.5;
 export const FUSION_MAX_EM = 0.5;
 /** Fusión de segmentos no contiguos: solape máximo tolerado (em). */
 export const FUSION_MIN_EM = -0.1;
+/** Margen lateral típico (em) entre la tinta de un glifo y los bordes de su avance: corrige las cajas de PDFium (E-085). */
+export const BEARING_EM = 0.05;
 /** Modo de render de texto invisible (capa OCR): no se mezcla con texto visible. */
 const RENDER_INVISIBLE = 3;
 
@@ -82,10 +84,39 @@ interface Obj {
   ang: number;
   /** hypot(a, b). */
   escala: number;
+  /** Origen de la línea base a lo largo del texto (pt): sirve para ordenar visualmente. */
   u: number;
   v: number;
+  /** Extremos REALES del objeto a lo largo del texto (pt): salen de su caja, que incluye `Tw`, `Tc` y los ajustes de `TJ`. */
+  uIni: number;
   uFin: number;
   invisible: boolean;
+}
+
+/** Un ángulo es «recto» si dista menos de 0,5° de un múltiplo de 90°: solo entonces la caja alineada a los ejes da el extremo exacto. */
+function esAnguloRecto(theta: number): boolean {
+  const g = Math.abs(((theta * 180) / Math.PI) % 90);
+  return g < 0.5 || g > 89.5;
+}
+
+/**
+ * Extremos reales `[uIni, uFin]` del objeto a lo largo del texto, de su caja (E-085). El avance natural de los glifos
+ * ignora `Tw`, `Tc` y los desplazamientos de `TJ` (justificación de InDesign y Word): medir el hueco contra él parte las
+ * palabras. Sin caja útil, o con un ángulo oblicuo (la caja es el rectángulo envolvente), se cae al avance natural.
+ */
+function extremosReales(run: TextRun, u: number, cos: number, sin: number, theta: number): { uIni: number; uFin: number } {
+  const bx = run.boxPt;
+  if (bx.wPt > 0 && bx.hPt > 0 && esAnguloRecto(theta)) {
+    const us = [
+      bx.xPt * cos + bx.yPt * sin, (bx.xPt + bx.wPt) * cos + bx.yPt * sin,
+      bx.xPt * cos + (bx.yPt + bx.hPt) * sin, (bx.xPt + bx.wPt) * cos + (bx.yPt + bx.hPt) * sin
+    ];
+    // La caja de PDFium es la de la TINTA de los glifos, no la del avance: se compensa el margen lateral típico de un
+    // glifo (BEARING_EM por lado) para que un hueco medido con ella sea comparable al medido con avances naturales.
+    const margen = BEARING_EM * run.sizeEfectivoPt;
+    return { uIni: Math.min(...us) - margen, uFin: Math.max(...us) + margen };
+  }
+  return { uIni: u, uFin: u + run.avancePt };
 }
 
 function medir(run: TextRun): Obj {
@@ -93,6 +124,7 @@ function medir(run: TextRun): Obj {
   const theta = Math.atan2(b, a);
   const cos = Math.cos(theta), sin = Math.sin(theta);
   const u = e * cos + f * sin;
+  const { uIni, uFin } = extremosReales(run, u, cos, sin, theta);
   return {
     run,
     texto: run.textoReal,
@@ -101,7 +133,8 @@ function medir(run: TextRun): Obj {
     escala: Math.hypot(a, b),
     u,
     v: -e * sin + f * cos,
-    uFin: u + run.avancePt,
+    uIni,
+    uFin,
     invisible: run.renderMode === RENDER_INVISIBLE
   };
 }
@@ -136,7 +169,7 @@ function mismaBase(ref: Obj, emMax: number, b: Obj): boolean {
 /** Salto horizontal de `a` a `b`, en em del mayor de los dos. */
 function salto(a: Obj, b: Obj): number {
   const em = Math.max(a.em, b.em);
-  return em > 0 ? (b.u - a.uFin) / em : Infinity;
+  return em > 0 ? (b.uIni - a.uFin) / em : Infinity;
 }
 
 interface Segmento {
@@ -154,7 +187,7 @@ function extremos(s: Segmento): { ultimo: Obj; primero: Obj } {
   let ultimo = s.objs[0]!, primero = s.objs[0]!;
   for (const o of s.objs) {
     if (o.uFin > ultimo.uFin) ultimo = o;
-    if (o.u < primero.u) primero = o;
+    if (o.uIni < primero.uIni) primero = o;
   }
   return { ultimo, primero };
 }
@@ -184,7 +217,7 @@ function mismoColor(a: [number, number, number, number], b: [number, number, num
 }
 
 function construirLinea(objs: Obj[], pageIndex: number): LineaEditable {
-  const ordenados = objs.slice().sort((x, y) => x.u - y.u);
+  const ordenados = objs.slice().sort((x, y) => x.uIni - y.uIni);
   const runIds: number[] = [];
   const tramos: TramoObjeto[] = [];
   const estilos: TramoEstilo[] = [];

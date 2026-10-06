@@ -71,6 +71,12 @@ function fechaPdf(d: Date): string {
   return `D:${z(d.getFullYear(), 4)}${z(d.getMonth() + 1)}${z(d.getDate())}${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`;
 }
 
+/**
+ * Un objeto de texto lleva desplazamientos propios (`Tw`, `Tc`, `TJ`) si el final de su caja difiere del avance natural en más de
+ * esta fracción de su tamaño efectivo (em): los márgenes laterales de un glifo no pasan de ~0,1 em (E-085).
+ */
+const DESPLAZAMIENTO_MIN_EM = 0.15;
+
 export class PdfiumEngine implements PdfEngine {
   private readonly srcPtr = new Map<DocHandle, number>();
   // Entorno de formularios (AcroForm), uno por documento. `info` es el struct
@@ -861,7 +867,13 @@ export class PdfiumEngine implements PdfEngine {
     const tfU = m.malloc(4); this.p.FPDFTextObj_GetFontSize(ultimo.obj, tfU);
     const sizeU = m.getValue(tfU, 'float'); m.free(tfU);
     const textoUltimo = viejo.slice(tr[i1]!.inicio, tr[i1]!.fin);
-    const finViejoU = uDe(matU) + this.avanceNatural(fontU, sizeU, Math.hypot(matU[0], matU[1]), textoUltimo);
+    const finNatViejoU = uDe(matU) + this.avanceNatural(fontU, sizeU, Math.hypot(matU[0], matU[1]), textoUltimo);
+    // E-085: el avance natural ignora `Tw`, `Tc` y los desplazamientos de `TJ` (justificado de InDesign y Word). Si la caja
+    // del último objeto acaba lejos del avance natural, ese objeto lleva desplazamientos y el final REAL es el de la caja.
+    const emU = sizeU * Math.hypot(matU[0], matU[1]);
+    const finCajaViejoU = this.finRealU(ultimo.obj, cos, sin, theta);
+    const viejoDesplazado = finCajaViejoU !== null && Math.abs(finCajaViejoU - finNatViejoU) > DESPLAZAMIENTO_MIN_EM * emU;
+    const finViejoU = viejoDesplazado ? finCajaViejoU! : finNatViejoU;
     const nombreFuente = leerCadenaPdfium(
       m,
       (buf, len) => this.p.FPDFFont_GetBaseFontName(this.p.FPDFTextObj_GetFont(primero.obj), buf, len),
@@ -895,6 +907,9 @@ export class PdfiumEngine implements PdfEngine {
       const sizeN = m.getValue(tfN, 'float'); m.free(tfN);
       const matN = this.matrizDe(objEscrito);
       finNuevoU = uDe(matN) + this.avanceNatural(fontN, sizeN, Math.hypot(matN[0], matN[1]), medioNuevo);
+      // Con un final viejo medido por la caja, el nuevo se mide igual: así el hueco con el sufijo se conserva aunque el
+      // objeto reescrito conserve `Tw` o `Tc` (que el avance natural no incluye).
+      if (viejoDesplazado) finNuevoU = this.finRealU(objEscrito, cos, sin, theta) ?? finNuevoU;
     }
     const delta = finNuevoU - finViejoU;
 
@@ -921,6 +936,19 @@ export class PdfiumEngine implements PdfEngine {
     for (let i = 0; i < total; i++) if (this.p.FPDFPage_GetObject(page, i) === eraPrimero) { lineaRunIdInicial = i; break; }
     this.p.FPDFPage_GenerateContent(page);
     return { ok: true, lineaRunIdInicial, dxPt: delta, ...(fuenteEstandar ? { fuenteEstandar } : {}) };
+  }
+
+  /**
+   * Final REAL del objeto a lo largo del texto (coordenada `u` de la dirección `theta`, pt de usuario), de su caja
+   * (`FPDFPageObj_GetBounds`: incluye `Tw`, `Tc` y los ajustes de `TJ`). `null` si la caja no sirve o si la dirección no
+   * es múltiplo de 90° (la caja es entonces el rectángulo envolvente y no da el extremo exacto).
+   */
+  private finRealU(obj: number, cos: number, sin: number, theta: number): number | null {
+    const g = Math.abs(((theta * 180) / Math.PI) % 90);
+    if (g >= 0.5 && g <= 89.5) return null;
+    const c = this.cajaUnida([obj]);
+    if (!Number.isFinite(c.l) || !(c.r > c.l) || !(c.t > c.b)) return null;
+    return Math.max(c.l * cos + c.b * sin, c.r * cos + c.b * sin, c.l * cos + c.t * sin, c.r * cos + c.t * sin);
   }
 
   /** Caja unida (pt de usuario) de varios objetos de página: `FPDFPageObj_GetBounds`. */

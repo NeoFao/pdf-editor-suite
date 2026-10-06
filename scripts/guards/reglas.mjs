@@ -713,6 +713,36 @@ export const conBusquedaPorLineaEditable = {
   }
 };
 
+/* ── E-085 · la agrupación de líneas mide el hueco con la posición REAL, no con el avance natural ── */
+/**
+ * En `src/texto/lineasEditables.ts` el avance natural (`avancePt`: anchos de glifo, sin `Tw`, `Tc` ni `TJ`) solo puede aparecer
+ * como respaldo de `extremosReales()` (sin caja útil). Medir el hueco entre objetos contra él parte las palabras justificadas.
+ */
+export function analizarAvanceNaturalEnAgrupacion(rel, contenido) {
+  if (rel !== 'src/texto/lineasEditables.ts') return [];
+  const exentas = lineasExentas(contenido, 'agrupacion-sin-avance-natural');
+  const hallazgos = [];
+  contenido.split('\n').forEach((linea, i) => {
+    if (esComentario(linea) || exentas.has(i + 1)) return;
+    if (!/\bavancePt\b/.test(linea)) return;
+    if (/return \{ uIni: u, uFin: u \+ run\.avancePt \}/.test(linea)) return; // el respaldo de extremosReales()
+    hallazgos.push(hallazgo(rel, i + 1, 'avancePt (avance natural) usado para agrupar: ignora Tw, Tc y TJ'));
+  });
+  return hallazgos;
+}
+
+export const conAgrupacionSinAvanceNatural = {
+  id: 'agrupacion-sin-avance-natural',
+  titulo: 'lineasEditables mide el hueco entre objetos con la caja real, no con el avance natural',
+  comoArreglar:
+    'Usa Obj.uIni/uFin (de extremosReales(), que sale de la caja del objeto). El avance natural de los glifos ignora Tw, Tc y los ' +
+    'desplazamientos de TJ (la justificación de InDesign y Word): partía «coop|erates» en dos líneas y editar una mitad dejaba ' +
+    'un hueco en la otra, alterando texto que el usuario no tocó (E-085).',
+  ejecutar() {
+    return recorrerFuentesTs((rel, contenido) => analizarAvanceNaturalEnAgrupacion(rel, contenido));
+  }
+};
+
 /* ── E-032 · toda navegación de página pasa por App.goToPage() ─────────── */
 export const conNavegacionPorGoToPage = {
   id: 'navegacion-por-gotopage',
@@ -1444,6 +1474,7 @@ export const TODAS = [
   sinGlyphPathComoCobertura,
   sinSetIsActiveComoBorrado,
   conBusquedaPorLineaEditable,
+  conAgrupacionSinAvanceNatural,
   conNavegacionPorGoToPage,
   conWebServerNextSinReusar,
   conGestoConCancelacion,

@@ -1233,6 +1233,40 @@ async function pdfCidSubconjunto() {
 }
 
 /**
+ * `justificado-tw.pdf` (E-085): líneas justificadas como las de InDesign y Word. Cada línea son DOS objetos de texto que
+ * parten la palabra «cooperativa» («coop» | «erativa»). El segundo empieza donde acaba DE VERDAD el primero, pero el
+ * avance NATURAL de los glifos no lo sabe:
+ *   1. `Tw` de 9 pt con 4 espacios: el real es 36 pt (3 em) mayor que el natural.
+ *   2. `TJ` con tres ajustes de +250 (apretar): el real es 9 pt (0,75 em) MENOR que el natural.
+ * Helvetica estándar, 12 pt, a 72 pt del borde izquierdo.
+ */
+export const TEXTO_JUSTIFICADO = [
+  { a: 'Los clientes de la coop', b: 'erativa trabajan bien', y: 700 },
+  { a: 'Nuestros clientes acuerdan que la coop', b: 'erativa decide hoy', y: 640 }
+];
+async function pdfJustificadoTw() {
+  const doc = await PDFDocument.create();
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  const ancho = (t) => helv.widthOfTextAtSize(t, 12);
+  const page = doc.addPage([420, 780]);
+  page.node.setFontDictionary(PDFName.of('F1'), helv.ref);
+  const num = (v) => v.toFixed(4).replace(/\.?0+$/, '');
+  const L1 = TEXTO_JUSTIFICADO[0];
+  const x1 = 72 + ancho(L1.a) + 4 * 9; // 4 espacios con Tw = 9
+  const L2 = TEXTO_JUSTIFICADO[1];
+  const tramos = ['Nuestros', ' clientes', ' acuerdan que la', ' coop'];
+  const x2 = 72 + ancho(L2.a) - 3 * 0.25 * 12; // tres ajustes de +250 milésimas de em
+  const cuerpo = [
+    `BT /F1 12 Tf 9 Tw 72 ${L1.y} Td (${L1.a}) Tj ET`,
+    `BT /F1 12 Tf 9 Tw 1 0 0 1 ${num(x1)} ${L1.y} Tm (${L1.b}) Tj ET`,
+    `BT /F1 12 Tf 0 Tw 72 ${L2.y} Td [(${tramos[0]}) 250 (${tramos[1]}) 250 (${tramos[2]}) 250 (${tramos[3]})] TJ ET`,
+    `BT /F1 12 Tf 0 Tw 1 0 0 1 ${num(x2)} ${L2.y} Tm (${L2.b}) Tj ET`
+  ].join('\n');
+  page.node.set(PDFName.of('Contents'), doc.context.register(doc.context.stream(cuerpo)));
+  return doc.save({ useObjectStreams: false });
+}
+
+/**
  * E-084: tres páginas cuya caja VISIBLE no tiene origen (0,0), como las plantillas de Acrobat Distiller.
  *   1: MediaBox [0 0 595.28 841.89] y CropBox [36 36 436 336] (400x300 visibles, origen (36,36)).
  *   2: MediaBox [-50 -80 350 220] (origen negativo, 400x300), sin CropBox.
@@ -1272,6 +1306,7 @@ async function main() {
     'subconjunto.pdf': await pdfSubconjunto(),
     'por-glifo.pdf': await pdfPorGlifo(),
     'cid-subconjunto.pdf': await pdfCidSubconjunto(),
+    'justificado-tw.pdf': await pdfJustificadoTw(),
     'marcadores.pdf': await pdfMarcadores(),
     'outline-ciclo.pdf': await pdfOutlineCiclo(),
     'marcadores-uri.pdf': await pdfMarcadoresConAccion({ S: 'URI', URI: PDFString.of('https://example.com/') }),

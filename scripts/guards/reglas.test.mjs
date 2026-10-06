@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen, analizarAvanceNaturalEnAgrupacion } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -835,6 +835,33 @@ describe('busqueda-por-linea-editable', () => {
 
   test('un escape con razón la silencia', () => {
     assert.deepEqual(analizarBusquedaPorLinea('src/x.ts', '// guard-disable-next-line busqueda-por-linea-editable: texto plano de una sola línea\nbuscarEnRuns(x, q, o);'), []);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('agrupacion-sin-avance-natural', () => {
+  const regla = detectarEn('agrupacion-sin-avance-natural');
+  const REL = 'src/texto/lineasEditables.ts';
+
+  test('detecta el avance natural usado para medir el hueco (E-085)', () => {
+    assert.equal(analizarAvanceNaturalEnAgrupacion(REL, '    uFin: u + run.avancePt,').length, 1);
+  });
+
+  test('acepta el respaldo de extremosReales() y las cajas reales', () => {
+    assert.deepEqual(analizarAvanceNaturalEnAgrupacion(REL, '  return { uIni: u, uFin: u + run.avancePt };'), []);
+    assert.deepEqual(analizarAvanceNaturalEnAgrupacion(REL, '  return (b.uIni - a.uFin) / em;'), []);
+  });
+
+  test('solo mira lineasEditables.ts y no los comentarios', () => {
+    assert.deepEqual(analizarAvanceNaturalEnAgrupacion('src/x.ts', 'uFin: u + run.avancePt'), []);
+    assert.deepEqual(analizarAvanceNaturalEnAgrupacion(REL, '// el avancePt ignora Tw'), []);
+  });
+
+  test('un escape con razón la silencia', () => {
+    assert.deepEqual(analizarAvanceNaturalEnAgrupacion(REL, '// guard-disable-next-line agrupacion-sin-avance-natural: respaldo de prueba\nuFin: u + run.avancePt'), []);
   });
 
   test('sobre el repo real no encuentra nada', () => {
