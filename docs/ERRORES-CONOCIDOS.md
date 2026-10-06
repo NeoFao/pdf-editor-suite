@@ -2578,3 +2578,26 @@ el pin; uno que lo deja en otro sitio sí (usuario real). Decisión por posició
 **Cómo se detecta ahora.** `tests/e2e/next/pagina-actual-mover.spec.ts`, bloque «E-068», corre «Duplicar»,
 «Subir» y «Bajar» con la CPU ralentizada x6 por CDP (siempre, sin variable de entorno); sin el arreglo falla.
 Sin regla guard: no hay patrón estático fiable (un `setTimeout` es legítimo en general).
+
+---
+
+### E-069 · El panel «Más» del móvil (390 px) amontonaba ~45 controles solapados y «Comprimir» salía cortado
+
+**Síntoma.** Con `#btn-more` abierto en 390×844 los botones de las cinco barras contextuales se pisaban
+(«Borrador» sobre «Encabezado y marca», «Bajar»/«Insertar PDF»/«Extraer»/«Firmar» apilados, el campo de la firma
+sobre el rango de Dividir) y el último, «Comprimir», quedaba cortado por el borde del panel.
+
+**Causa raíz.** El panel móvil reutilizaba las `.context-bar` de escritorio. `.context-bar .icon-btn` lleva
+`height: 100%` (para llenar una barra de una sola fila); en la hoja apilada, con `flex-wrap`, ese porcentaje se
+resolvía contra la barra entera y los botones de filas distintas medían lo mismo que el grupo, así que se
+pisaban. Además no había encabezado por grupo ni alto mínimo táctil para los campos de texto.
+
+**Arreglo.** Cada barra lleva un `.context-titulo` (solo visible en el panel móvil), los botones usan
+`height: auto; min-height: 44px` y etiqueta que puede partirse (`overflow-wrap: anywhere`, sin anchos fijos en px,
+lección de E-051), los campos `min-height: 40px`, y el panel es una hoja con `max-height: min(70vh, 100dvh - 120px)`,
+`overflow-y: auto` y `overflow-x: hidden`.
+
+**Cómo se detecta ahora.** `tests/e2e/next/movil-mas.spec.ts` (390×844, fuente ancha forzada): encabezados en
+orden, cajas dos a dos sin solape, `scrollWidth <= clientWidth` en cada control, altos >= 40 px, sin scroll
+horizontal, scroll vertical propio, todos los botones alcanzables con scroll y «Comprimir» abre su diálogo. Falla
+sin el arreglo (solapaba `btn-rect` con `btn-encabezado`). Sin regla guard: es maquetación, no un patrón de código.

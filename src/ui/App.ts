@@ -626,6 +626,12 @@ export class App {
       bar.dataset.tab = id;
       bar.setAttribute('role', 'tabpanel');
       bar.setAttribute('aria-labelledby', `tab-${id}`);
+      // Encabezado de grupo: solo se ve en el panel «Más» móvil (E-069); en escritorio
+      // lo oculta CSS porque ya está la pestaña. Texto fijo propio, no del documento.
+      const titulo = document.createElement('div');
+      titulo.className = 'context-titulo';
+      titulo.textContent = PESTANAS.find((p) => p.id === id)?.etiqueta ?? id;
+      bar.append(titulo);
       bar.append(...hijos.filter((h): h is HTMLElement => !!h));
       this.contextBars[id] = bar;
       return bar;
