@@ -3,6 +3,8 @@ import { PdfiumEngine } from '../engine/pdfium/PdfiumEngine';
 import { EditSession } from '../model/EditSession';
 import { CommandBus } from '../commands/Command';
 import { EditTextRunCmd } from '../commands/EditTextRun';
+import { EditarLineaCmd } from '../commands/EditarLinea';
+import { lineaDeRun } from '../texto/lineasEditables';
 import { ReplaceRunFontCmd } from '../commands/ReplaceRunFont';
 import { ReemplazarTextoCmd, type CambioTexto } from '../commands/ReemplazarTexto';
 import { buscarEnRuns, aplicarReemplazos, type Coincidencia, type OpcionesBusqueda } from '../texto/buscarReemplazar';
@@ -1216,7 +1218,7 @@ export class App {
         void this.bus?.execute(new SetObjectRectCmd(pageIndex, objIndex, newRectPt, oldRectPt));
         this.setStatus('Imagen movida/redimensionada.');
       },
-      onMove: (pageIndex, runId, dxPt, dyPt) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt)); },
+      onMove: (pageIndex, runId, dxPt, dyPt, runIds) => { void this.bus?.execute(new MoveRunCmd(pageIndex, runId, dxPt, dyPt, runIds)); },
       onPageChange: (i) => { this.currentPage = i; this.updateIndicator(); this.setActiveThumb(i); },
       onStroke: (pageIndex, points) => { void this.bus?.execute(new DrawStrokeCmd(pageIndex, points, this.toolColors.pen)); this.setStatus('Trazo dibujado.'); },
       onDrawRect: (pageIndex, rect) => { void this.bus?.execute(new DrawRectCmd(pageIndex, rect, this.toolColors.rect)); this.setStatus('Rectángulo dibujado.'); },
@@ -1337,6 +1339,8 @@ export class App {
   private async handleEdit(req: EditRequest): Promise<void> {
     const s = this.session;
     if (!s || !this.bus) return;
+    // N1: una línea de VARIOS objetos (Chrome: uno por glifo) se edita con el diff mínimo y deshacer por snapshot.
+    if (req.linea.runIds.length > 1) { await this.editarLineaCompuesta(req); return; }
     const res = s.engine.editTextRun(s.doc, req.pageIndex, req.runId, req.newText);
     if (res.ok) {
       s.model.updateRunText(req.pageIndex, req.runId, req.newText);
@@ -1365,6 +1369,33 @@ export class App {
       : res.reason === 'empty-text'
         ? 'Una línea no puede quedar vacía; selecciónala y usa Borrar para quitarla.'
         : 'No se puede editar ese elemento.');
+  }
+
+  /** Edita una línea compuesta (N1) con `EditarLineaCmd`; si la fuente no tiene un glifo, solo el tramo cambiado va en la estándar. */
+  private async editarLineaCompuesta(req: EditRequest): Promise<void> {
+    const s = this.session;
+    if (!s || !this.bus) return;
+    const cmd = new EditarLineaCmd(req.pageIndex, req.linea, req.newText);
+    // `execute` directo (no `bus.execute`): un intento fallido no debe quedar en la pila de deshacer.
+    await cmd.execute(s);
+    if (cmd.ok && cmd.sinCambios) return;
+    if (cmd.ok) {
+      this.bus.pushExecuted(cmd);
+      this.selection = { pageIndex: req.pageIndex, runId: cmd.lineaRunIdInicial };
+      this.reflectPropsPanel();
+      this.setStatus(cmd.fontName
+        ? `La fuente original no tiene algún carácter; el tramo editado usa ${cmd.fontName}.`
+        : 'Editado.');
+      return;
+    }
+    req.el.textContent = req.oldText;
+    this.setStatus(cmd.razon === 'glyph-missing'
+      ? 'La fuente de esa línea no tiene alguno de esos caracteres; edición no aplicada.'
+      : cmd.razon === 'empty-text'
+        ? 'Una línea no puede quedar vacía; selecciónala y usa Borrar para quitarla.'
+        : cmd.razon === 'stale'
+          ? 'La línea cambió mientras se editaba; vuelve a intentarlo.'
+          : 'No se puede editar ese elemento.');
   }
 
   private async handleInsert(pageIndex: number, at: PtPoint): Promise<void> {
@@ -1458,7 +1489,10 @@ export class App {
     const { pageIndex, runId } = this.selection;
     this.selection = null;
     this.reflectPropsPanel();
-    await this.bus.execute(new DeleteRunCmd(pageIndex, runId));
+    // Una línea compuesta (N1) se borra entera: todos sus objetos, en un solo paso de deshacer.
+    const runs = this.session?.model.pages[pageIndex]?.runs;
+    const runIds = runs ? lineaDeRun(runs, pageIndex, runId)?.runIds : undefined;
+    await this.bus.execute(new DeleteRunCmd(pageIndex, runId, runIds));
     this.setStatus('Línea borrada del documento.');
   }
 
@@ -1694,6 +1728,13 @@ export class App {
     return page?.runs.find((r) => r.runId === this.selection!.runId) ?? null;
   }
 
+  /** La línea editable de la selección (N1): una línea de Chrome son muchos objetos; `null` si no hay selección. */
+  private selectedLinea() {
+    if (!this.session || !this.selection) return null;
+    const page = this.session.model.pages[this.selection.pageIndex];
+    return page ? lineaDeRun(page.runs, page.index, this.selection.runId) : null;
+  }
+
   /**
    * Refleja en el panel (§3 del encargo) la fuente, tamaño y color REALES de
    * la línea seleccionada, releídos del modelo — nunca de lo que había antes
@@ -1727,6 +1768,20 @@ export class App {
 
     this.propSize.value = String(Math.round(run.sizeEfectivoPt * 2) / 2); // E-080: el efectivo, el que ve el usuario
     this.colorInput.value = rgbToHex(run.color[0], run.color[1], run.color[2]);
+    // Una línea compuesta (varios objetos, N1) no tiene UNA fuente, tamaño o color: hasta que el panel sepa aplicarlos
+    // a todos sus tramos (F4) se desactivan en vez de cambiar solo el primer objeto y dejar la línea desigual.
+    const compuesta = (this.selectedLinea()?.runIds.length ?? 1) > 1;
+    const aviso = 'Esta línea tiene varios tramos de texto; el panel de propiedades aún no los cambia a la vez.';
+    for (const c of [this.propFont, this.propSize, this.colorInput]) {
+      c.disabled = compuesta;
+      if (compuesta) {
+        if (c.dataset.aviso === undefined) c.dataset.aviso = c.title;
+        c.title = aviso;
+      } else if (c.dataset.aviso !== undefined) {
+        c.title = c.dataset.aviso;
+        delete c.dataset.aviso;
+      }
+    }
   }
 
   /** `#prop-font` change: aplica la fuente estándar elegida al run seleccionado. */
@@ -1899,7 +1954,9 @@ export class App {
     const page = this.session.model.pages[this.selection.pageIndex]!;
     // Escala 1: px CSS == pt visuales; las cajas del run están en pt de usuario.
     const geo = PageGeometry.desdeTamanoVisual(page.sizePt.widthPt, page.sizePt.heightPt, 1, page.rotation);
-    const quads = quadsPorLinea([{ boxPt: run.boxPt, sizePt: run.sizeEfectivoPt }], geo);
+    // La línea editable entera (N1): en un PDF por glifo el objeto suelto es un solo carácter.
+    const caja = this.selectedLinea()?.boxPt ?? run.boxPt;
+    const quads = quadsPorLinea([{ boxPt: caja, sizePt: run.sizeEfectivoPt }], geo);
     // Autor: no hay nombre de usuario configurable todavía; /T queda vacío.
     void this.bus.execute(new AddMarkupCmd(this.selection.pageIndex, tipo, quads, color));
     this.setStatus(hecho);

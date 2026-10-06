@@ -57,6 +57,25 @@ export interface TextRun {
  */
 export type EditResult = { ok: true } | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' | 'empty-text' };
 
+/** Lo que `editLine` necesita de una línea editable (`LineaEditable` lo cumple): objetos en orden visual y su mapa de texto. */
+export interface LineaParaEditar {
+  runIds: readonly number[];
+  tramos: readonly { runId: number; inicio: number; fin: number }[];
+  text: string;
+}
+
+/**
+ * Resultado de `editLine` (N1). `sinCambios`: el texto nuevo es igual al de la línea y no se escribió nada.
+ * `lineaRunIdInicial`: índice del primer objeto de la línea tras la edición (para reapuntar la selección).
+ * `dxPt`: Δ, cuánto se trasladó el sufijo a lo largo del eje del texto (pt de página, con signo).
+ * `fuenteEstandar`: nombre de la fuente estándar usada para el tramo cuando se pidió esa sustitución (E-047).
+ * `stale`: los objetos ya no tienen el texto de la línea (el modelo está desactualizado).
+ */
+export type EditLineResult =
+  | { ok: true; sinCambios: true }
+  | { ok: true; lineaRunIdInicial: number; dxPt: number; fuenteEstandar?: string }
+  | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' | 'empty-text' | 'stale' };
+
 /**
  * Resultado de `replaceRunWithStandardFont`. `fontName` es la fuente estándar
  * PDF realmente usada (de las 14) y `runId` el índice del objeto NUEVO — el
@@ -292,6 +311,16 @@ export interface PdfEngine {
    */
   editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult;
   /**
+   * Edita una LÍNEA EDITABLE (varios objetos de texto, típico de Chrome: un objeto por glifo) con el diff mínimo
+   * (N1, `.orquestacion/N1-diseno.md` §3.2): el prefijo común no se toca, el tramo cambiado se escribe EN SITIO sobre
+   * su primer objeto (conserva fuente, tamaño, color, matriz y recorte), los objetos sobrantes del tramo se eliminan
+   * (nunca `SetText("")`, E-081) y el sufijo se traslada Δ. Todo en UNA carga de página (E-037). Si el texto escrito no
+   * se relee igual (glifo ausente, E-079) no se genera contenido y devuelve `glyph-missing`; con
+   * `opciones.fuenteEstandar` el TRAMO cambiado se escribe en la fuente estándar más parecida (E-047). Una línea de un
+   * solo objeto delega en `editTextRun`/`replaceRunWithStandardFont` (comportamiento idéntico al de siempre).
+   */
+  editLine(doc: DocHandle, pageIndex: number, linea: LineaParaEditar, textoNuevo: string, opciones?: { fuenteEstandar?: boolean }): EditLineResult;
+  /**
    * Sustituye un run cuyo `editTextRun` devolvió `glyph-missing` por un
    * objeto de texto NUEVO en la fuente estándar PDF más parecida (de las 14
    * que todo motor crea sin incrustar nada — ver `standardFontFor`). Conserva
@@ -511,6 +540,10 @@ export interface PdfEngine {
   getPathSegments(doc: DocHandle, pageIndex: number, objIndex: number): { ax: number; ay: number; bx: number; by: number }[];
   /** Desplaza un run por (dxPt, dyPt) en puntos PDF. Reversible con el delta inverso. */
   moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean;
+  /** Desplaza VARIOS runs de una página por el mismo (dxPt, dyPt) en una sola carga de página (una línea compuesta). */
+  moveRuns(doc: DocHandle, pageIndex: number, runIds: readonly number[], dxPt: number, dyPt: number): boolean;
+  /** Elimina VARIOS runs de una página en una sola carga (la redacción de una línea compuesta). Devuelve cuántos eliminó. */
+  deleteRuns(doc: DocHandle, pageIndex: number, runIds: readonly number[]): number;
   /** Cambia el color de relleno de un run (RGB 0-255). */
   setRunColor(doc: DocHandle, pageIndex: number, runId: number, color: [number, number, number]): boolean;
   /** Rota la página por `deltaDeg` (múltiplo de 90). Devuelve la nueva rotación en grados. */

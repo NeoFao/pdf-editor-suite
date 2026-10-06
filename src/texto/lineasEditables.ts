@@ -268,3 +268,8 @@ export function agruparLineasEditables(runs: TextRun[], pageIndex = 0): LineaEdi
   // Paso 3: orden visual y mapa.
   return segs.map((s) => construirLinea(s.objs, pageIndex));
 }
+
+/** La línea editable que contiene el objeto `runId` (cualquiera de sus objetos), o `null` si ese objeto no tiene texto real. */
+export function lineaDeRun(runs: TextRun[], pageIndex: number, runId: number): LineaEditable | null {
+  return agruparLineasEditables(runs, pageIndex).find((l) => l.runIds.includes(runId)) ?? null;
+}

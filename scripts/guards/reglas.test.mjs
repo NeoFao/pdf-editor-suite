@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -794,6 +794,22 @@ describe('no-glyphpath-como-cobertura', () => {
 
   test('no señala los comentarios que lo mencionan', () => {
     assert.deepEqual(analizarGlyphPath('src/x.ts', '   * `FPDFFont_GetGlyphPath` da falsos positivos\n// FPDFFont_GetGlyphPath(f, c, s)'), []);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('no-setisactive-como-borrado', () => {
+  const regla = detectarEn('no-setisactive-como-borrado');
+
+  test('detecta el borrado «reversible» con objetos inactivos (E-082)', () => {
+    assert.equal(analizarSetIsActive('src/engine/pdfium/PdfiumEngine.ts', '      this.p.FPDFPageObj_SetIsActive(obj, false);').length, 1);
+  });
+
+  test('no señala los comentarios que lo mencionan', () => {
+    assert.deepEqual(analizarSetIsActive('src/x.ts', '   * `FPDFPageObj_SetIsActive(false)` no sirve\n// FPDFPageObj_SetIsActive(o, 0)'), []);
   });
 
   test('sobre el repo real no encuentra nada', () => {

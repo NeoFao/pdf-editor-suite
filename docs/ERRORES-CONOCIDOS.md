@@ -2854,3 +2854,34 @@ lanza antes de crear el objeto. Quitar una línea es eliminar el objeto (`delete
 **Cómo se detecta ahora.** `tests/unit/PdfiumEngine.settextvacio.test.ts` (tras `editTextRun('')` el motor sigue vivo y editando;
 `insertText('')` lanza; `deleteRun` sí borra). Regla `settext-solo-via-escribirtexto`: `FPDFText_SetText` solo puede aparecer dentro
 de `escribirTexto` (comentarios aparte), con su test en `reglas.test.mjs`.
+
+---
+
+### E-082 · Los PDFs «por glifo» (Chrome, Skia) no se podían editar sin romper el documento (N1)
+
+**Síntoma.** En un PDF generado por Chrome, la capa de texto ofrecía un cuadro de edición por GLIFO (781 en una página): un clic
+editaba una letra, y reescribirla desplazaba o rompía el resto de la línea. Un arreglo ingenuo (reescribir la línea como un objeto
+nuevo) perdía negrita, color y recorte, repintaba la línea entera con otro espaciado y dejaba caracteres como `.notdef`.
+
+**Causa raíz.** Chrome escribe un `Tj` por glifo y PDFium crea un objeto de texto por `Tj`; el editor equiparaba «objeto de texto»
+con «línea que ve el usuario». Además, deshacer con `FPDFPageObj_SetIsActive(false)` no sirve como borrado reversible: los objetos
+inactivos no se escriben en `GenerateContent` y la siguiente `FPDF_LoadPage` ya no los tiene.
+
+**Arreglo.** Modelo de «línea editable» (`src/texto/lineasEditables.ts`, F1) y edición por diff mínimo (`engine.editLine`, F2): el
+prefijo común no se toca, el tramo cambiado se escribe en sitio sobre su primer objeto (verificado al releer, E-079), los objetos
+sobrantes se eliminan (nunca `SetText("")`, E-081) y el sufijo se traslada Δ = diferencia de avance, en pt del espacio de usuario
+con la matriz aplicada, sobre el eje del texto; todo en una sola carga de página (E-037). Si falta un glifo, solo el tramo cambiado
+pasa a la fuente estándar (E-047). `EditarLineaCmd` deshace por snapshot. La `TextLayer` pinta UNA `.run` por línea con la caja de la
+línea entera, el tamaño efectivo (E-080) y la línea base del primer objeto (E-030); mover y borrar actúan sobre todos sus objetos.
+Una línea de un solo objeto sigue exactamente por `editTextRun`. Relacionado: el espacio final o doble que teclea el usuario ya no
+se confunde con un glifo ausente (PDFium lo recorta al releer).
+
+**Cómo se detecta ahora.** `tests/unit/PdfiumEngine.editLine.test.ts` (0 px distintos fuera de la franja de la línea y en el
+prefijo, sufijo trasladado Δ, columna adyacente intacta, multiestilo, borrado e inserción, girada, glifo ausente, una sola carga de
+página), `tests/unit/EditarLinea.test.ts` (deshacer devuelve los bytes renderizados idénticos) y `tests/e2e/next/editar-linea-n1.spec.ts`
+(Chromium real sobre `por-glifo.pdf`). Regla `no-setisactive-como-borrado`.
+
+**Límites conocidos.** El editor muestra la línea con la tipografía de su primer objeto (los tramos de estilo son F4); en una línea
+justificada solo el tramo editado pasa a espaciado natural; el panel de fuente/tamaño/color se desactiva en líneas compuestas;
+Reemplazar sigue operando por objeto; en texto girado PDFium puede generar un hueco falso al releer; no se trasladan las
+anotaciones propias que cubren el sufijo.

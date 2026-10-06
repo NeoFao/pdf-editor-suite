@@ -4,7 +4,7 @@ import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
 import { validarUrlEnlace } from '../validarUrlEnlace';
 import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
 import type { QuadPt } from '../../coords/quads';
-import type { PdfEngine, CharBox, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
+import type { PdfEngine, CharBox, DocHandle, SizePt, TextRun, EditResult, EditLineResult, LineaParaEditar, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_PAGEOBJ_PATH = 2;
@@ -435,7 +435,11 @@ export class PdfiumEngine implements PdfEngine {
         (buf, len) => this.p.FPDFTextObj_GetText(obj, textPage, buf, len),
         (ptr) => this.mem.readU16(ptr)
       );
-      return leido === esperado || this.textoRealDeObjeto(textPage, obj) === esperado;
+      // PDFium recorta el espacio final y puede colapsar los dobles al releer: eso no es un glifo ausente, así que los
+      // blancos no cuentan en la comparación (un glifo que falta sí deja un hueco en las letras).
+      const sinBlancos = (t: string): string => t.replace(/\s+/g, ' ').trim();
+      const esp = sinBlancos(esperado);
+      return sinBlancos(leido) === esp || sinBlancos(this.textoRealDeObjeto(textPage, obj)) === esp;
     } finally {
       this.p.FPDFText_ClosePage(textPage);
     }
@@ -467,6 +471,31 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDF_ClosePage(page);
     }
     return out;
+  }
+
+  /**
+   * Avance natural de `texto` con la fuente `font` (handle prestado) a `Tf = sizePt`, a lo largo de la línea base y en pt de
+   * página: suma de anchos de glifo × la escala de la matriz del objeto (`hypot(a, b)`, 0 = 1). No incluye `Tc`/`Tw` ni kerning.
+   */
+  private avanceNatural(font: number, sizePt: number, escala: number, texto: string): number {
+    const m = this.mem;
+    let avance = 0;
+    const w = m.malloc(4);
+    for (const ch of texto) {
+      m.setValue(w, 0, 'float');
+      if (this.p.FPDFFont_GetGlyphWidth(font, ch.codePointAt(0)!, sizePt, w)) avance += m.getValue(w, 'float');
+    }
+    m.free(w);
+    return avance * (escala > 0 ? escala : 1);
+  }
+
+  /** Matriz del objeto (a, b, c, d, e, f) en pt de página. */
+  private matrizDe(obj: number): [number, number, number, number, number, number] {
+    const mat = this.mem.malloc(24);
+    this.p.FPDFPageObj_GetMatrix(obj, mat);
+    const v = [0, 4, 8, 12, 16, 20].map((off) => this.mem.getValue(mat + off, 'float')) as [number, number, number, number, number, number];
+    this.mem.free(mat);
+    return v;
   }
 
   /** Lee las propiedades de un objeto de texto (obj) usando la text page para el string. */
@@ -514,14 +543,7 @@ export class PdfiumEngine implements PdfEngine {
     const sizeEfectivoPt = escala > 0 ? sizePt * escala : sizePt;
     const textoReal = real?.texto ?? text;
     // Avance natural del texto real a lo largo de la línea base (pt de página): anchos de glifo al `Tf` × escala.
-    let avancePt = 0;
-    const w = m.malloc(4);
-    for (const ch of textoReal) {
-      m.setValue(w, 0, 'float');
-      if (this.p.FPDFFont_GetGlyphWidth(font, ch.codePointAt(0)!, sizePt, w)) avancePt += m.getValue(w, 'float');
-    }
-    m.free(w);
-    avancePt *= escala > 0 ? escala : 1;
+    const avancePt = this.avanceNatural(font, sizePt, escala, textoReal);
     return {
       runId, text, sizePt, sizeEfectivoPt, matriz, textoReal, espacioVirtualAntes: real?.espacioAntes ?? false, avancePt,
       renderMode: this.p.FPDFTextObj_GetTextRenderMode(obj), fuenteSubconjunto: /^[A-Z]{6}\+/.test(fontName),
@@ -706,6 +728,168 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
+  editLine(doc: DocHandle, pageIndex: number, linea: LineaParaEditar, textoNuevo: string, opciones: { fuenteEstandar?: boolean } = {}): EditLineResult {
+    // E-081: nunca se escribe la cadena vacía; quitar la línea entera es eliminar sus objetos (`deleteRuns`).
+    if (textoNuevo === '') return { ok: false, reason: 'empty-text' };
+    if (textoNuevo === linea.text) return { ok: true, sinCambios: true };
+    if (linea.runIds.length === 0) return { ok: false, reason: 'not-a-text-run' };
+    // Línea de un solo objeto (nativo.pdf, Word…): exactamente el camino de siempre.
+    if (linea.runIds.length === 1) {
+      const runId = linea.runIds[0]!;
+      if (opciones.fuenteEstandar) {
+        const r = this.replaceRunWithStandardFont(doc, pageIndex, runId, textoNuevo);
+        return r.ok
+          ? { ok: true, lineaRunIdInicial: r.runId, dxPt: 0, fuenteEstandar: r.fontName }
+          : { ok: false, reason: r.reason === 'invalid-font' ? 'not-a-text-run' : r.reason };
+      }
+      const r = this.editTextRun(doc, pageIndex, runId, textoNuevo);
+      return r.ok ? { ok: true, lineaRunIdInicial: runId, dxPt: 0 } : r;
+    }
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      return this.editarLineaCompuesta(doc, page, linea, textoNuevo, opciones.fuenteEstandar === true);
+    } finally {
+      // Sin `GenerateContent` (error o verificación fallida) el cambio en memoria se descarta al cerrar la página.
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /**
+   * Núcleo de `editLine` para una línea de varios objetos: el diff mínimo del diseño N1 (§3.2), todo sobre la MISMA página
+   * cargada y con UN solo `FPDFPage_GenerateContent` al final (E-037).
+   *
+   * Unidades: los índices `P`, `E`, `A0`, `A1` son UTF-16 sobre `linea.text`. `u` es la coordenada a lo largo del texto, en
+   * pt del espacio de usuario de la página SIN girar con la matriz del objeto ya aplicada (θ = atan2(b, a)); Δ también es
+   * pt sobre ese eje, y la traslación del sufijo es (Δ·cosθ, Δ·sinθ) pt en el mismo espacio (la que usa `moveRun`).
+   */
+  private editarLineaCompuesta(doc: DocHandle, page: number, linea: LineaParaEditar, nuevo: string, estandar: boolean): EditLineResult {
+    const m = this.mem;
+    const viejo = linea.text;
+    const tr = linea.tramos;
+    if (tr.length === 0) return { ok: false, reason: 'stale' };
+
+    // Objetos de la línea y comprobación de que el texto de cada uno sigue siendo el que dice la línea (si no, `stale`).
+    const n = this.p.FPDFPage_CountObjects(page);
+    const indiceDe = new Map<number, number>();
+    for (let i = 0; i < n; i++) indiceDe.set(this.p.FPDFPage_GetObject(page, i), i);
+    const objDe = (runId: number): number => this.p.FPDFPage_GetObject(page, runId);
+    for (const t of tr) {
+      const o = objDe(t.runId);
+      if (!o || this.p.FPDFPageObj_GetType(o) !== FPDF_PAGEOBJ_TEXT) return { ok: false, reason: 'not-a-text-run' };
+    }
+    const textPage = this.p.FPDFText_LoadPage(page);
+    try {
+      const reales = this.textoRealPorObjeto(textPage, indiceDe);
+      for (const t of tr) if ((reales.get(t.runId)?.texto ?? '') !== viejo.slice(t.inicio, t.fin)) return { ok: false, reason: 'stale' };
+    } finally {
+      this.p.FPDFText_ClosePage(textPage);
+    }
+
+    // Diff: prefijo P y sufijo S comunes (sin partir un par sustituto). [P, E) es lo cambiado en el texto viejo.
+    const max = Math.min(viejo.length, nuevo.length);
+    let P = 0;
+    while (P < max && viejo.charCodeAt(P) === nuevo.charCodeAt(P)) P++;
+    let S = 0;
+    while (S < max - P && viejo.charCodeAt(viejo.length - 1 - S) === nuevo.charCodeAt(nuevo.length - 1 - S)) S++;
+    if (P > 0 && (viejo.charCodeAt(P - 1) & 0xfc00) === 0xd800) P--;
+    if (S > 0 && (viejo.charCodeAt(viejo.length - S) & 0xfc00) === 0xdc00) S--;
+    const E = viejo.length - S;
+
+    // Tramo afectado [i0, i1] (índices de `tramos`, en orden visual): los objetos con algún carácter en [P, E). Una
+    // inserción pura (o un cambio que cae en un hueco) cuelga del objeto que acaba en P: hereda el estilo del carácter
+    // anterior, como un procesador de textos; al inicio de la línea, del primero.
+    let i0 = tr.findIndex((t) => t.fin > P && t.inicio < E);
+    let i1 = i0;
+    if (i0 < 0) {
+      for (let k = 0; k < tr.length; k++) if (tr[k]!.fin <= P) i0 = k;
+      if (i0 < 0) i0 = 0;
+      i1 = i0;
+    } else {
+      for (let k = tr.length - 1; k >= i0; k--) if (tr[k]!.inicio < E && tr[k]!.fin > P) { i1 = k; break; }
+    }
+    // Un cambio que toca un hueco entre objetos (espacio generado por PDFium) arrastra a los objetos vecinos.
+    while (i0 > 0 && tr[i0]!.inicio > P) i0--;
+    while (i1 < tr.length - 1 && tr[i1]!.fin < E) i1++;
+    // Un objeto que acabara en espacio pierde ese espacio al releer el texto de la página (PDFium lo recorta y además
+    // genera un hueco falso más adelante): si el medio nuevo acaba en blanco, el objeto escrito se alarga con el siguiente.
+    const medioDe = (): string => nuevo.slice(tr[i0]!.inicio, nuevo.length - (viejo.length - tr[i1]!.fin));
+    while (i1 < tr.length - 1 && /\s$/.test(medioDe())) i1++;
+    const medioNuevo = medioDe();
+
+    const afectados = tr.slice(i0, i1 + 1).map((t) => ({ runId: t.runId, obj: objDe(t.runId) }));
+    const sufijo = tr.slice(i1 + 1).map((t) => objDe(t.runId));
+    const primero = afectados[0]!;
+    const ultimo = afectados[afectados.length - 1]!;
+    const primeroLinea = objDe(tr[0]!.runId);
+
+    // Medidas ANTES de escribir. θ y u de la matriz del primer afectado; final viejo del tramo = u + avance natural del
+    // último afectado (el hueco con el sufijo, si lo hay, se conserva: solo se mueve Δ).
+    const matP = this.matrizDe(primero.obj);
+    const theta = Math.atan2(matP[1], matP[0]);
+    const cos = Math.cos(theta), sin = Math.sin(theta);
+    const uDe = (mt: number[]): number => mt[4]! * cos + mt[5]! * sin;
+    const matU = this.matrizDe(ultimo.obj);
+    const fontU = this.p.FPDFTextObj_GetFont(ultimo.obj);
+    const tfU = m.malloc(4); this.p.FPDFTextObj_GetFontSize(ultimo.obj, tfU);
+    const sizeU = m.getValue(tfU, 'float'); m.free(tfU);
+    const textoUltimo = viejo.slice(tr[i1]!.inicio, tr[i1]!.fin);
+    const finViejoU = uDe(matU) + this.avanceNatural(fontU, sizeU, Math.hypot(matU[0], matU[1]), textoUltimo);
+    const nombreFuente = leerCadenaPdfium(
+      m,
+      (buf, len) => this.p.FPDFFont_GetBaseFontName(this.p.FPDFTextObj_GetFont(primero.obj), buf, len),
+      (ptr) => m.UTF8ToString(ptr)
+    );
+    const tfP = m.malloc(4); this.p.FPDFTextObj_GetFontSize(primero.obj, tfP);
+    const sizeP = m.getValue(tfP, 'float'); m.free(tfP);
+
+    // Escritura. Con medio vacío (se borró el tramo entero) no se escribe nada: los objetos del tramo se eliminan todos.
+    let objEscrito = primero.obj;
+    let fuenteEstandar: string | undefined;
+    let finNuevoU = uDe(matP);
+    let eliminar = afectados.slice(1);
+    if (medioNuevo === '') {
+      eliminar = afectados;
+    } else if (estandar) {
+      // E-047: el TRAMO cambiado en la fuente estándar más parecida (el resto de la línea conserva la suya).
+      const destino = standardFontFor(nombreFuente);
+      const res = this.sustituirObjeto(page, primero.obj, primero.runId, medioNuevo, () => this.p.FPDFPageObj_NewTextObj(doc, destino, sizeP));
+      if (!res.ok) return res;
+      objEscrito = res.obj;
+      fuenteEstandar = destino;
+    } else {
+      // En sitio: se escribe y se RELEE (E-079). Si no coincide, no se genera contenido y el cambio se descarta al cerrar.
+      this.escribirTexto(primero.obj, medioNuevo);
+      if (!this.textoEscritoCoincide(page, primero.obj, medioNuevo)) return { ok: false, reason: 'glyph-missing' };
+    }
+    if (medioNuevo !== '') {
+      const fontN = this.p.FPDFTextObj_GetFont(objEscrito);
+      const tfN = m.malloc(4); this.p.FPDFTextObj_GetFontSize(objEscrito, tfN);
+      const sizeN = m.getValue(tfN, 'float'); m.free(tfN);
+      const matN = this.matrizDe(objEscrito);
+      finNuevoU = uDe(matN) + this.avanceNatural(fontN, sizeN, Math.hypot(matN[0], matN[1]), medioNuevo);
+    }
+    const delta = finNuevoU - finViejoU;
+
+    // Los objetos sobrantes del tramo desaparecen (índices descendentes) y el sufijo se traslada Δ a lo largo del texto.
+    const aEliminar = eliminar
+      .map((a) => ({ obj: a.obj, idx: indiceDe.get(a.obj)! }))
+      .sort((a, b) => b.idx - a.idx);
+    for (const a of aEliminar) {
+      if (!this.p.FPDFPage_RemoveObject(page, a.obj)) continue;
+      this.p.FPDFPageObj_Destroy(a.obj);
+    }
+    if (delta !== 0) for (const o of sufijo) this.p.FPDFPageObj_Transform(o, 1, 0, 0, 1, delta * cos, delta * sin);
+
+    // Índice del primer objeto de la línea tras los borrados (los de índice menor lo desplazan).
+    const eraPrimero = i0 === 0 && medioNuevo !== '' ? objEscrito : primeroLinea;
+    let lineaRunIdInicial = -1;
+    const total = this.p.FPDFPage_CountObjects(page);
+    for (let i = 0; i < total; i++) if (this.p.FPDFPage_GetObject(page, i) === eraPrimero) { lineaRunIdInicial = i; break; }
+    this.p.FPDFPage_GenerateContent(page);
+    return { ok: true, lineaRunIdInicial, dxPt: delta, ...(fuenteEstandar ? { fuenteEstandar } : {}) };
+  }
+
   /**
    * Sustituye un run por un objeto de texto nuevo en la fuente estándar PDF
    * más parecida (ver `standardFontFor`) cuando la fuente original (subconjunto
@@ -862,6 +1046,25 @@ export class PdfiumEngine implements PdfEngine {
     newText: string,
     newObjFactory: () => number
   ): { ok: true; runId: number } | { ok: false; reason: 'glyph-missing' } {
+    const res = this.sustituirObjeto(page, obj, runId, newText, newObjFactory);
+    if (!res.ok) return res;
+    this.p.FPDFPage_GenerateContent(page);
+    return { ok: true, runId: res.runId };
+  }
+
+  /**
+   * Mitad de `swapTextObject` que NO genera contenido: crea el objeto nuevo, le copia color, trazo, modo de render y
+   * matriz del original, lo inserta en el mismo índice y RELEE lo escrito (E-079). El llamante decide cuándo llamar a
+   * `FPDFPage_GenerateContent` (una sola vez al final: `editLine` lo combina con borrados y traslaciones, E-037).
+   * Devuelve el handle del objeto nuevo.
+   */
+  private sustituirObjeto(
+    page: number,
+    obj: number,
+    runId: number,
+    newText: string,
+    newObjFactory: () => number
+  ): { ok: true; runId: number; obj: number } | { ok: false; reason: 'glyph-missing' } {
     const m = this.mem;
     // E-081: una línea vacía no se escribe (bloquea el WASM).
     if (newText === '') return { ok: false, reason: 'glyph-missing' };
@@ -930,8 +1133,7 @@ export class PdfiumEngine implements PdfEngine {
     // incluido el borrado del original, se descarta).
     if (!this.textoEscritoCoincide(page, newObj, newText)) return { ok: false, reason: 'glyph-missing' };
 
-    this.p.FPDFPage_GenerateContent(page);
-    return { ok: true, runId: newRunId };
+    return { ok: true, runId: newRunId, obj: newObj };
   }
 
   moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean {
@@ -943,6 +1145,39 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDFPageObj_Transform(obj, 1, 0, 0, 1, dxPt, dyPt); // traslación pura
       this.p.FPDFPage_GenerateContent(page);
       return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  moveRuns(doc: DocHandle, pageIndex: number, runIds: readonly number[], dxPt: number, dyPt: number): boolean {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const objs = runIds.map((id) => this.p.FPDFPage_GetObject(page, id));
+      if (objs.length === 0 || objs.some((o) => !o || this.p.FPDFPageObj_GetType(o) !== FPDF_PAGEOBJ_TEXT)) return false;
+      for (const o of objs) this.p.FPDFPageObj_Transform(o, 1, 0, 0, 1, dxPt, dyPt); // traslación pura
+      this.p.FPDFPage_GenerateContent(page);
+      return true;
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  deleteRuns(doc: DocHandle, pageIndex: number, runIds: readonly number[]): number {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      // Primero los handles (los índices se desplazan al borrar), luego se eliminan.
+      const objs = runIds.map((id) => this.p.FPDFPage_GetObject(page, id)).filter((o) => o && this.p.FPDFPageObj_GetType(o) === FPDF_PAGEOBJ_TEXT);
+      let borrados = 0;
+      for (const o of objs) {
+        if (!this.p.FPDFPage_RemoveObject(page, o)) continue;
+        this.p.FPDFPageObj_Destroy(o);
+        borrados++;
+      }
+      if (borrados > 0) this.p.FPDFPage_GenerateContent(page);
+      return borrados;
     } finally {
       this.p.FPDF_ClosePage(page);
     }
