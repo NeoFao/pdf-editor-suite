@@ -959,6 +959,279 @@ async function pdfRotadaLineas() {
   return doc.save();
 }
 
+/* ───────────────────────────── N1 · F0: fixtures de línea editable ───────────────────────────── */
+
+/** Escapa un carácter latino-1 para una cadena literal PDF `( … )`. */
+function cadenaPdf(ch) {
+  const c = ch.charCodeAt(0);
+  if (ch === '(' || ch === ')' || ch === '\\') return `\\${ch}`;
+  return c < 32 || c > 126 ? `\\${c.toString(8).padStart(3, '0')}` : ch;
+}
+
+/**
+ * Escribe UN `Tj` por glifo como hace Chrome/Skia: `/F tf Tf 1 0 0 -1 x y Tm` y, tras cada glifo, `dx 0 Td` con el
+ * avance natural. Unidades: px CSS (la CTM de página, `0.75 0 0 -0.75 0 H cm`, las pasa a pt PDF); `y` es la línea base
+ * en px con el eje Y hacia ABAJO. `extraTrasEspacio` (px) añade hueco tras cada espacio (justificación); `kern` (px)
+ * ajusta el avance del primer glifo (par con kerning que Chrome parte en dos `Tj`). Devuelve el fragmento de content
+ * stream y la x (px) donde acaba.
+ */
+function fragmentoPorGlifo({ fuente, clave, tf, x, y, texto, extraTrasEspacio = 0, color = '0 g', matriz, kern }) {
+  const Tm = matriz ?? `1 0 0 -1 ${x} ${y}`;
+  const partes = [`${color}\nBT /${clave} ${tf} Tf ${Tm} Tm`];
+  let xFin = x;
+  [...texto].forEach((ch, i) => {
+    partes.push(`(${cadenaPdf(ch)}) Tj`);
+    let avance = fuente.widthOfTextAtSize(ch, tf);
+    xFin += avance;
+    if (i < texto.length - 1) {
+      if (ch === ' ') { avance += extraTrasEspacio; xFin += extraTrasEspacio; }
+      if (kern !== undefined && i === 0) { avance += kern; xFin += kern; }
+      partes.push(`${avance.toFixed(4)} 0 Td`);
+    }
+  });
+  partes.push('ET');
+  return { cs: partes.join('\n'), xFin };
+}
+
+/** Líneas editables esperadas en la página 1 de `por-glifo.pdf`, en orden de content stream. */
+export const LINEAS_POR_GLIFO = [
+  'Tabla de cifras',
+  'Columna izquierda uno', 'Columna izquierda dos', 'Columna derecha uno', 'Columna derecha dos',
+  'Bloque amplio izquierdo', 'Bloque amplio derecho',
+  'Estilo mixto: normal NEGRITA y fin.',
+  'uno dos tres cuatro cinco seis',
+  'E=mc2 fin.',
+  'Celda A1', 'Celda B1', 'Celda C1', 'Celda A2', 'Celda B2', 'Celda C2',
+  'Texto girado',
+  'Texto con recorte activo',
+  'Capa OCR invisible',
+  'Texto NEGRITA final'
+];
+
+/**
+ * `por-glifo.pdf` (N1): imita lo que escribe Chrome (`page.pdf()`), sin depender de las fuentes del sistema.
+ * Helvetica y Helvetica-Bold estándar, CTM `0.75 0 0 -0.75 0 H cm` (tamaño nominal 14,66 → efectivo 11 pt) y un `Tj`
+ * por glifo. Contenido, en ORDEN de content stream (el orden importa para la agrupación):
+ *  1 título con par de kerning partido en dos `Tj`; 2-5 dos columnas a 3 mm (2 filas, una columna entera tras la otra);
+ *  6-7 dos bloques a 12 mm; 8 línea multiestilo (normal + negrita roja + normal); 9 línea justificada;
+ *  10 superíndice; 11-16 tabla de 2 filas × 3 celdas; 17 línea girada 90°; 18 línea recortada (`re W n`);
+ *  19 capa invisible (`3 Tr`); 20 línea con la negrita escrita fuera de orden.
+ * Página 2 con /Rotate 90. Líneas editables esperadas: ver `LINEAS_POR_GLIFO`.
+ */
+async function pdfPorGlifo() {
+  const doc = await PDFDocument.create();
+  const helv = await doc.embedFont(StandardFonts.Helvetica);
+  const bold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const TF = 14.66, TF_TIT = 29.33, TF_SUP = 9.77;
+  const MM3 = 11.34, MM12 = 45.35; // 3 mm y 12 mm en px CSS
+  const H = 841.89;
+  const H1 = { fuente: helv, clave: 'F1' }, B1 = { fuente: bold, clave: 'F2' };
+  const cs = [];
+
+  // 1) Título: «T» + kerning −0,06 em + el resto glifo a glifo.
+  cs.push(fragmentoPorGlifo({ ...B1, tf: TF_TIT, x: 48, y: 80, texto: 'Tabla de cifras', kern: -0.06 * TF_TIT }).cs);
+
+  // 2-5) Dos columnas a 3 mm: primero la columna izquierda entera y después la derecha.
+  const izq = ['Columna izquierda uno', 'Columna izquierda dos'];
+  const der = ['Columna derecha uno', 'Columna derecha dos'];
+  const ys = [130, 152];
+  const finIzq = izq.map((t, i) => {
+    const f = fragmentoPorGlifo({ ...H1, tf: TF, x: 48, y: ys[i], texto: t });
+    cs.push(f.cs);
+    return f.xFin;
+  });
+  der.forEach((t, i) => cs.push(fragmentoPorGlifo({ ...H1, tf: TF, x: finIzq[i] + MM3, y: ys[i], texto: t }).cs));
+
+  // 6-7) Dos bloques a 12 mm, misma línea base.
+  const bi = fragmentoPorGlifo({ ...H1, tf: TF, x: 48, y: 200, texto: 'Bloque amplio izquierdo' });
+  cs.push(bi.cs);
+  cs.push(fragmentoPorGlifo({ ...H1, tf: TF, x: bi.xFin + MM12, y: 200, texto: 'Bloque amplio derecho' }).cs);
+
+  // 8) Multiestilo: normal + negrita roja + normal (un BT por fragmento, como Chrome).
+  const m1 = fragmentoPorGlifo({ ...H1, tf: TF, x: 48, y: 250, texto: 'Estilo mixto: normal ' });
+  const m2 = fragmentoPorGlifo({ ...B1, tf: TF, x: m1.xFin, y: 250, texto: 'NEGRITA', color: '1 0 0 rg' });
+  const m3 = fragmentoPorGlifo({ ...H1, tf: TF, x: m2.xFin, y: 250, texto: ' y fin.', color: '0 g' });
+  cs.push(m1.cs, m2.cs, m3.cs);
+
+  // 9) Justificada: 5 px de hueco extra tras cada espacio.
+  cs.push(fragmentoPorGlifo({ ...H1, tf: TF, x: 48, y: 280, texto: 'uno dos tres cuatro cinco seis', extraTrasEspacio: 5 }).cs);
+
+  // 10) Superíndice: «E=mc» + «2» pequeño y elevado 6 px + « fin.» en la línea base.
+  const s1 = fragmentoPorGlifo({ ...H1, tf: TF, x: 48, y: 310, texto: 'E=mc' });
+  const s2 = fragmentoPorGlifo({ ...H1, tf: TF_SUP, x: s1.xFin, y: 304, texto: '2' });
+  const s3 = fragmentoPorGlifo({ ...H1, tf: TF, x: s2.xFin, y: 310, texto: ' fin.' });
+  cs.push(s1.cs, s2.cs, s3.cs);
+
+  // 11-16) Tabla 2 × 3, celdas con 2 mm de relleno (hueco ≈ 0,78 em), por filas.
+  for (const [fila, y] of [['1', 350], ['2', 372]]) {
+    let x = 48;
+    for (const col of ['A', 'B', 'C']) {
+      const f = fragmentoPorGlifo({ ...H1, tf: TF, x, y, texto: `Celda ${col}${fila}` });
+      cs.push(f.cs);
+      x = f.xFin + MM3;
+    }
+  }
+
+  // 17) Línea girada 90° (sube): Tm = [0 -1 -1 0 x y] en el espacio CSS con Y hacia abajo.
+  cs.push(fragmentoPorGlifo({ ...H1, tf: TF, x: 700, y: 520, texto: 'Texto girado', matriz: '0 -1 -1 0 700 520' }).cs);
+
+  // 18) Línea recortada: el clip rectangular contiene el texto (el objeto lleva clip propio).
+  cs.push(`q 40 398 260 28 re W n\n${fragmentoPorGlifo({ ...H1, tf: TF, x: 48, y: 420, texto: 'Texto con recorte activo' }).cs}\nQ`);
+
+  // 19) Capa invisible (modo de render 3), como un OCR.
+  cs.push(`q 3 Tr\n${fragmentoPorGlifo({ ...H1, tf: TF, x: 48, y: 450, texto: 'Capa OCR invisible' }).cs}\nQ`);
+
+  // 20) Negrita escrita fuera de orden: primero «Texto » y « final», al final «NEGRITA».
+  const f1 = fragmentoPorGlifo({ ...H1, tf: TF, x: 48, y: 480, texto: 'Texto ' });
+  const fb = fragmentoPorGlifo({ ...B1, tf: TF, x: f1.xFin, y: 480, texto: 'NEGRITA' });
+  const f3 = fragmentoPorGlifo({ ...H1, tf: TF, x: fb.xFin, y: 480, texto: ' final' });
+  cs.push(f1.cs, f3.cs, fb.cs);
+
+  const montar = (page, contenido) => {
+    page.node.setFontDictionary(PDFName.of('F1'), helv.ref);
+    page.node.setFontDictionary(PDFName.of('F2'), bold.ref);
+    const stream = doc.context.stream(`q 0.75 0 0 -0.75 0 ${H} cm\n${contenido}\nQ`);
+    page.node.set(PDFName.of('Contents'), doc.context.register(stream));
+  };
+  montar(doc.addPage([595.28, H]), cs.join('\n'));
+
+  // Página 2 con /Rotate 90: mismas técnicas, pocas líneas.
+  const p2 = doc.addPage([595.28, H]);
+  p2.setRotation(degrees(90));
+  montar(p2, [
+    fragmentoPorGlifo({ ...B1, tf: TF_TIT, x: 48, y: 80, texto: 'Pagina girada' }).cs,
+    fragmentoPorGlifo({ ...H1, tf: TF, x: 48, y: 130, texto: 'Linea uno de la pagina girada' }).cs
+  ].join('\n'));
+  return doc.save({ useObjectStreams: false });
+}
+
+/**
+ * Glifos de la TrueType SINTÉTICA del subconjunto CID (1000 unidades por em): 0 `.notdef`, 1 espacio, 2 H, 3 O, 4 L,
+ * 5 A, 6 M, 7 U, 8 N, 9 D. Cualquier otro carácter NO existe en el subconjunto.
+ */
+const GLIFOS_CID = [
+  { gid: 0, ch: null, adv: 500 }, { gid: 1, ch: ' ', adv: 300 },
+  { gid: 2, ch: 'H', adv: 700 }, { gid: 3, ch: 'O', adv: 750 }, { gid: 4, ch: 'L', adv: 550 },
+  { gid: 5, ch: 'A', adv: 700 }, { gid: 6, ch: 'M', adv: 850 }, { gid: 7, ch: 'U', adv: 700 },
+  { gid: 8, ch: 'N', adv: 750 }, { gid: 9, ch: 'D', adv: 750 }
+];
+
+/**
+ * Una TrueType mínima construida a mano tabla a tabla (rectángulos): no se versiona ningún binario ni hay licencia de
+ * fuente. Tablas: OS/2, cmap (formato 4), glyf, head, hhea, hmtx, loca (largo), maxp, name, post (v3).
+ */
+function ttfSintetica() {
+  const u16 = (v) => { const b = Buffer.alloc(2); b.writeUInt16BE(v & 0xffff); return b; };
+  const i16 = (v) => { const b = Buffer.alloc(2); b.writeInt16BE(v); return b; };
+  const u32 = (v) => { const b = Buffer.alloc(4); b.writeUInt32BE(v >>> 0); return b; };
+  const pad4 = (b) => (b.length % 4 === 0 ? b : Buffer.concat([b, Buffer.alloc(4 - (b.length % 4))]));
+  // glyf: un contorno de 4 puntos en curva (rectángulo x 50…adv-50, y 0…700); el espacio no tiene contornos.
+  const glifos = GLIFOS_CID.map((g) => {
+    if (g.gid === 1) return Buffer.alloc(0);
+    const x0 = 50, x1 = g.adv - 50, y0 = 0, y1 = 700;
+    return pad4(Buffer.concat([
+      i16(1), i16(x0), i16(y0), i16(x1), i16(y1), // numberOfContours + bbox
+      u16(3), u16(0), // endPtsOfContours[0] = 3, instructionLength = 0
+      Buffer.from([1, 1, 1, 1]), // flags: en curva, coordenadas int16
+      i16(x0), i16(x1 - x0), i16(0), i16(x0 - x1), // x relativas
+      i16(y0), i16(0), i16(y1 - y0), i16(0) // y relativas
+    ]));
+  });
+  const offs = [0];
+  for (const g of glifos) offs.push(offs[offs.length - 1] + g.length);
+  const n = GLIFOS_CID.length;
+  const head = Buffer.concat([
+    u32(0x00010000), u32(0x00010000), u32(0), u32(0x5f0f3cf5), u16(0), u16(1000),
+    Buffer.alloc(16), // created + modified
+    i16(0), i16(0), i16(900), i16(700), u16(0), u16(8), i16(2), i16(1), i16(0)
+  ]);
+  const hhea = Buffer.concat([
+    u32(0x00010000), i16(800), i16(-200), i16(0), u16(850), i16(0), i16(0), i16(900),
+    i16(1), i16(0), i16(0), Buffer.alloc(8), i16(0), u16(n)
+  ]);
+  const maxp = Buffer.concat([u32(0x00010000), u16(n), u16(4), u16(1), u16(0), u16(0), u16(2), ...Array(8).fill(u16(0))]);
+  const hmtx = Buffer.concat(GLIFOS_CID.flatMap((g) => [u16(g.adv), i16(g.gid === 1 ? 0 : 50)]));
+  const loca = Buffer.concat(offs.map((o) => u32(o)));
+  // cmap formato 4: un segmento por carácter + el terminador 0xFFFF.
+  const mapeados = GLIFOS_CID.filter((g) => g.ch).sort((a, b) => a.ch.charCodeAt(0) - b.ch.charCodeAt(0));
+  const segs = mapeados.length + 1;
+  const codigos = [...mapeados.map((g) => g.ch.charCodeAt(0)), 0xffff];
+  const fmt4 = Buffer.concat([
+    u16(4), u16(16 + segs * 8), u16(0), u16(segs * 2), u16(0), u16(0), u16(0),
+    Buffer.concat(codigos.map((c) => u16(c))), u16(0), Buffer.concat(codigos.map((c) => u16(c))),
+    Buffer.concat([...mapeados.map((g) => i16(g.gid - g.ch.charCodeAt(0))), i16(1)]),
+    Buffer.alloc(segs * 2)
+  ]);
+  const cmap = Buffer.concat([u16(0), u16(1), u16(3), u16(1), u32(12), fmt4]);
+  const post = Buffer.concat([u32(0x00030000), u32(0), i16(-100), i16(50), u32(0), Buffer.alloc(16)]);
+  const nombre = Buffer.from('SinteticaSub', 'utf16le').swap16();
+  const name = Buffer.concat([u16(0), u16(1), u16(18), u16(3), u16(1), u16(0x409), u16(4), u16(nombre.length), u16(0), nombre]);
+  const os2 = Buffer.concat([
+    u16(1), i16(550), u16(400), u16(5), u16(0), ...Array(8).fill(i16(0)), i16(0), i16(0), i16(0), // v1 hasta sFamilyClass
+    Buffer.alloc(10), u32(1), u32(0), u32(0), u32(0), Buffer.from('NONE'), // panose, rangos Unicode, vendor
+    u16(0x40), u16(0x20), u16(0x7a), i16(800), i16(-200), i16(0), u16(900), u16(200), u32(1), u32(0)
+  ]);
+  const tablas = { 'OS/2': os2, cmap, glyf: Buffer.concat(glifos), head, hhea, hmtx, loca, maxp, name, post };
+  const etiquetas = Object.keys(tablas).sort();
+  const nt = etiquetas.length;
+  const cabecera = Buffer.concat([u32(0x00010000), u16(nt), u16(128), u16(3), u16(nt * 16 - 128)]);
+  let off = 12 + nt * 16;
+  const dir = [], datos = [];
+  const suma = (b) => { const p = pad4(b); let s = 0; for (let i = 0; i < p.length; i += 4) s = (s + p.readUInt32BE(i)) >>> 0; return s; };
+  for (const t of etiquetas) {
+    const b = tablas[t];
+    dir.push(Buffer.concat([Buffer.from(t, 'latin1'), u32(suma(b)), u32(off), u32(b.length)]));
+    datos.push(pad4(b));
+    off += pad4(b).length;
+  }
+  return Buffer.concat([cabecera, ...dir, ...datos]);
+}
+
+/** Textos de `cid-subconjunto.pdf`: cada línea es UN solo `Tj`. */
+export const TEXTO_CID = ['HOLA MUNDO', 'UNA MANO'];
+
+/**
+ * `cid-subconjunto.pdf` (N1): la TrueType sintética incrustada como SUBCONJUNTO CID (Type0 / CIDFontType2, Identity-H +
+ * /ToUnicode), como la que escriben Chrome, Skia o LibreOffice, con solo 10 glifos. Dos líneas, un `Tj` cada una:
+ * «HOLA MUNDO» y «UNA MANO». Cualquier carácter fuera de H O L A M U N D y el espacio (p. ej. «€», «Q», «Z») no está en
+ * el subconjunto, aunque `FPDFFont_GetGlyphPath` diga que sí (E-079).
+ */
+async function pdfCidSubconjunto() {
+  const doc = await PDFDocument.create();
+  const ctx = doc.context;
+  const ttf = ttfSintetica();
+  const fontFile = ctx.register(ctx.flateStream(ttf, { Length1: ttf.length }));
+  const nombre = 'AAAAAA+SinteticaSub';
+  const descriptor = ctx.register(ctx.obj({
+    Type: 'FontDescriptor', FontName: nombre, Flags: 4, FontBBox: [0, 0, 900, 700], ItalicAngle: 0,
+    Ascent: 800, Descent: -200, CapHeight: 700, StemV: 80, FontFile2: fontFile
+  }));
+  const cid = ctx.register(ctx.obj({
+    Type: 'Font', Subtype: 'CIDFontType2', BaseFont: nombre,
+    CIDSystemInfo: { Registry: PDFString.of('Adobe'), Ordering: PDFString.of('Identity'), Supplement: 0 },
+    FontDescriptor: descriptor, DW: 1000, W: [0, GLIFOS_CID.map((g) => g.adv)], CIDToGIDMap: 'Identity'
+  }));
+  const hex4 = (v) => v.toString(16).toUpperCase().padStart(4, '0');
+  const bf = GLIFOS_CID.filter((g) => g.ch).map((g) => `<${hex4(g.gid)}> <${hex4(g.ch.charCodeAt(0))}>`);
+  const cmapUni = [
+    '/CIDInit /ProcSet findresource begin 12 dict begin begincmap',
+    '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def',
+    '/CMapName /Adobe-Identity-UCS def /CMapType 2 def',
+    '1 begincodespacerange <0000> <FFFF> endcodespacerange',
+    `${bf.length} beginbfchar`, ...bf, 'endbfchar', 'endcmap CMapName currentdict /CMap defineresource pop end end'
+  ].join('\n');
+  const toUni = ctx.register(ctx.flateStream(Buffer.from(cmapUni, 'latin1')));
+  const font = ctx.register(ctx.obj({
+    Type: 'Font', Subtype: 'Type0', BaseFont: nombre, Encoding: 'Identity-H', DescendantFonts: [cid], ToUnicode: toUni
+  }));
+  const codigos = (t) => `<${[...t].map((c) => hex4(GLIFOS_CID.find((g) => g.ch === c).gid)).join('')}>`;
+  const page = doc.addPage([320, 200]);
+  page.node.setFontDictionary(PDFName.of('F1'), font);
+  const cuerpo = `BT /F1 24 Tf 40 130 Td ${codigos(TEXTO_CID[0])} Tj ET\nBT /F1 24 Tf 40 80 Td ${codigos(TEXTO_CID[1])} Tj ET`;
+  page.node.set(PDFName.of('Contents'), ctx.register(ctx.stream(cuerpo)));
+  return doc.save({ useObjectStreams: false });
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -970,6 +1243,8 @@ async function main() {
     'fuentes.pdf': await pdfFuentes(),
     'formulario.pdf': await pdfFormulario(),
     'subconjunto.pdf': await pdfSubconjunto(),
+    'por-glifo.pdf': await pdfPorGlifo(),
+    'cid-subconjunto.pdf': await pdfCidSubconjunto(),
     'marcadores.pdf': await pdfMarcadores(),
     'outline-ciclo.pdf': await pdfOutlineCiclo(),
     'marcadores-uri.pdf': await pdfMarcadoresConAccion({ S: 'URI', URI: PDFString.of('https://example.com/') }),
