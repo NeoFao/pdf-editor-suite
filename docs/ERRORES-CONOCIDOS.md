@@ -2648,3 +2648,20 @@ referencia). Deshacer sigue siendo por snapshot, así que devuelve el árbol exa
 PDF guardado: borrar p.2, borrar p.1 con hijo que sube, JavaScript sin tocar, URI conservado, deshacer exacto,
 edición habilitada) y `tests/unit/arbolMarcadores.test.ts`. Fallaba antes. Sin regla guard: es lógica de
 dominio, no un patrón estático.
+
+---
+
+### E-072 · Tras rotar una página, el "ajustar al ancho" no se recalculaba y la página se salía del visor
+
+**Síntoma.** `nativo.pdf` (ajustado al ancho al abrir) → Rotar: la página pasaba a apaisada con la escala de la
+vertical y desbordaba el visor por la derecha (scroll horizontal, texto fuera de vista) hasta pulsar «Ajustar al ancho».
+
+**Causa raíz.** La app no recordaba SI el usuario estaba en «ajustar al ancho» o en un zoom elegido: solo guardaba
+`scale`. `rotateCurrentPage` no tenía forma de saber si reajustar o respetar un zoom manual, y no hacía ninguna de las dos.
+
+**Arreglo.** Estado explícito `modoZoom: 'ancho' | 'manual'` en `App`: `fitWidth` (y la apertura) lo ponen en
+`'ancho'`; `zoom()` (botones y atajos) en `'manual'`. Tras rotar, solo en modo `'ancho'` se llama a `fitWidth`.
+
+**Cómo se detecta ahora.** `tests/e2e/next/zoom-tras-rotar.spec.ts`: en modo ancho la página apaisada mide el ancho
+útil del visor (±4 px) sin scroll horizontal; con zoom manual (+) rotar no cambia el porcentaje. Fallaba antes.
+Sin regla guard: es estado de interfaz, no un patrón estático.

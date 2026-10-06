@@ -190,6 +190,8 @@ export class App {
   private appliedFontLabel: string | null = null;
   private viewer: Viewer | null = null;
   private scale = 1;
+  /** 'ancho' = ajustar al ancho (por defecto al abrir; se reajusta al rotar); 'manual' = el usuario eligió zoom. */
+  private modoZoom: 'ancho' | 'manual' = 'ancho';
   /** Limpieza pendiente (iframe + oyentes) del intento de impresión anterior, si quedó alguno sin cerrar. Ver `print`. */
   private limpiarImpresionAnterior: (() => void) | null = null;
   private readonly viewerEl: HTMLElement;
@@ -1949,6 +1951,8 @@ export class App {
     const idx = this.currentPage;
     await this.bus.execute(new RotatePageCmd(idx, 90));
     this.goToPage(idx);
+    // E-072: la página pasó de vertical a apaisada (o al revés): en modo "ancho" se reajusta; el zoom manual se respeta.
+    if (this.modoZoom === 'ancho') this.fitWidth();
   }
 
   private moveCurrentPage(delta: number): void {
@@ -2683,6 +2687,7 @@ export class App {
   }
 
   private zoom(factor: number): void {
+    this.modoZoom = 'manual';
     this.scale = Math.min(4, Math.max(0.25, Math.round(this.scale * factor * 100) / 100));
     this.viewer?.setScale(this.scale);
     this.zoomPctEl.textContent = `${Math.round(this.scale * 100)}%`;
@@ -2722,6 +2727,7 @@ export class App {
     const paddingX = parseFloat(cs.paddingLeft || '0') + parseFloat(cs.paddingRight || '0');
     const disponible = this.viewerEl.clientWidth - paddingX;
     if (disponible <= 0) return;
+    this.modoZoom = 'ancho';
     this.scale = calcularEscalaAjusteAncho(disponible, page.sizePt.widthPt);
     this.viewer.setScale(this.scale);
     this.zoomPctEl.textContent = `${Math.round(this.scale * 100)}%`;
