@@ -1232,6 +1232,32 @@ async function pdfCidSubconjunto() {
   return doc.save({ useObjectStreams: false });
 }
 
+/**
+ * E-084: tres páginas cuya caja VISIBLE no tiene origen (0,0), como las plantillas de Acrobat Distiller.
+ *   1: MediaBox [0 0 595.28 841.89] y CropBox [36 36 436 336] (400x300 visibles, origen (36,36)).
+ *   2: MediaBox [-50 -80 350 220] (origen negativo, 400x300), sin CropBox.
+ *   3: CropBox [36 36 336 436] (300x400 visibles) con /Rotate 90 y el texto SIN contragirar.
+ * Todo en pt de usuario (origen abajo-izq, sin girar). Las líneas "CROPBOX-<p>-<k>" caen dentro de la caja visible.
+ */
+async function pdfCropboxDesplazado() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const p1 = doc.addPage([595.28, 841.89]);
+  p1.setCropBox(36, 36, 400, 300);
+  p1.drawText('CROPBOX-1-A', { x: 60, y: 290, size: 24, font });
+  p1.drawText('CROPBOX-1-B', { x: 60, y: 200, size: 24, font });
+  const p2 = doc.addPage([595.28, 841.89]);
+  p2.setMediaBox(-50, -80, 400, 300);
+  p2.drawText('CROPBOX-2-A', { x: -20, y: 170, size: 24, font });
+  p2.drawText('CROPBOX-2-B', { x: -20, y: 60, size: 24, font });
+  const p3 = doc.addPage([595.28, 841.89]);
+  p3.setCropBox(36, 36, 300, 400);
+  p3.setRotation(degrees(90));
+  p3.drawText('CROPBOX-3-A', { x: 60, y: 400, size: 24, font });
+  p3.drawText('CROPBOX-3-B', { x: 60, y: 300, size: 24, font });
+  return doc.save();
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -1240,6 +1266,7 @@ async function main() {
     'apaisado.pdf': await pdfApaisado(),
     'rotada.pdf': await pdfRotada(),
     'rotada-lineas.pdf': await pdfRotadaLineas(),
+    'cropbox-desplazado.pdf': await pdfCropboxDesplazado(),
     'fuentes.pdf': await pdfFuentes(),
     'formulario.pdf': await pdfFormulario(),
     'subconjunto.pdf': await pdfSubconjunto(),

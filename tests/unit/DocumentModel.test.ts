@@ -5,7 +5,7 @@ import { crearTextRun } from './_util/textRun';
 
 function modeloDe(): DocumentModel {
   const pages: PageModel[] = [
-    { index: 0, sizePt: { widthPt: 320, heightPt: 200 }, rotation: 0, runs: [
+    { index: 0, sizePt: { widthPt: 320, heightPt: 200 }, origenPt: { xPt: 0, yPt: 0 }, rotation: 0, runs: [
       crearTextRun({ text: 'hola', xPt: 40, yPt: 150, sizePt: 18, wPt: 30, fontName: 'Times-Roman' })
     ] }
   ];

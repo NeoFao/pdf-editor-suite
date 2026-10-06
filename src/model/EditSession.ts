@@ -49,6 +49,7 @@ export class EditSession {
       pages.push({
         index: i,
         sizePt: engine.pageSize(doc, i),
+        origenPt: engine.pageBox(doc, i).origenPt,
         rotation: engine.pageRotation(doc, i),
         runs: []
       });
@@ -116,6 +117,7 @@ export class EditSession {
     const page: PageModel = {
       index: pageIndex,
       sizePt: this.engine.pageSize(this.doc, pageIndex),
+      origenPt: this.engine.pageBox(this.doc, pageIndex).origenPt,
       rotation: this.engine.pageRotation(this.doc, pageIndex),
       runs: this.engine.getPageText(this.doc, pageIndex)
     };

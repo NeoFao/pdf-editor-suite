@@ -145,7 +145,7 @@ export class Viewer {
     geom: (i) => this.geoms[i]!,
     pagina: (i) => {
       const p = this.session.model.pages[i]!;
-      return { sizePt: p.sizePt, rotation: p.rotation };
+      return { sizePt: p.sizePt, rotation: p.rotation, origenPt: p.origenPt };
     },
     chars: (i) => this.session.ensureChars(i),
     activa: () => this.tool === 'none',
@@ -1106,7 +1106,7 @@ export class Viewer {
       this.root.appendChild(w);
       this.wrappers.push(w);
       // `page.sizePt` es el tamaño VISUAL (pt, ya girado); la fábrica lo devuelve al espacio de usuario (E-053).
-      this.geoms.push(PageGeometry.desdeTamanoVisual(page.sizePt.widthPt, page.sizePt.heightPt, this.scale, page.rotation));
+      this.geoms.push(PageGeometry.desdePagina(page, this.scale));
     }
     this.observeVisible();
   }

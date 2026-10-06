@@ -21,3 +21,13 @@ test('mapOcrLines descarta líneas con texto vacío o solo espacios', () => {
   );
   expect(specs).toEqual([]);
 });
+
+test('E-084: mapOcrLines suma el origen de la caja visible (pt de usuario) a la posición del bitmap', () => {
+  const specs = mapOcrLines(
+    [{ text: 'Hola', bbox: { x0: 40, y0: 100, x1: 140, y1: 120 } }],
+    2,
+    200,
+    { xPt: 36, yPt: 20 }
+  );
+  expect(specs).toEqual([{ xPt: 56, yPt: 160, sizePt: 8, text: 'Hola', invisible: true }]);
+});
