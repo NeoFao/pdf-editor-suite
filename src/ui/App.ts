@@ -935,6 +935,7 @@ export class App {
 
   /** `#btn-new`: documento de 1 página A4 (595×842 pt) en blanco, abierto como cualquier otro. */
   private async newBlank(): Promise<void> {
+    if (this.bloqueado()) return;
     if (!this.confirmarDescarte()) return;
     const engine = await this.ensureEngine();
     const bytes = engine.createBlank(595, 842);
@@ -1102,6 +1103,7 @@ export class App {
    * documento actual no se toca.
    */
   async openFile(file: File): Promise<void> {
+    if (this.bloqueado()) return;
     if (!this.confirmarDescarte()) return;
     const engine = await this.ensureEngine();
     const ext = (file.name.split('.').pop() ?? '').toLowerCase();
@@ -1160,6 +1162,7 @@ export class App {
 
   /** Abre una imagen convirtiéndola en un PDF de una página. */
   private async openImage(file: File): Promise<void> {
+    if (this.bloqueado()) return;
     if (!this.confirmarDescarte()) return;
     const engine = await this.ensureEngine();
     const { rgba, width, height } = await this.decodeImage(file);
@@ -1180,6 +1183,7 @@ export class App {
     this.docName = name;
     this.session = await EditSession.open(engine, bytes);
     this.bus = new CommandBus(this.session, () => this.marcarSucio(true));
+    this.bus.onBloqueado = () => { this.bloqueado(); };
     this.marcarSucio(false);
     this.selection = null;
     this.selectedImage = null;
@@ -1339,6 +1343,7 @@ export class App {
   }
 
   private async handleEdit(req: EditRequest): Promise<void> {
+    if (this.bloqueado()) { req.el.textContent = req.oldText; return; }
     const s = this.session;
     if (!s || !this.bus) return;
     // N1: una línea de VARIOS objetos (Chrome: uno por glifo) se edita con el diff mínimo y deshacer por snapshot.
@@ -1416,6 +1421,7 @@ export class App {
   }
 
   private async handleInsert(pageIndex: number, at: PtPoint): Promise<void> {
+    if (this.bloqueado()) return;
     if (this.tool !== 'insert' || !this.bus) return;
     await this.bus.execute(new InsertTextCmd(pageIndex, { xPt: at.xPt, yPt: at.yPt, text: 'Texto nuevo', sizePt: 16 }));
     this.setStatus('Texto insertado. Haz clic en él para editarlo.');
@@ -1428,6 +1434,7 @@ export class App {
   }
 
   private async handleNote(pageIndex: number, at: PtPoint): Promise<void> {
+    if (this.bloqueado()) return;
     if (this.tool !== 'note' || !this.bus) return;
     this.setTool('none'); // nota: un solo uso por activación, como antes de este refactor
     const text = window.prompt('Texto de la nota:');
@@ -1438,11 +1445,13 @@ export class App {
 
   /** Deshace y lo anuncia en `#status` (B1: un lector de pantalla no recibía confirmación). */
   private async deshacer(): Promise<void> {
+    if (this.bloqueado()) return;
     const label = await this.bus?.undo();
     this.setStatus(label ? `Deshecho: ${label}` : 'No hay nada que deshacer.');
   }
 
   private async rehacer(): Promise<void> {
+    if (this.bloqueado()) return;
     const label = await this.bus?.redo();
     this.setStatus(label ? `Rehecho: ${label}` : 'No hay nada que rehacer.');
   }
@@ -1502,6 +1511,7 @@ export class App {
   }
 
   private async deleteSelected(): Promise<void> {
+    if (this.bloqueado()) return;
     if (!this.bus || !this.selection) { this.setStatus('Selecciona primero una línea (haz clic en ella).'); return; }
     const { pageIndex, runId } = this.selection;
     this.selection = null;
@@ -1731,6 +1741,7 @@ export class App {
   }
 
   private async deleteSelectedImage(): Promise<void> {
+    if (this.bloqueado()) return;
     if (!this.bus || !this.selectedImage) return;
     const { pageIndex, objIndex } = this.selectedImage;
     this.selectedImage = null;
@@ -1800,6 +1811,7 @@ export class App {
 
   /** Aplica `props` a todos los objetos de la línea compuesta seleccionada con `PropiedadesLineaCmd` (un paso de deshacer). */
   private async aplicarALinea(props: PropiedadesLinea, hecho: string): Promise<boolean | null> {
+    if (this.bloqueado()) return false;
     const linea = this.lineaCompuestaSeleccionada();
     if (!linea || !this.bus || !this.selection) return null; // no es una línea compuesta: sigue el camino de un objeto
     const { pageIndex } = this.selection;
@@ -1824,6 +1836,7 @@ export class App {
 
   /** `#prop-font` change: aplica la fuente estándar elegida al run seleccionado. */
   private async applyFont(): Promise<void> {
+    if (this.bloqueado()) return;
     const run = this.selectedRun();
     if (!run || !this.bus || !this.selection) return;
     const chosen = this.propFont.value;
@@ -1845,6 +1858,7 @@ export class App {
 
   /** `#prop-size` change: valida el rango (1-400 pt) y aplica el tamaño nuevo. */
   private async applyFontSize(): Promise<void> {
+    if (this.bloqueado()) return;
     const run = this.selectedRun();
     if (!run || !this.bus || !this.selection) return;
     const value = parseFloat(this.propSize.value);
@@ -1887,6 +1901,7 @@ export class App {
 
   /** Borra la página actual y deja como actual la siguiente (o la anterior si era la última) — E-065. */
   private async eliminarPaginaActual(): Promise<void> {
+    if (this.bloqueado()) return;
     if (!this.bus) return;
     const idx = this.currentPage;
     await this.bus.execute(new DeletePageCmd(idx));
@@ -1947,6 +1962,7 @@ export class App {
 
   /** Inserta una firma RGBA centrada (ancho <= 180 pt) y la deja seleccionada para reposicionarla. */
   private async colocarFirmaSeleccionada(rgba: Uint8Array, width: number, height: number, estado: string): Promise<void> {
+    if (this.bloqueado()) return;
     const s = this.session;
     if (!s || !this.bus) return;
     const page = s.model.pages[this.currentPage]!;
@@ -2012,11 +2028,13 @@ export class App {
 
   private async runOcr(): Promise<void> {
     if (!this.session || !this.bus) { this.setStatus('Abre un documento antes del OCR.'); return; }
+    const bus = this.bus;
+    await this.conOperacion('OCR', async () => {
     this.btnOcr.disabled = true;
     this.setStatus('Reconociendo texto… (puede tardar)');
     try {
       const cmd = new OcrPageCmd(this.currentPage, new TesseractOcr());
-      await this.bus.execute(cmd);
+      await bus.execute(cmd, true);
       // No se abre el diálogo de texto solo (ver TextPanel): se ofrece el
       // camino en el propio estado, un clic más que un modal no pedido.
       this.setStatus(`${cmd.recognized} línea(s) reconocida(s). Pulsa «Texto…» para copiarlas.`);
@@ -2025,6 +2043,7 @@ export class App {
     } finally {
       this.btnOcr.disabled = false;
     }
+    });
   }
 
   /**
@@ -2042,14 +2061,17 @@ export class App {
       this.setStatus('Esta página no tiene imágenes; los filtros solo afectan a imágenes (el texto queda intacto).');
       return;
     }
-    this.btnFilter.disabled = true;
-    try {
-      const cmd = new FiltrarPaginaCmd(this.currentPage, valor);
-      await this.bus.execute(cmd);
-      this.setStatus(`Filtro aplicado a ${cmd.imagenesAfectadas} imagen(es).`);
-    } finally {
-      this.btnFilter.disabled = false;
-    }
+    const bus = this.bus;
+    await this.conOperacion('Aplicar filtro', async () => {
+      this.btnFilter.disabled = true;
+      try {
+        const cmd = new FiltrarPaginaCmd(this.currentPage, valor);
+        await bus.execute(cmd, true);
+        this.setStatus(`Filtro aplicado a ${cmd.imagenesAfectadas} imagen(es).`);
+      } finally {
+        this.btnFilter.disabled = false;
+      }
+    });
   }
 
   /** `#btn-encabezado`: diálogo de encabezado/pie/numeración y marca de agua, con vista previa sobre la página actual. */
@@ -2068,15 +2090,19 @@ export class App {
       },
       medir: (fuente, sizePt, texto) => s.engine.measureText(fuente, sizePt, texto),
       onAplicar: async (op, progreso) => {
-        const cmd = new AnadirEncabezadoMarcaCmd(op, progreso);
-        await bus.execute(cmd);
-        this.setStatus('encabezado' in op ? 'Encabezado y pie añadidos.' : 'Marca de agua añadida.');
+        await this.conOperacion('Encabezado y marca', async () => {
+          const cmd = new AnadirEncabezadoMarcaCmd(op, progreso);
+          await bus.execute(cmd, true);
+          this.setStatus('encabezado' in op ? 'Encabezado y pie añadidos.' : 'Marca de agua añadida.');
+        });
       },
       onQuitar: async (progreso) => {
-        const cmd = new QuitarEncabezadosMarcasCmd(progreso);
-        await bus.execute(cmd);
-        this.setStatus(cmd.quitados === 0 ? 'No había encabezados ni marcas de agua añadidos por este editor.' : `Quitados ${cmd.quitados} objeto(s) añadidos por este editor.`);
-        return cmd.quitados;
+        return (await this.conOperacion('Encabezado y marca', async () => {
+          const cmd = new QuitarEncabezadosMarcasCmd(progreso);
+          await bus.execute(cmd, true);
+          this.setStatus(cmd.quitados === 0 ? 'No había encabezados ni marcas de agua añadidos por este editor.' : `Quitados ${cmd.quitados} objeto(s) añadidos por este editor.`);
+          return cmd.quitados;
+        })) ?? 0;
       }
     });
   }
@@ -2095,6 +2121,8 @@ export class App {
    */
   private async runCompress(calidad: number, dpiMax: number, control: ControlCompresion): Promise<void> {
     if (!this.bus) return;
+    const bus = this.bus;
+    await this.conOperacion('Comprimir', async () => {
     this.btnCompress.disabled = true;
     this.setStatus('Comprimiendo…');
     try {
@@ -2108,7 +2136,7 @@ export class App {
           control.progreso(texto, (p.imagen - 1) / p.totalImagenes);
         }
       });
-      await this.bus.execute(cmd);
+      await bus.execute(cmd, true);
       const { antesBytes, despuesBytes } = cmd.informe;
       const pct = antesBytes > 0 ? Math.round((1 - despuesBytes / antesBytes) * 100) : 0;
       this.setStatus(`Comprimido: ${formatoBytes(antesBytes)} → ${formatoBytes(despuesBytes)} (−${pct}%)`);
@@ -2117,9 +2145,11 @@ export class App {
     } finally {
       this.btnCompress.disabled = false;
     }
+    }, true);
   }
 
   private async handleInsertImage(file: File): Promise<void> {
+    if (this.bloqueado()) return;
     const s = this.session;
     if (!s || !this.bus) return;
     const { rgba, width, height } = await this.decodeImage(file);
@@ -2135,6 +2165,7 @@ export class App {
   }
 
   private async handleInsertPdf(file: File): Promise<void> {
+    if (this.bloqueado()) return;
     if (!this.bus) return;
     const bytes = new Uint8Array(await file.arrayBuffer());
     const destino = this.currentPage + 1;
@@ -2145,6 +2176,7 @@ export class App {
 
   /** Rota la página actual y la mantiene como actual (E-065: el rebuild no debe dejar que el observer elija otra). */
   private async rotateCurrentPage(): Promise<void> {
+    if (this.bloqueado()) return;
     if (!this.bus) return;
     const idx = this.currentPage;
     await this.bus.execute(new RotatePageCmd(idx, 90));
@@ -2166,6 +2198,7 @@ export class App {
    * E-065: sin `goToPage` la página actual se quedaba en la original o la decidía el observer.
    */
   private async duplicateCurrentPage(): Promise<void> {
+    if (this.bloqueado()) return;
     if (!this.bus) return;
     const desde = this.currentPage;
     await this.bus.execute(new DuplicatePageCmd(desde));
@@ -2505,6 +2538,7 @@ export class App {
 
   /** Aplica el reordenamiento (un único MovePageCmd) y sigue a la página movida. */
   private async commitReorder(fromIndex: number, toIndex: number): Promise<void> {
+    if (this.bloqueado()) return;
     if (!this.bus) return;
     await this.bus.execute(new MovePageCmd(fromIndex, toIndex));
     this.goToPage(toIndex);
@@ -2770,6 +2804,10 @@ export class App {
 
   /** "Reemplazar": cambia la PRÓXIMA coincidencia (desde la página actual o desde la última reemplazada) y avisa de las que no puede tocar. */
   private async reemplazarActual(): Promise<void> {
+    await this.conOperacion('Reemplazar', () => this.reemplazarActualInterno());
+  }
+
+  private async reemplazarActualInterno(): Promise<void> {
     const s = this.session;
     if (!s || !this.bus || this.reemplazando) return;
     const q = this.searchInput.value.trim();
@@ -2796,7 +2834,7 @@ export class App {
         newText: aplicarReemplazos(hit.texto, [hit.c], reemplazo), linea: hit.linea
       };
       const cmd = new ReemplazarTextoCmd([cambio], 'Reemplazar');
-      await this.bus.execute(cmd);
+      await this.bus.execute(cmd, true);
       this.cursorReemplazo = cmd.resumen.sustituidos > 0
         ? { pageIndex: hit.pageIndex, runId: -1, pos: 0 } // el run se recreó con otro runId
         : { pageIndex: hit.pageIndex, runId: hit.runId, pos: hit.c.inicio + reemplazo.length };
@@ -2846,6 +2884,10 @@ export class App {
 
   /** "Reemplazar todo": UN comando compuesto (un solo paso de deshacer) sobre todo el documento. */
   private async reemplazarTodo(): Promise<void> {
+    await this.conOperacion('Reemplazar todo', () => this.reemplazarTodoInterno());
+  }
+
+  private async reemplazarTodoInterno(): Promise<void> {
     const s = this.session;
     if (!s || !this.bus || this.reemplazando) return;
     const q = this.searchInput.value.trim();
@@ -2872,7 +2914,7 @@ export class App {
         ceder: cederHilo,
         paginasPorTanda: PAGE_YIELD_CHUNK
       });
-      await this.bus.execute(cmd);
+      await this.bus.execute(cmd, true);
       this.cursorReemplazo = null;
       // Los runs que no se pudieron escribir quedaron intactos: no cuentan como reemplazos.
       for (const f of cmd.fallidosCambios) n -= coincidenciasPorRun.get(`${f.pageIndex}:${f.runId}`) ?? 0;
@@ -2972,6 +3014,7 @@ export class App {
    *   ocultos ni oyentes globales (E-014/E-020, AGENTS.md §2.6).
    */
   private async print(): Promise<void> {
+    if (this.bloqueado()) return;
     const s = this.session;
     if (!s) { this.setStatus('Abre un documento antes de imprimir.'); return; }
 
@@ -3038,6 +3081,7 @@ export class App {
   }
 
   private async save(): Promise<void> {
+    if (this.bloqueado()) return;
     const s = this.session;
     if (!s) return;
     // saveCompact (E-038): guardado de cara al usuario, descarta huérfanos.
@@ -3103,7 +3147,11 @@ export class App {
   /** `#btn-extract-text`: abre el diálogo de texto plano de todo el documento (#27 de la tabla de paridad, §9). */
   private async openTextPanel(): Promise<void> {
     if (!this.session) { this.setStatus('Abre un documento antes de extraer texto.'); return; }
-    const total = this.session.model.pages.length;
+    await this.conOperacion('Texto…', () => this.openTextPanelInterno());
+  }
+
+  private async openTextPanelInterno(): Promise<void> {
+    const total = this.session?.model.pages.length ?? 0;
     this.setStatus(total > PAGE_YIELD_CHUNK ? `Extrayendo texto… 0/${total}` : 'Extrayendo texto…');
     const lineas = await this.allPagesLineas((hechas, t) => this.setStatus(`Extrayendo texto… ${hechas}/${t}`));
     const texto = aTextoPlano(lineas);
@@ -3114,7 +3162,11 @@ export class App {
   /** `#btn-export-md`: descarga el Markdown estructurado de todo el documento (#31 de la tabla de paridad, §9). */
   private async exportMarkdown(): Promise<void> {
     if (!this.session) { this.setStatus('Abre un documento antes de exportar Markdown.'); return; }
-    const total = this.session.model.pages.length;
+    await this.conOperacion('Exportar Markdown', () => this.exportMarkdownInterno());
+  }
+
+  private async exportMarkdownInterno(): Promise<void> {
+    const total = this.session?.model.pages.length ?? 0;
     this.setStatus(total > PAGE_YIELD_CHUNK ? `Generando Markdown… 0/${total}` : 'Generando Markdown…');
     const lineas = await this.allPagesLineas((hechas, t) => this.setStatus(`Generando Markdown… ${hechas}/${t}`));
     const md = aMarkdown(lineas);
@@ -3127,6 +3179,63 @@ export class App {
   private inputNombreSubida: HTMLInputElement | null = null;
 
   private setStatus(msg: string): void { this.status.textContent = msg; }
+
+  /** E-087: operación larga en curso (cede el hilo); una sola a la vez. Ver `conOperacion`. */
+  private operacion: { nombre: string; cancelable: boolean } | null = null;
+
+  /** Botones que mutan el documento o lo exportan: en `aria-disabled` mientras dura una operación larga (el clic sigue avisando). */
+  private static readonly IDS_CANDADO = [
+    'btn-save', 'btn-print', 'btn-undo', 'btn-redo', 'btn-new', 'btn-delete', 'btn-ocr', 'btn-filter', 'btn-compress',
+    'btn-encabezado', 'btn-rotate', 'btn-duplicate', 'btn-extract-text', 'btn-export-md', 'btn-insert', 'btn-highlight',
+    'btn-underline', 'btn-strike'
+  ];
+
+  /** Avisa y devuelve `true` si hay una operación larga en curso (el llamador debe abstenerse de actuar). */
+  private bloqueado(): boolean {
+    const op = this.operacion;
+    if (!op) return false;
+    this.setStatus(this.avisoOperacion(op));
+    return true;
+  }
+
+  private avisoOperacion(op: { nombre: string; cancelable: boolean }): string {
+    return `Espera a que termine «${op.nombre}»…${op.cancelable ? ' o cancélalo' : ''}.`;
+  }
+
+  private actualizarCandado(): void {
+    for (const id of App.IDS_CANDADO) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      if (this.operacion) {
+        // El estado lo pisa el avance de la operación: el motivo queda también en el tooltip del botón.
+        if (el.dataset.tituloOriginal === undefined) el.dataset.tituloOriginal = el.title;
+        el.title = this.avisoOperacion(this.operacion);
+        el.setAttribute('aria-disabled', 'true');
+      } else {
+        if (el.dataset.tituloOriginal !== undefined) { el.title = el.dataset.tituloOriginal; delete el.dataset.tituloOriginal; }
+        el.removeAttribute('aria-disabled');
+      }
+    }
+  }
+
+  /**
+   * E-087: ejecuta `fn` como la ÚNICA operación larga en curso. Mientras dura, el bus descarta los cambios ajenos y
+   * Guardar, Imprimir, Deshacer, Rehacer y las demás operaciones avisan en lugar de actuar; la navegación y el zoom no
+   * se tocan. Se libera siempre (`finally`): al terminar, cancelar o fallar. Si ya hay otra, avisa y devuelve `undefined`.
+   */
+  private async conOperacion<T>(nombre: string, fn: () => Promise<T>, cancelable = false): Promise<T | undefined> {
+    if (this.bloqueado()) return undefined;
+    this.operacion = { nombre, cancelable };
+    const liberarBus = this.bus?.bloquear(nombre) ?? null;
+    this.actualizarCandado();
+    try {
+      return await fn();
+    } finally {
+      liberarBus?.();
+      this.operacion = null;
+      this.actualizarCandado();
+    }
+  }
 }
 
 function rgbToHex(r: number, g: number, b: number): string {

@@ -3015,3 +3015,61 @@ deshacer).
 se pierde, como en E-083). Las palabras nuevas no heredan el recorte (`clip`) del objeto original. Cambiar tamaño o fuente
 (`setRunFontSize`, `setLineProps`) de una línea de TeX con espacios sigue sin tratarse: con la fuente sin espacio devuelve
 `glyph-missing` en vez de perder los espacios.
+
+### E-087 · Guardar, Imprimir y Deshacer seguían activos durante una operación larga (Reemplazar todo en un documento grande)
+
+**Síntoma.** En un documento de 1256 páginas, con «Reemplazando… 260/810» en curso, Guardar seguía habilitado y descargaba un PDF mezcla
+(1108 «oracle» y 1022 «elcaro»); la operación terminaba después sin aviso. Lo mismo era posible con comprimir, OCR, filtros,
+encabezado y marca de agua y Texto…/Markdown (todas ceden el hilo), y con Deshacer/Rehacer o ediciones a mitad de operación.
+
+**Causa raíz.** Cada operación larga solo deshabilitaba su propio botón; no existía el concepto de «operación en curso» del documento, así
+que cualquier otra acción (que lee o muta el mismo documento) podía intercalarse en los cedidos de hilo.
+
+**Arreglo.** Candado único en `App.conOperacion` + `CommandBus.bloquear`: una sola operación larga a la vez. Mientras dura, el bus
+descarta `execute`/`undo`/`redo` ajenos (la operación dueña pasa `propia = true`), Guardar, Imprimir, Deshacer, Rehacer, las ediciones,
+inserciones, borrados, rotar/duplicar/eliminar/reordenar páginas y abrir/nuevo avisan en `#status` y en el `title` del botón
+(«Espera a que termine «X»…», con «o cancélalo» si se puede cancelar) y los botones quedan en `aria-disabled`. Navegación y zoom no se
+tocan. Se libera siempre en `finally` (terminar, cancelar o fallar).
+
+**Cómo se detecta ahora.** `tests/e2e/next/candado-operacion.spec.ts` (grande.pdf: botones `aria-disabled`, Ctrl+S sin descarga,
+zoom libre, y tras terminar Guardar descarga el resultado completo) y `tests/unit/CandadoOperacion.test.ts`.
+
+**Límite.** La búsqueda sigue siendo libre durante una operación (solo lee y se invalida sola, y «Reemplazar» la repite al terminar).
+
+### E-088 · Al editar una palabra seguida de una ligadura (fi, ffi de Calibri/Chrome) la palabra de al lado salía deformada
+
+**Síntoma.** En un PDF de Chrome con Calibri («Una oficina eficiente: official fine find…») cambiar «fine» por «enif» dejaba «enif ƒind»:
+la «fi» de «find», que el usuario no había tocado, pasaba a la fuente de reserva con la «f» y la «i» sueltas (el subconjunto no tiene una
+«f» suelta), y el sufijo se movía con un avance equivocado (la ligadura mide 5,4 pt de caja y 8,8 pt de avance natural por caracteres).
+
+**Causa raíz.** Un objeto de texto que acaba en espacio («ne ») pierde ese espacio al releerlo (PDFium lo recorta), así que `editarLineaCompuesta`
+alargaba el tramo escrito con el objeto SIGUIENTE. En Chrome el siguiente objeto es el comienzo de la palabra de al lado, y con Calibri es
+una ligadura («fi»): se reescribía fuera de su fuente y el final «viejo» se medía con su avance natural (que sobrestima una ligadura).
+El solape de glifos del informe (F5) lo corrigió ya E-085 (final real medido con la caja); quedaba esta arrastrada.
+
+**Arreglo.** El espacio final del tramo escrito ya no se escribe ni arrastra al objeto siguiente: se escribe sin él y su avance natural se suma
+al final nuevo (`espacioFinal`), de modo que el sufijo conserva su hueco y los objetos vecinos no se tocan.
+
+**Cómo se detecta ahora.** Fixture `ligaduras.pdf` (TrueType sintética CID con «fi» como UN glifo de ToUnicode «fi», avance 15,84 pt por
+caracteres y caja 7,92 pt) y `tests/unit/Ligaduras.test.ts`: las ligaduras vecinas siguen siendo un objeto «fi» con la misma caja, sin
+solapes y con el hueco conservado.
+
+**Límite.** Una palabra con «f» o «i» que el subconjunto no trae sueltas (ligadura sin glifos separados) sigue usando la fuente de reserva
+con aviso (E-047) solo en el tramo editado.
+
+### E-089 · El OCR ignoraba `/Rotate`: el texto invisible quedaba mal colocado o girado en una página girada
+
+**Síntoma.** Con OCR en una página con `/Rotate` 90, 180 o 270 (un escaneo girado es lo normal), el texto reconocido se insertaba lejos de
+las palabras: seleccionar o buscar caía en otro sitio de la página (E-084 solo había corregido el origen de la caja visible).
+
+**Causa raíz.** `OcrPageCmd` reconoce sobre el render YA girado (px del bitmap visual, origen arriba-izquierda), pero `mapOcrLines` los pasaba
+a pt con la fórmula de una página sin girar (`y = alto − y1/escala`) y sin giro del texto. Con 90/270 además el alto de usuario es el ancho visual.
+
+**Arreglo.** `mapOcrLines(lines, scale, pagina)` recibe la página visual (`anchoVisualPt`, `altoVisualPt`, `rotacion`, `origenPt`) y usa la
+geometría común (`PageGeometry.desdeTamanoVisual` a escala 1, E-053/E-084) para pasar la esquina inferior-izquierda de cada caja al espacio de
+usuario; el texto se inserta con `giroGrados = rotacion` para quedar horizontal en la página girada. `OcrPageCmd` da el tamaño visual
+intercambiando ancho y alto de `pageBox` con 90/270.
+
+**Cómo se detecta ahora.** `tests/unit/OcrRotada.test.ts`: proveedor OCR falso con cajas conocidas sobre páginas `/Rotate` 0/90/180/270,
+con y sin CropBox desplazada; `findText` + `PageGeometry.rectPtToCss` deben caer sobre cada caja (izquierda ±2 pt, dentro de su franja
+vertical, horizontal).
