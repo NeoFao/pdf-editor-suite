@@ -2683,10 +2683,10 @@ la herramienta activa y el foco en el visor, en fase de captura para adelantarse
 - Nota: Enter la coloca sobre la línea enfocada o, si no hay, en la esquina superior izquierda de lo visible y abre
   el diálogo de texto.
 - Rectángulo: Enter crea un borrador de 120×80 pt centrado en lo visible; flechas lo mueven 5 pt, Mayús+flechas lo
-  redimensionan (← → ancho, ↑ ↓ alto); Enter lo confirma (un único \`DrawRectCmd\`, un solo paso de deshacer) y Esc
+  redimensionan (← → ancho, ↑ ↓ alto); Enter lo confirma (un único `DrawRectCmd`, un solo paso de deshacer) y Esc
   lo cancela. El borrador vive en puntos visuales de página (independiente de zoom y de /Rotate) y cada paso se
-  anuncia en \`#status\`.
-- Pluma: EXCEPCIÓN documentada (ayuda \`?\` y este registro). Un trazo a mano alzada depende del recorrido del
+  anuncia en `#status`.
+- Pluma: EXCEPCIÓN documentada (ayuda `?` y este registro). Un trazo a mano alzada depende del recorrido del
   movimiento, que WCAG 2.1.1 exime de requerir teclado; la alternativa para marcar sin ratón es Rectángulo,
   Resaltar, Subrayar, Tachar o Nota.
 

@@ -21,6 +21,10 @@ export class AtajosPanel {
     titulo.textContent = 'Atajos de teclado';
     titulo.style.fontWeight = 'bold';
     titulo.style.marginBottom = '8px';
+    // B2: el foco inicial va al título (no al primer enfocable, que era el enlace «Versión anterior»).
+    titulo.id = 'shortcuts-title';
+    titulo.tabIndex = -1;
+    dialog.setAttribute('aria-labelledby', 'shortcuts-title');
 
     const tabla = document.createElement('table');
     tabla.id = 'shortcuts-table';
@@ -71,5 +75,6 @@ export class AtajosPanel {
     dialog.addEventListener('close', () => dialog.remove());
     document.body.appendChild(dialog);
     dialog.showModal();
+    titulo.focus();
   }
 }
