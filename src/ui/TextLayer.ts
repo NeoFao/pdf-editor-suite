@@ -3,7 +3,7 @@ import type { PageGeometry } from '../coords/PageGeometry';
 import { cssFontFor } from './cssFontFor';
 import { measureFontAscent } from './measureFontAscent';
 import { registrarGesto } from './gesto';
-import { agruparLineasEditables, type LineaEditable } from '../texto/lineasEditables';
+import { agruparLineasEditables, type LineaEditable, type TramoEstilo } from '../texto/lineasEditables';
 
 /** `runId` es el del PRIMER objeto de la línea (el que da su tipografía); `linea` trae todos (N1). */
 export interface EditRequest { pageIndex: number; runId: number; newText: string; oldText: string; el: HTMLElement; linea: LineaEditable }
@@ -153,6 +153,7 @@ export class TextLayer {
 
       let oldText = texto;
       let editadoConTeclado = false;
+      let conTramos = false;
       const empezarEdicion = (): void => {
         for (const el of Array.from(this.host.querySelectorAll<HTMLElement>('.run'))) el.classList.remove('selected');
         block.classList.add('selected');
@@ -161,6 +162,11 @@ export class TextLayer {
         oldText = block.textContent ?? '';
         block.style.font = editFont;
         block.style.color = editColor;
+        // F4: una línea con varios estilos se edita viendo cada tramo con el suyo (negrita, color, cuerpo).
+        if (compuesta && linea.estilos.length > 1) {
+          this.pintarTramos(block, texto, linea.estilos);
+          conTramos = true;
+        }
 
         // E-030: reposiciona para que la línea base caiga exactamente en
         // `run.originPt` (px CSS de página, vía PageGeometry), no en el
@@ -231,6 +237,7 @@ export class TextLayer {
           transform: ''
         });
         const newText = block.textContent ?? '';
+        if (conTramos) { fijarTexto(block, newText); conTramos = false; } // vuelve a texto plano (sin tramos)
         if (newText !== oldText) {
           this.cb.onEdit({ pageIndex: this.page.index, runId: run.runId, newText, oldText, el: block, linea });
         }
@@ -246,7 +253,7 @@ export class TextLayer {
       block.addEventListener('keydown', (e) => {
         if (block.isContentEditable) {
           if (e.key === 'Enter') { e.preventDefault(); salirDeEdicion(); }
-          if (e.key === 'Escape') { block.textContent = oldText; salirDeEdicion(); }
+          if (e.key === 'Escape') { fijarTexto(block, oldText); conTramos = false; salirDeEdicion(); }
           return;
         }
         // Reposo: navegación entre runs y activación con teclado (A-03). Con Mayús/Alt/Ctrl/Cmd las flechas
@@ -263,6 +270,26 @@ export class TextLayer {
       block.appendChild(this.makeDragHandle(block, run.runId, linea.runIds));
       this.host.appendChild(block);
     }
+  }
+
+  /**
+   * Sustituye el contenido de `block` (menos el tirador) por un `<span class="run-estilo">` por tramo de estilo, cada
+   * uno con su fuente, su tamaño (px CSS = tamaño efectivo × escala) y su color. Solo `createElement` +
+   * `textContent` (§2.2): el texto del documento nunca se interpreta como marcado. Tamaños y fuentes de cada
+   * tramo van inline porque dependen de los datos del PDF (E-029: solo la geometría y lo que viene del documento).
+   */
+  private pintarTramos(block: HTMLElement, texto: string, estilos: readonly TramoEstilo[]): void {
+    const fragmento = document.createDocumentFragment();
+    for (const e of estilos) {
+      const span = document.createElement('span');
+      span.className = 'run-estilo';
+      span.textContent = texto.slice(e.inicio, e.fin);
+      span.style.font = cssFontFor(e.fontName, e.sizeEfectivoPt * this.geom.scale);
+      span.style.color = `rgb(${e.color[0]}, ${e.color[1]}, ${e.color[2]})`;
+      fragmento.appendChild(span);
+    }
+    quitarContenido(block);
+    block.insertBefore(fragmento, block.querySelector('.run-drag'));
   }
 
   /**
@@ -312,4 +339,17 @@ export class TextLayer {
     });
     return handle;
   }
+}
+
+/** Quita todo el contenido de `block` salvo el tirador de arrastre. */
+function quitarContenido(block: HTMLElement): void {
+  for (const n of Array.from(block.childNodes)) {
+    if (!(n instanceof HTMLElement && n.classList.contains('run-drag'))) block.removeChild(n);
+  }
+}
+
+/** Deja `block` con `texto` plano (un nodo de texto) y conserva el tirador de arrastre. */
+function fijarTexto(block: HTMLElement, texto: string): void {
+  quitarContenido(block);
+  block.insertBefore(document.createTextNode(texto), block.querySelector('.run-drag'));
 }

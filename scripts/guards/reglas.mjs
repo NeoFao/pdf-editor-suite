@@ -684,6 +684,35 @@ export const sinSetIsActiveComoBorrado = {
   }
 };
 
+/* ── E-083 · buscar y reemplazar opera sobre líneas editables, no sobre objetos de texto ── */
+/**
+ * Cada llamada a `buscarEnRuns(` fuera de su propio módulo debe recibir LÍNEAS editables (un identificador que contenga
+ * «linea»), no los `TextRun` crudos: en un PDF por glifo (Chrome) una palabra casi nunca cabe en un objeto.
+ */
+export function analizarBusquedaPorLinea(rel, contenido) {
+  if (rel === 'src/texto/buscarReemplazar.ts') return [];
+  const exentas = lineasExentas(contenido, 'busqueda-por-linea-editable');
+  const hallazgos = [];
+  contenido.split('\n').forEach((linea, i) => {
+    if (esComentario(linea) || exentas.has(i + 1)) return;
+    const m = /\bbuscarEnRuns\s*\((.*)$/.exec(linea);
+    if (m && !/linea/i.test(m[1])) hallazgos.push(hallazgo(rel, i + 1, 'buscarEnRuns() recibe objetos de texto, no líneas editables'));
+  });
+  return hallazgos;
+}
+
+export const conBusquedaPorLineaEditable = {
+  id: 'busqueda-por-linea-editable',
+  titulo: 'buscarEnRuns() recibe líneas editables, no objetos de texto',
+  comoArreglar:
+    'Agrupa los TextRun de la página con agruparLineasEditables() y pasa { runId: linea.runIds[0], text: linea.text } a ' +
+    'buscarEnRuns(). En un PDF de Chrome cada glifo es un objeto: buscar por objeto no encuentra casi nada y el reemplazo ' +
+    'no puede escribir sobre una palabra partida en muchos objetos (E-083). Escribe con engine.editLine (CambioTexto.linea).',
+  ejecutar() {
+    return recorrerFuentesTs((rel, contenido) => analizarBusquedaPorLinea(rel, contenido));
+  }
+};
+
 /* ── E-032 · toda navegación de página pasa por App.goToPage() ─────────── */
 export const conNavegacionPorGoToPage = {
   id: 'navegacion-por-gotopage',
@@ -1361,6 +1390,7 @@ export const TODAS = [
   conSetTextSoloViaEscribirTexto,
   sinGlyphPathComoCobertura,
   sinSetIsActiveComoBorrado,
+  conBusquedaPorLineaEditable,
   conNavegacionPorGoToPage,
   conWebServerNextSinReusar,
   conGestoConCancelacion,

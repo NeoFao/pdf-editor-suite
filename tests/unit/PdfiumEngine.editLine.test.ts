@@ -3,6 +3,7 @@ import { PdfiumEngine } from '../../src/engine/pdfium/PdfiumEngine';
 import { agruparLineasEditables, type LineaEditable } from '../../src/texto/lineasEditables';
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib';
 import { fixture } from './_util/fixtures';
+import { rectToQuad } from '../../src/coords/quads';
 
 /**
  * N1 F2: `editLine` reescribe una línea editable compuesta (decenas de objetos de 1-2 glifos) con el diff mínimo:
@@ -284,4 +285,118 @@ test('la edición de una línea compuesta carga la página UNA sola vez (E-037)'
   expect(eng.editLine(doc, 0, l, 'uno dos TRES cuatro cinco seis').ok).toBe(true);
   expect(cargas).toBe(1);
   eng.close(doc);
+});
+
+/**
+ * N1 F4 (2): al trasladar el sufijo Δ, los marcados (resaltado, subrayado, tachado) que cubren texto de ESE sufijo
+ * se trasladan con él (mismo Δ, pt de usuario, sobre el eje del texto). Lo demás no se toca.
+ */
+function quadsDe(eng: PdfiumEngine, doc: number, i: number): number[][] {
+  return eng.getMarkupQuads(doc, 0, i).map((q) => [...q]);
+}
+
+test('un resaltado sobre una palabra del sufijo la sigue al editar el prefijo; los demás marcados y notas no se mueven', async () => {
+  const { eng, doc } = await abrir('por-glifo.pdf');
+  const l = linea(eng, doc, 'uno dos tres cuatro cinco seis');
+  const cajaSeis = eng.findText(doc, 0, 'seis')[0]!;
+  const cajaUno = eng.findText(doc, 0, 'uno dos')[0]!;
+  const cajaCelda = eng.findText(doc, 0, 'Celda A1')[0]!;
+  const q = (r: { xPt: number; yPt: number; wPt: number; hPt: number }) => [rectToQuad(r)];
+  const iSeis = eng.addMarkup(doc, 0, 'highlight', q(cajaSeis), [255, 235, 0]);
+  const iUno = eng.addMarkup(doc, 0, 'underline', q(cajaUno), [255, 0, 0]);
+  const iCelda = eng.addMarkup(doc, 0, 'highlight', q(cajaCelda), [0, 255, 0]);
+  const iNota = eng.addNote(doc, 0, { xPt: cajaSeis.xPt, yPt: cajaSeis.yPt + 40, text: 'nota ajena' });
+  const antes = [iSeis, iUno, iCelda].map((i) => quadsDe(eng, doc, i));
+  const notasAntes = eng.getNotes(doc, 0).find((n) => n.index === iNota)!.rectPt;
+
+  const res = eng.editLine(doc, 0, l, 'uno dos TRES CUATRO tres cuatro cinco seis');
+  if (!res.ok || 'sinCambios' in res) throw new Error('inesperado');
+  expect(res.dxPt).toBeGreaterThan(5);
+
+  // «seis» se movió Δ en x: el quad y el texto real coinciden.
+  const despues = quadsDe(eng, doc, iSeis);
+  despues[0]!.forEach((v, k) => expect(v).toBeCloseTo(antes[0]![0]![k]! + (k % 2 === 0 ? res.dxPt : 0), 1));
+  const nuevaCaja = eng.findText(doc, 0, 'seis')[0]!;
+  expect(nuevaCaja.xPt).toBeCloseTo(cajaSeis.xPt + res.dxPt, 1);
+  expect(Math.min(despues[0]![0]!, despues[0]![4]!)).toBeCloseTo(nuevaCaja.xPt, 0);
+
+  // Los otros dos marcados y la nota, exactamente donde estaban.
+  expect(quadsDe(eng, doc, iUno)).toEqual(antes[1]);
+  expect(quadsDe(eng, doc, iCelda)).toEqual(antes[2]);
+  expect(eng.getNotes(doc, 0).find((n) => n.index === iNota)!.rectPt).toEqual(notasAntes);
+  eng.close(doc);
+});
+
+test('en texto girado 90° el marcado del sufijo se traslada sobre el eje del texto (vertical)', async () => {
+  const { eng, doc } = await abrir('por-glifo.pdf');
+  const l = linea(eng, doc, 'Texto girado');
+  // La caja de «girado» sale de los objetos de la línea (findText parte la palabra en texto girado: ver E-083).
+  const runs = eng.getPageText(doc, 0);
+  const cajas = l.tramos.filter((t) => l.text.slice(t.inicio, t.fin).trim() !== '' && t.inicio >= 'Texto '.length).map((t) => runs.find((r) => r.runId === t.runId)!.boxPt);
+  const x0 = Math.min(...cajas.map((b) => b.xPt)), y0 = Math.min(...cajas.map((b) => b.yPt));
+  const x1 = Math.max(...cajas.map((b) => b.xPt + b.wPt)), y1 = Math.max(...cajas.map((b) => b.yPt + b.hPt));
+  const caja = { xPt: x0, yPt: y0, wPt: x1 - x0, hPt: y1 - y0 };
+  const i = eng.addMarkup(doc, 0, 'highlight', [rectToQuad(caja)], [255, 235, 0]);
+  const antes = quadsDe(eng, doc, i)[0]!;
+  const res = eng.editLine(doc, 0, l, 'Texto muy girado');
+  if (!res.ok || 'sinCambios' in res) throw new Error('inesperado');
+  const despues = quadsDe(eng, doc, i)[0]!;
+  const dx = despues[0]! - antes[0]!, dy = despues[1]! - antes[1]!;
+  expect(Math.abs(dx)).toBeLessThan(0.01);
+  expect(Math.abs(Math.abs(dy) - Math.abs(res.dxPt))).toBeLessThan(0.05);
+  const runs2 = eng.getPageText(doc, 0);
+  const finales = runs2.filter((r) => 'girado'.includes(r.textoReal) && r.textoReal !== '' && r.matriz[1] !== 0);
+  const y1Nueva = Math.max(...finales.map((r) => r.boxPt.yPt + r.boxPt.hPt));
+  expect(y1Nueva).toBeCloseTo(y1 + dy, 1);
+  eng.close(doc);
+});
+
+test('un marcado que abarca la línea entera (también lo editado) no se traslada', async () => {
+  const { eng, doc } = await abrir('por-glifo.pdf');
+  const l = linea(eng, doc, 'uno dos tres cuatro cinco seis');
+  const i = eng.addMarkup(doc, 0, 'highlight', [rectToQuad(l.boxPt)], [255, 235, 0]);
+  const antes = quadsDe(eng, doc, i);
+  const res = eng.editLine(doc, 0, l, 'uno dos TRES CUATRO tres cuatro cinco seis');
+  expect(res.ok).toBe(true);
+  expect(quadsDe(eng, doc, i)).toEqual(antes);
+  eng.close(doc);
+});
+
+test('deshacer una edición que movió un marcado devuelve el marcado a su sitio (snapshot)', async () => {
+  const { eng, doc } = await abrir('por-glifo.pdf');
+  const l = linea(eng, doc, 'uno dos tres cuatro cinco seis');
+  const i = eng.addMarkup(doc, 0, 'highlight', [rectToQuad(eng.findText(doc, 0, 'seis')[0]!)], [255, 235, 0]);
+  const bytes = eng.save(doc);
+  eng.editLine(doc, 0, l, 'uno dos TRES CUATRO tres cuatro cinco seis');
+  expect(quadsDe(eng, doc, i)).not.toEqual(quadsDe(eng, await eng.open(bytes), i));
+  const recargado = await eng.open(bytes);
+  expect(quadsDe(eng, recargado, i)[0]![0]).toBeCloseTo(eng.findText(recargado, 0, 'seis')[0]!.xPt, 0);
+  eng.close(doc);
+});
+
+/**
+ * N1 F4 (5): en texto girado (θ = 90° en la página 1; página 2 con /Rotate 90) la relectura debe devolver EXACTAMENTE
+ * el texto pedido, sin el hueco falso («girad o») que el informe de F2/F3 temía. Se probó con casi 200 ediciones (sustituir,
+ * borrar, insertar en cada posición): ninguna dejaba hueco; este test fija un barrido representativo.
+ */
+test('texto girado: la relectura devuelve el texto pedido, sin hueco falso, editando en cualquier posición', async () => {
+  const eng = await PdfiumEngine.create();
+  const casos: [number, string][] = [[0, 'Texto girado'], [1, 'Linea uno de la pagina girada']];
+  let comprobadas = 0;
+  for (const [p, base] of casos) {
+    for (let i = 0; i <= base.length; i++) {
+      const variantes = [base.slice(0, i) + 'XY' + base.slice(i + 1), base.slice(0, i) + base.slice(i + 1), base.slice(0, i) + 'Z' + base.slice(i)];
+      for (const a of variantes) {
+        if (a === base || a === '' || /\s\s/.test(a) || /^\s|\s$/.test(a)) continue;
+        const doc = await eng.open(fixture('por-glifo.pdf'));
+        const l = linea(eng, doc, base, p);
+        const res = eng.editLine(doc, p, l, a);
+        expect(res.ok, a).toBe(true);
+        expect(lineas(eng, doc, p).some((x) => x.text === a), `«${a}» debe releerse igual`).toBe(true);
+        eng.close(doc);
+        comprobadas++;
+      }
+    }
+  }
+  expect(comprobadas).toBeGreaterThan(100);
 });

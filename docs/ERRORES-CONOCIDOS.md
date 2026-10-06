@@ -2881,7 +2881,41 @@ prefijo, sufijo trasladado Δ, columna adyacente intacta, multiestilo, borrado e
 página), `tests/unit/EditarLinea.test.ts` (deshacer devuelve los bytes renderizados idénticos) y `tests/e2e/next/editar-linea-n1.spec.ts`
 (Chromium real sobre `por-glifo.pdf`). Regla `no-setisactive-como-borrado`.
 
-**Límites conocidos.** El editor muestra la línea con la tipografía de su primer objeto (los tramos de estilo son F4); en una línea
-justificada solo el tramo editado pasa a espaciado natural; el panel de fuente/tamaño/color se desactiva en líneas compuestas;
-Reemplazar sigue operando por objeto; en texto girado PDFium puede generar un hueco falso al releer; no se trasladan las
-anotaciones propias que cubren el sufijo.
+**Límites conocidos.** (F4, ver E-083: resueltos el editor con tramos de estilo, el panel de propiedades, Reemplazar por línea y el
+traslado de marcados; el hueco falso en texto girado no se reproduce.) Queda: en una línea justificada solo el tramo editado pasa a
+espaciado natural.
+
+### E-083 · Reemplazar y el panel de propiedades seguían trabajando por objeto en los PDFs «por glifo» (N1 F4)
+
+**Síntoma.** Tras E-082 la línea ya se editaba entera, pero «Buscar y reemplazar» no encontraba casi nada en un PDF de Chrome (una
+palabra no cabe en un objeto de un carácter), el panel de fuente/tamaño/color estaba desactivado en esas líneas y un resaltado sobre
+una palabra del final de la línea se quedaba donde estaba al editar el principio (apuntaba a un hueco).
+
+**Causa raíz.** Tres piezas más equiparaban «objeto de texto» con «línea»: `buscarEnRuns` + `ReemplazarTextoCmd` (`editTextRun` por
+objeto), el panel (`SetRunFont*`/`SetColor` actúan sobre un objeto) y el traslado del sufijo, que solo movía objetos de página y no
+las anotaciones de marcado ancladas a ellos. Además, mantener cada glifo en su posición original al cambiar de fuente rompe la
+lectura del texto: PDFium parte las palabras en cuanto un glifo nuevo es más ancho que el original («m ixto»).
+
+**Arreglo.** (1) `buscarEnRuns` recibe líneas editables y `CambioTexto.linea` hace que `ReemplazarTextoCmd` escriba con
+`engine.editLine` (relocaliza la línea por su texto si los índices se desplazaron; deshacer por snapshot si hubo varios objetos).
+(2) `trasladarMarcadosSobre`: en `editLine`, los marcados (resaltado, subrayado, tachado) cuyo quad cae en la caja del sufijo y no
+empieza más de 1,5 em antes del final viejo del tramo editado se trasladan el mismo Δ (pt de usuario, sobre el eje del texto: la
+rotación de página no interviene porque todo está en espacio de usuario, E-053) y se regenera su `/AP`; un marcado que abarca
+también lo editado, los de otras líneas, las notas y los enlaces no se tocan. (3) `TextLayer.pintarTramos`: el editor pinta un
+`<span class="run-estilo">` por tramo de estilo (`createElement` + `textContent`, §2.2). (4) `engine.setLineProps` + `PropiedadesLineaCmd`:
+color (todos los objetos), tamaño (factor sobre el origen del primer objeto: conserva espaciado y proporciones) y fuente estándar
+(los objetos se agrupan por estilo contiguo y se reescriben a continuación unos de otros con el avance natural de la fuente nueva);
+una carga de página, un `GenerateContent`, deshacer por snapshot. (5) El hueco falso en texto girado que temía F2/F3 no se
+reproduce (≈200 ediciones en la línea girada 90° y en la página con `/Rotate 90`); queda un test de barrido.
+
+**Cómo se detecta ahora.** `tests/unit/ReemplazarLineas.test.ts`, `tests/e2e/next/reemplazar-lineas-n1.spec.ts`,
+`tests/unit/PdfiumEngine.editLine.test.ts` (marcados del sufijo, barrido en texto girado), `tests/e2e/next/marcado-sufijo-n1.spec.ts`,
+`tests/e2e/next/editar-estilos-n1.spec.ts`, `tests/unit/PdfiumEngine.setLineProps.test.ts`, `tests/unit/PropiedadesLinea.test.ts` y
+`tests/e2e/next/propiedades-linea-n1.spec.ts`. Regla `busqueda-por-linea-editable`.
+
+**Límites conocidos.** (a) Justificado: el tramo editado pasa a espaciado natural (como Acrobat al reescribir) y un cambio de fuente
+lo hace en toda la línea; no se aproxima la justificación porque rompería la prueba de píxeles fuera de la línea. (b) Cambiar la
+fuente de una línea de varios estilos conserva el color de cada tramo pero no la negrita/cursiva (todo pasa a la fuente elegida).
+(c) Un marcado ajeno que cubra el sufijo se traslada igual que uno propio: el PDF no distingue quién lo creó (el editor no escribe
+`/T`). (d) Un marcado que abarca a la vez lo editado y el sufijo no se estira ni se mueve. (e) Sin tratar aún: RTL, ligaduras,
+Type3 y `Tc`.

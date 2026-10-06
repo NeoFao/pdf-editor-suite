@@ -32,7 +32,7 @@ test('E-080: en un PDF con CTM 0,75 el editor y el panel usan el tamaño EFECTIV
   await expect(page.locator('#prop-size')).toHaveValue('11'); // antes: 14.5
 });
 
-test('N1: en una línea compuesta (varios objetos) el panel de propiedades se desactiva con un aviso, no cambia solo un glifo', async ({ page }) => {
+test('N1: en una línea compuesta el panel de propiedades está activo y muestra los valores de la línea', async ({ page }) => {
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(path.join(GEN, 'por-glifo.pdf'));
   const run = page.locator('.run', { hasText: 'Columna izquierda uno' });
@@ -40,10 +40,7 @@ test('N1: en una línea compuesta (varios objetos) el panel de propiedades se de
   await page.keyboard.press('Escape');
   await expect(page.locator('#props-panel')).toBeVisible();
   await expect(page.locator('#prop-size')).toHaveValue('11');
-  for (const id of ['#prop-size', '#prop-font', '#btn-color']) {
-    await expect(page.locator(id)).toBeDisabled();
-    await expect(page.locator(id)).toHaveAttribute('title', /varios tramos/);
-  }
+  for (const id of ['#prop-size', '#prop-font', '#btn-color']) await expect(page.locator(id)).toBeEnabled();
 });
 
 test('E-079: editar un subconjunto CID con un carácter ausente sustituye la fuente y el texto sobrevive (no .notdef)', async ({ page }) => {

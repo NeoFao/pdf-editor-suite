@@ -1,11 +1,18 @@
+import type { LineaParaEditar } from '../engine/PdfEngine';
+import { agruparLineasEditables } from '../texto/lineasEditables';
 import type { Command, Ctx } from './Command';
 
-/** Un run a reescribir: `runId` es el índice del objeto de texto en la página `pageIndex`. */
+/**
+ * Un tramo de texto a reescribir. `runId` es el índice del objeto de texto en la página `pageIndex`.
+ * Con `linea` (N1 F4) el cambio es sobre una LÍNEA EDITABLE: `runId` es su primer objeto, `oldText` su texto
+ * (`linea.text`) y se escribe con `engine.editLine` (diff mínimo, conserva los estilos de los tramos no tocados).
+ */
 export interface CambioTexto {
   pageIndex: number;
   runId: number;
   oldText: string;
   newText: string;
+  linea?: LineaParaEditar;
 }
 
 export interface ResumenReemplazo {
@@ -86,6 +93,19 @@ export class ReemplazarTextoCmd implements Command {
     for (let i = 0; i < paginas.length; i++) {
       const [pageIndex, lista] = paginas[i]!;
       for (const ch of lista) {
+        if (ch.linea) {
+          const r = this.editarLinea(c, ch);
+          if (r === 'ok') { resumen.editados++; this.aplicados.push(ch); continue; }
+          if (typeof r === 'object') {
+            resumen.sustituidos++;
+            if (!resumen.fuentes.includes(r.fuente)) resumen.fuentes.push(r.fuente);
+            this.aplicados.push(ch);
+            continue;
+          }
+          resumen.fallidos++;
+          this.fallidosCambios.push(ch);
+          continue;
+        }
         const res = c.engine.editTextRun(c.doc, pageIndex, ch.runId, ch.newText);
         if (res.ok) { resumen.editados++; this.aplicados.push(ch); continue; }
         if (res.reason === 'glyph-missing') {
@@ -109,6 +129,33 @@ export class ReemplazarTextoCmd implements Command {
       }
     }
     this.resumen = resumen;
+  }
+
+  /**
+   * Reescribe una línea editable. Si el modelo quedó desfasado (los índices de objeto se movieron por una edición
+   * anterior de otra línea: `stale`), se relocaliza la línea releyendo la página: la que tenga el mismo texto y esté más
+   * cerca del primer objeto original. Devuelve `'ok'`, `{ fuente }` si el tramo usó la fuente estándar (E-047), o `'fallo'`.
+   */
+  private editarLinea(c: Ctx, ch: CambioTexto): 'ok' | { fuente: string } | 'fallo' {
+    let linea: LineaParaEditar = ch.linea!;
+    for (let intento = 0; intento < 2; intento++) {
+      let res = c.engine.editLine(c.doc, ch.pageIndex, linea, ch.newText);
+      if (!res.ok && res.reason === 'glyph-missing') res = c.engine.editLine(c.doc, ch.pageIndex, linea, ch.newText, { fuenteEstandar: true });
+      if (res.ok) {
+        // Una línea de varios objetos cambia la estructura (objetos eliminados, sufijo trasladado): deshacer por snapshot.
+        const fuente = 'fuenteEstandar' in res ? res.fuenteEstandar : undefined;
+        if (linea.runIds.length > 1 || fuente) this.usoSustitucion = true;
+        return fuente ? { fuente } : 'ok';
+      }
+      if (res.reason !== 'stale' && res.reason !== 'not-a-text-run') return 'fallo';
+      c.refreshPage(ch.pageIndex); // relee el texto de ESA página (caché por página del modelo)
+      const candidatas = agruparLineasEditables(c.model.pages[ch.pageIndex]?.runs ?? [], ch.pageIndex)
+        .filter((l) => l.text === ch.oldText)
+        .sort((a, b) => Math.abs(a.runIds[0]! - ch.runId) - Math.abs(b.runIds[0]! - ch.runId));
+      if (candidatas.length === 0) return 'fallo';
+      linea = candidatas[0]!;
+    }
+    return 'fallo';
   }
 
   async undo(c: Ctx): Promise<void> {

@@ -4,7 +4,7 @@ import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
 import { validarUrlEnlace } from '../validarUrlEnlace';
 import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
 import type { QuadPt } from '../../coords/quads';
-import type { PdfEngine, CharBox, DocHandle, SizePt, TextRun, EditResult, EditLineResult, LineaParaEditar, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
+import type { PdfEngine, CharBox, DocHandle, SizePt, TextRun, EditResult, EditLineResult, LineaParaEditar, SetLinePropsResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_PAGEOBJ_PATH = 2;
@@ -879,7 +879,13 @@ export class PdfiumEngine implements PdfEngine {
       if (!this.p.FPDFPage_RemoveObject(page, a.obj)) continue;
       this.p.FPDFPageObj_Destroy(a.obj);
     }
-    if (delta !== 0) for (const o of sufijo) this.p.FPDFPageObj_Transform(o, 1, 0, 0, 1, delta * cos, delta * sin);
+    if (delta !== 0 && sufijo.length > 0) {
+      // F4: los marcados que cubren el sufijo viajan con él. La zona se mide ANTES de mover (caja unida de sus objetos).
+      const zona = this.cajaUnida(sufijo);
+      for (const o of sufijo) this.p.FPDFPageObj_Transform(o, 1, 0, 0, 1, delta * cos, delta * sin);
+      const emPt = sizeP * Math.hypot(matP[0], matP[1]);
+      this.trasladarMarcadosSobre(page, zona, { cos, sin, uInicio: finViejoU, emPt }, delta * cos, delta * sin);
+    }
 
     // Índice del primer objeto de la línea tras los borrados (los de índice menor lo desplazan).
     const eraPrimero = i0 === 0 && medioNuevo !== '' ? objEscrito : primeroLinea;
@@ -888,6 +894,91 @@ export class PdfiumEngine implements PdfEngine {
     for (let i = 0; i < total; i++) if (this.p.FPDFPage_GetObject(page, i) === eraPrimero) { lineaRunIdInicial = i; break; }
     this.p.FPDFPage_GenerateContent(page);
     return { ok: true, lineaRunIdInicial, dxPt: delta, ...(fuenteEstandar ? { fuenteEstandar } : {}) };
+  }
+
+  /** Caja unida (pt de usuario) de varios objetos de página: `FPDFPageObj_GetBounds`. */
+  private cajaUnida(objs: readonly number[]): { l: number; b: number; r: number; t: number } {
+    const m = this.mem;
+    const buf = m.malloc(16);
+    let l = Infinity, b = Infinity, r = -Infinity, t = -Infinity;
+    try {
+      for (const o of objs) {
+        if (!this.p.FPDFPageObj_GetBounds(o, buf, buf + 4, buf + 8, buf + 12)) continue;
+        l = Math.min(l, m.getValue(buf, 'float')); b = Math.min(b, m.getValue(buf + 4, 'float'));
+        r = Math.max(r, m.getValue(buf + 8, 'float')); t = Math.max(t, m.getValue(buf + 12, 'float'));
+      }
+    } finally {
+      m.free(buf);
+    }
+    return { l, b, r, t };
+  }
+
+  /**
+   * Traslada (dx, dy) pt de usuario los marcados (resaltado, subrayado, tachado) cuyos quads cubren la `zona` del sufijo
+   * de una línea editada (N1 F4). Un quad entra si su centro cae en la zona (caja del sufijo ANTES de moverlo) y no
+   * empieza antes del final viejo del tramo editado (`uInicio`, en el eje de `cos`/`sin`) más de 1,5 em: un marcado
+   * que abarca también lo editado (p. ej. la línea entera) se queda; uno que solo roza el límite (la palabra cuyo
+   * primer glifo entró en el tramo reescrito) viaja. Marcas de otras líneas, notas, enlaces y
+   * demás anotaciones no se tocan. Se regenera la apariencia (`/AP`) y `/Rect`.
+   */
+  private trasladarMarcadosSobre(
+    page: number,
+    zona: { l: number; b: number; r: number; t: number },
+    eje: { cos: number; sin: number; uInicio: number; emPt: number },
+    dx: number,
+    dy: number
+  ): void {
+    if (!Number.isFinite(zona.l)) return;
+    const m = this.mem;
+    const n = this.p.FPDFPage_GetAnnotCount(page);
+    const qptr = m.malloc(32);
+    const rptr = m.malloc(16);
+    try {
+      for (let i = 0; i < n; i++) {
+        const annot = this.p.FPDFPage_GetAnnot(page, i);
+        if (!annot) continue;
+        try {
+          const sub = this.p.FPDFAnnot_GetSubtype(annot);
+          if (sub !== FPDF_ANNOT_HIGHLIGHT && sub !== FPDF_ANNOT_UNDERLINE && sub !== FPDF_ANNOT_STRIKEOUT) continue;
+          const nq = this.p.FPDFAnnot_CountAttachmentPoints(annot);
+          const mover: number[] = [];
+          for (let k = 0; k < nq; k++) {
+            if (!this.p.FPDFAnnot_GetAttachmentPoints(annot, k, qptr)) continue;
+            const q = Array.from({ length: 8 }, (_, j) => m.getValue(qptr + j * 4, 'float'));
+            const cx = (q[0]! + q[2]! + q[4]! + q[6]!) / 4, cy = (q[1]! + q[3]! + q[5]! + q[7]!) / 4;
+            const uMin = Math.min(...[0, 2, 4, 6].map((j) => q[j]! * eje.cos + q[j + 1]! * eje.sin));
+            const dentro = cx >= zona.l - 0.5 && cx <= zona.r + 0.5 && cy >= zona.b - 0.5 && cy <= zona.t + 0.5;
+            if (dentro && uMin >= eje.uInicio - 1.5 * eje.emPt) mover.push(k);
+          }
+          if (mover.length === 0) continue;
+          for (const k of mover) {
+            this.p.FPDFAnnot_GetAttachmentPoints(annot, k, qptr);
+            for (let j = 0; j < 8; j += 2) {
+              m.setValue(qptr + j * 4, m.getValue(qptr + j * 4, 'float') + dx, 'float');
+              m.setValue(qptr + (j + 1) * 4, m.getValue(qptr + (j + 1) * 4, 'float') + dy, 'float');
+            }
+            this.p.FPDFAnnot_SetAttachmentPoints(annot, k, qptr);
+          }
+          // /Rect = envolvente de TODOS los quads (los movidos y los que no).
+          let l = Infinity, b = Infinity, r = -Infinity, t = -Infinity;
+          for (let k = 0; k < nq; k++) {
+            if (!this.p.FPDFAnnot_GetAttachmentPoints(annot, k, qptr)) continue;
+            for (let j = 0; j < 8; j += 2) {
+              const x = m.getValue(qptr + j * 4, 'float'), y = m.getValue(qptr + (j + 1) * 4, 'float');
+              l = Math.min(l, x); r = Math.max(r, x); b = Math.min(b, y); t = Math.max(t, y);
+            }
+          }
+          m.setValue(rptr, l, 'float'); m.setValue(rptr + 4, t, 'float'); m.setValue(rptr + 8, r, 'float'); m.setValue(rptr + 12, b, 'float');
+          this.p.FPDFAnnot_SetRect(annot, rptr);
+          this.p.EPDFAnnot_GenerateAppearance(annot);
+        } finally {
+          this.p.FPDFPage_CloseAnnot(annot);
+        }
+      }
+    } finally {
+      m.free(qptr);
+      m.free(rptr);
+    }
   }
 
   /**
@@ -1134,6 +1225,137 @@ export class PdfiumEngine implements PdfEngine {
     if (!this.textoEscritoCoincide(page, newObj, newText)) return { ok: false, reason: 'glyph-missing' };
 
     return { ok: true, runId: newRunId, obj: newObj };
+  }
+
+  setLineProps(
+    doc: DocHandle,
+    pageIndex: number,
+    linea: LineaParaEditar,
+    props: { color?: [number, number, number]; escala?: number; fuenteEstandar?: string }
+  ): SetLinePropsResult {
+    if (linea.tramos.length === 0) return { ok: false, reason: 'not-a-text-run' };
+    const k = props.escala;
+    if (k !== undefined && (!Number.isFinite(k) || k <= 0)) return { ok: false, reason: 'invalid-size' };
+    if (props.fuenteEstandar !== undefined && !(STANDARD_FONTS as readonly string[]).includes(props.fuenteEstandar)) return { ok: false, reason: 'invalid-font' };
+    const m = this.mem;
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      let objs = linea.tramos.map((t) => this.p.FPDFPage_GetObject(page, t.runId));
+      if (objs.some((o) => !o || this.p.FPDFPageObj_GetType(o) !== FPDF_PAGEOBJ_TEXT)) return { ok: false, reason: 'not-a-text-run' };
+      const tfDe = (o: number): number => { const tf = m.malloc(4); this.p.FPDFTextObj_GetFontSize(o, tf); const v = m.getValue(tf, 'float'); m.free(tf); return v; };
+      // Tamaño: se valida ANTES de escribir nada (el efectivo de cada objeto, E-080, debe quedar entre 1 y 400 pt).
+      if (k !== undefined) {
+        for (const o of objs) {
+          const mt = this.matrizDe(o);
+          const efectivo = tfDe(o) * Math.hypot(mt[0], mt[1]) * k;
+          if (efectivo < 1 || efectivo > 400) return { ok: false, reason: 'invalid-size' };
+        }
+      }
+      if (props.fuenteEstandar !== undefined) {
+        const r = this.reflujoEnFuente(doc, page, linea, objs, props.fuenteEstandar);
+        if (!r.ok) return r; // sin GenerateContent: al cerrar la página el cambio en memoria se descarta
+        objs = r.objs;
+      }
+      if (props.color) for (const o of objs) this.p.FPDFPageObj_SetFillColor(o, props.color[0], props.color[1], props.color[2], 255);
+      if (k !== undefined && k !== 1) {
+        // Escala k respecto al ORIGEN del primer objeto: x' = k·x + (1−k)·x0. Es la misma transformación para todos
+        // (el origen de cada uno se aleja o acerca al del primero k veces) y escala también el tamaño efectivo.
+        const mt0 = this.matrizDe(objs[0]!);
+        const tx = (1 - k) * mt0[4], ty = (1 - k) * mt0[5];
+        for (const o of objs) this.p.FPDFPageObj_Transform(o, k, 0, 0, k, tx, ty);
+      }
+      this.p.FPDFPage_GenerateContent(page);
+      let lineaRunIdInicial = linea.tramos[0]!.runId;
+      const total = this.p.FPDFPage_CountObjects(page);
+      for (let i = 0; i < total; i++) if (this.p.FPDFPage_GetObject(page, i) === objs[0]) { lineaRunIdInicial = i; break; }
+      return { ok: true, lineaRunIdInicial };
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  /**
+   * Cambio de fuente de una línea editable: sus objetos (uno por glifo en un PDF de Chrome) se agrupan por estilo
+   * contiguo (mismo color, matriz y línea base) y cada grupo pasa a UN objeto en la fuente estándar con el texto del
+   * grupo, colocado a continuación del anterior con el avance NATURAL de la fuente nueva. Mantener los glifos en sus
+   * posiciones antiguas con otra fuente rompería la lectura del texto (PDFium partiría palabras en cuanto un glifo es
+   * más ancho que el original); el precio es que una línea justificada pasa a espaciado natural (limitación F4).
+   * Devuelve los objetos nuevos en orden visual (uno por grupo). No genera contenido.
+   */
+  private reflujoEnFuente(
+    doc: DocHandle,
+    page: number,
+    linea: LineaParaEditar,
+    objs: number[],
+    fuente: string
+  ): { ok: true; objs: number[] } | { ok: false; reason: 'glyph-missing' } {
+    const m = this.mem;
+    const mat0 = this.matrizDe(objs[0]!);
+    const theta = Math.atan2(mat0[1], mat0[0]);
+    const cos = Math.cos(theta), sin = Math.sin(theta);
+    interface Med { obj: number; mat: [number, number, number, number, number, number]; u: number; v: number; color: string; tf: number }
+    const meds: Med[] = objs.map((obj) => {
+      const mat = this.matrizDe(obj);
+      const r = m.malloc(4), g = m.malloc(4), b = m.malloc(4), a = m.malloc(4);
+      this.p.FPDFPageObj_GetFillColor(obj, r, g, b, a);
+      const color = [r, g, b, a].map((ptr) => m.getValue(ptr, 'i32')).join(',');
+      [r, g, b, a].forEach((ptr) => m.free(ptr));
+      const tf = m.malloc(4); this.p.FPDFTextObj_GetFontSize(obj, tf);
+      const size = m.getValue(tf, 'float'); m.free(tf);
+      return { obj, mat, u: mat[4] * cos + mat[5] * sin, v: -mat[4] * sin + mat[5] * cos, color, tf: size };
+    });
+    // Grupos de objetos consecutivos (orden visual) con el mismo estilo.
+    const mismo = (a: Med, b: Med): boolean =>
+      a.color === b.color && a.tf === b.tf && [0, 1, 2, 3].every((i) => Math.abs(a.mat[i]! - b.mat[i]!) < 1e-4) && Math.abs(a.v - b.v) < 0.01;
+    const grupos: { desde: number; hasta: number }[] = [];
+    meds.forEach((md, i) => {
+      const g = grupos[grupos.length - 1];
+      if (g && mismo(meds[g.hasta]!, md)) g.hasta = i; else grupos.push({ desde: i, hasta: i });
+    });
+    // Texto de cada grupo: el de la línea entre sus objetos (con los espacios que PDFium generó entre ellos). Un blanco
+    // al final de un grupo pasa al principio del siguiente (PDFium lo recorta al releer); en el último se descarta.
+    const textos = grupos.map((g) => linea.text.slice(linea.tramos[g.desde]!.inicio, linea.tramos[g.hasta]!.fin));
+    const hayEspacioEntre = grupos.map((g, i) => i > 0 && linea.tramos[g.desde]!.inicio > linea.tramos[grupos[i - 1]!.hasta]!.fin);
+    for (let i = 0; i < grupos.length; i++) {
+      if (hayEspacioEntre[i]) textos[i] = ' ' + textos[i];
+      if (i < grupos.length - 1) {
+        const cola = /\s+$/.exec(textos[i]!);
+        if (cola) { textos[i] = textos[i]!.slice(0, cola.index); textos[i + 1] = ' ' + textos[i + 1]; }
+      } else textos[i] = textos[i]!.replace(/\s+$/, '');
+    }
+    const indiceActual = (obj: number): number => {
+      const n = this.p.FPDFPage_CountObjects(page);
+      for (let i = 0; i < n; i++) if (this.p.FPDFPage_GetObject(page, i) === obj) return i;
+      return -1;
+    };
+    const nuevos: number[] = [];
+    const sobrantes: number[] = [];
+    let u = meds[0]!.u;
+    for (let gi = 0; gi < grupos.length; gi++) {
+      const g = grupos[gi]!;
+      const primero = meds[g.desde]!;
+      const texto = textos[gi]!;
+      for (let i = g.desde + 1; i <= g.hasta; i++) sobrantes.push(meds[i]!.obj);
+      if (texto.trim() === '') { sobrantes.push(primero.obj); continue; } // grupo solo de blancos: no hay nada que escribir
+      const res = this.sustituirObjeto(page, primero.obj, indiceActual(primero.obj), texto, () => this.p.FPDFPageObj_NewTextObj(doc, fuente, primero.tf));
+      if (!res.ok) return res;
+      // Posición: a continuación del grupo anterior (u) y en la línea base propia del grupo (v original).
+      const mt = this.matrizDe(res.obj);
+      const e = u * cos - primero.v * sin, f = u * sin + primero.v * cos;
+      const buf = m.malloc(24);
+      [mt[0], mt[1], mt[2], mt[3], e, f].forEach((val, i) => m.setValue(buf + i * 4, val, 'float'));
+      this.p.FPDFPageObj_SetMatrix(res.obj, buf);
+      m.free(buf);
+      u += this.avanceNatural(this.p.FPDFTextObj_GetFont(res.obj), primero.tf, Math.hypot(mt[0], mt[1]), texto);
+      nuevos.push(res.obj);
+    }
+    if (nuevos.length === 0) return { ok: false, reason: 'glyph-missing' };
+    for (const o of sobrantes) {
+      if (!this.p.FPDFPage_RemoveObject(page, o)) continue;
+      this.p.FPDFPageObj_Destroy(o);
+    }
+    return { ok: true, objs: nuevos };
   }
 
   moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean {
