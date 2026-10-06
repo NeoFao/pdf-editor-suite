@@ -145,3 +145,76 @@ test('word-jpeg.docx en Node (sin createImageBitmap): la imagen NO se pierde en 
   expect(engine.getPageText(doc, 0).map((r) => r.text).join(' ')).toContain('JPEG');
   engine.close(doc);
 });
+
+// ---------------------------------------------------------------------------
+// Fase 2b (T6): encabezados/pies, título no huérfano, bordes por celda, imagen flotante.
+// Los literales son copia deliberada de `generar-fixtures.mjs` (ver la nota de arriba).
+// ---------------------------------------------------------------------------
+
+test('word-encabezados.docx: 3 páginas; encabezado first en la 1, default en la 2 y 3; pie "Página N de 3" en todas, vectorial y sin avisos', async () => {
+  const engine = await PdfiumEngine.create();
+  const conversor = new ConversorDocxNavegador(engine);
+  const { pdf, advertencias } = await conversor.convertir('word-encabezados.docx', leerFixture('word-encabezados.docx'));
+  expect(advertencias).toEqual([]);
+
+  const doc = await engine.open(pdf);
+  expect(engine.pageCount(doc)).toBe(3);
+  const texto = (p: number): string => engine.getPageText(doc, p).map((r) => r.text).join(' ');
+
+  expect(texto(0)).toContain('Encabezado de portada');
+  expect(texto(0)).not.toContain('Encabezado general');
+  for (const p of [1, 2]) {
+    expect(texto(p)).toContain('Encabezado general');
+    expect(texto(p)).not.toContain('Encabezado de portada');
+  }
+  // PAGE (w:fldSimple) y NUMPAGES (w:fldChar/w:instrText) resueltos con las dos pasadas.
+  expect(texto(0)).toContain('Página 1 de 3');
+  expect(texto(1)).toContain('Página 2 de 3');
+  expect(texto(2)).toContain('Página 3 de 3');
+  // El texto cacheado por Word ("1") no se duplica: el pie tiene EXACTAMENTE un "de".
+  expect(texto(1).match(/ de /g)).toHaveLength(1);
+
+  // Posición: el encabezado va arriba (dentro del margen de 72 pt) y el pie abajo.
+  const cab = engine.getPageText(doc, 1).find((r) => r.text.includes('Encabezado general'))!;
+  const pie = engine.getPageText(doc, 1).find((r) => r.text.includes('Página 2'))!;
+  expect(cab.boxPt.yPt).toBeGreaterThan(792 - 72); // por encima del margen superior
+  expect(pie.boxPt.yPt).toBeLessThan(72); // por debajo del margen inferior
+  for (let p = 0; p < 3; p++) expect(engine.listImageObjects(doc, p)).toEqual([]);
+  engine.close(doc);
+});
+
+test('word-encabezados.docx: el título que caería solo al pie de la página 1 se va a la 2 con su párrafo (no queda huérfano)', async () => {
+  const engine = await PdfiumEngine.create();
+  const { pdf } = await new ConversorDocxNavegador(engine).convertir('word-encabezados.docx', leerFixture('word-encabezados.docx'));
+  const doc = await engine.open(pdf);
+  const texto = (p: number): string => engine.getPageText(doc, p).map((r) => r.text).join(' ');
+  expect(texto(0)).not.toContain('Resultados del informe');
+  expect(texto(0)).toContain('Línea de relleno 52'); // la página 1 sí se llenó hasta el final
+  expect(texto(1)).toContain('Resultados del informe');
+  expect(texto(1)).toContain('Texto que acompaña al título.');
+  // Y la tabla con bordes por celda llega entera con su texto.
+  for (const celda of ['Celda A1', 'Celda B1', 'Celda A2', 'Celda B2']) expect(texto(1)).toContain(celda);
+  expect(texto(2)).toContain('Contenido de la página tres.');
+  engine.close(doc);
+});
+
+test('word-flotante.docx: la imagen flotante se coloca en su posición de página (72 pt, 144 pt desde arriba) y se avisa "sin ajuste de texto"', async () => {
+  const engine = await PdfiumEngine.create();
+  const { pdf, advertencias } = await new ConversorDocxNavegador(engine).convertir('word-flotante.docx', leerFixture('word-flotante.docx'));
+  expect(advertencias.join(' | ')).toMatch(/imagen flotante colocada sin ajuste de texto/i);
+  expect(advertencias.join(' | ')).not.toMatch(/omiti/i);
+
+  const doc = await engine.open(pdf);
+  const imagenes = engine.listImageObjects(doc, 0);
+  expect(imagenes).toHaveLength(1);
+  const r = imagenes[0]!.rectPt;
+  expect(Math.abs(r.xPt - 72)).toBeLessThanOrEqual(1);
+  expect(Math.abs(r.wPt - 72)).toBeLessThanOrEqual(1);
+  expect(Math.abs(r.hPt - 72)).toBeLessThanOrEqual(1);
+  expect(Math.abs(r.yPt - (792 - 144 - 72))).toBeLessThanOrEqual(1); // y PDF: abajo-izquierda
+  // El texto sigue en su sitio (no lo empuja la imagen): el primer párrafo arranca bajo el margen superior.
+  const runs = engine.getPageText(doc, 0);
+  expect(runs.map((x) => x.text).join(' ')).toContain('Texto del párrafo que ancla la imagen flotante.');
+  expect(runs.find((x) => x.text.includes('Texto del párrafo'))!.boxPt.yPt).toBeGreaterThan(792 - 72 - 20);
+  engine.close(doc);
+});

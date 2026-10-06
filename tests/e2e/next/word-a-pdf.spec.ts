@@ -19,6 +19,8 @@ const WORD_TABLA_IMAGEN = path.resolve(AQUI, '../../fixtures/generados/word-tabl
 const WORD_JPEG = path.resolve(AQUI, '../../fixtures/generados/word-jpeg.docx');
 const WORD_COMBINADA = path.resolve(AQUI, '../../fixtures/generados/word-combinada.docx');
 const WORD_COMPLETO = path.resolve(AQUI, '../../fixtures/generados/word-completo.docx');
+const WORD_ENCABEZADOS = path.resolve(AQUI, '../../fixtures/generados/word-encabezados.docx');
+const WORD_FLOTANTE = path.resolve(AQUI, '../../fixtures/generados/word-flotante.docx');
 
 async function dataTransferConFichero(page: Page, bytes: number[], fileName: string, mime: string) {
   return page.evaluateHandle(({ bytes, fileName, mime }) => {
@@ -124,4 +126,42 @@ test('abrir word-combinada.docx: la celda combinada verticalmente muestra su tex
   expect(textos.filter((t) => t.includes('Fusionada'))).toHaveLength(1);
   expect(textos.join(' ')).toContain('fila cuatro');
   await expect(page.locator('#conversion-warnings')).toBeHidden();
+});
+
+test('abrir word-encabezados.docx: 3 páginas, pie "Página N de 3" en cada una, encabezado de portada solo en la 1 y sin aviso (fase 2b)', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(WORD_ENCABEZADOS);
+  await expect(page.locator('.run').first()).toBeVisible();
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
+
+  const indicador = await page.locator('#page-indicator').textContent();
+  expect(Number((indicador ?? '').split('/')[1]?.trim())).toBe(3);
+
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#btn-save').click()]);
+  const destino = path.join(test.info().outputDir, 'word-encabezados.pdf');
+  await download.saveAs(destino);
+  const eng = await PdfiumEngine.create();
+  const doc = await eng.open(new Uint8Array(fs.readFileSync(destino)));
+  const texto = (p: number): string => eng.getPageText(doc, p).map((r) => r.text).join(' ');
+  expect(eng.pageCount(doc)).toBe(3);
+  expect(texto(0)).toContain('Encabezado de portada');
+  expect(texto(1)).toContain('Encabezado general');
+  expect(texto(0)).toContain('Página 1 de 3');
+  expect(texto(1)).toContain('Página 2 de 3');
+  expect(texto(2)).toContain('Página 3 de 3');
+  // El título no queda huérfano al pie de la página 1.
+  expect(texto(0)).not.toContain('Resultados del informe');
+  expect(texto(1)).toContain('Resultados del informe');
+  eng.close(doc);
+});
+
+test('abrir word-flotante.docx: la imagen flotante se coloca (una imagen en la capa) y el aviso visible dice que va sin ajuste de texto', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(WORD_FLOTANTE);
+  await expect(page.locator('.run').first()).toBeVisible();
+  await expect(page.locator('.image-box')).toHaveCount(1);
+
+  await expect(page.locator('#conversion-warnings')).toBeVisible();
+  const aviso = (await page.locator('#conversion-warnings').textContent()) ?? '';
+  expect(aviso).toMatch(/imagen flotante colocada sin ajuste de texto/i);
 });

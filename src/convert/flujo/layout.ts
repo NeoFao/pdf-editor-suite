@@ -145,7 +145,32 @@ export interface FlowTableStart { kind: 'tableStart'; headerRows: FlowTableRow[]
 /** Cierra la tabla abierta por el último `FlowTableStart`: deja de repetir encabezado tras este punto. */
 export interface FlowTableEnd { kind: 'tableEnd' }
 
-export type FlowItem = FlowLine | FlowGap | FlowRule | FlowPageBreak | FlowImage | FlowTableRow | FlowTableStart | FlowTableEnd;
+/**
+ * Marcadores de grupo "mantener juntos" (fase 2b: `w:keepNext`/`w:keepLines`
+ * de DOCX). Todo lo que hay entre un `keepStart` y su `keepEnd` se trata como
+ * un bloque indivisible: si no cabe entero en lo que queda de la página y sí
+ * cabría en una página nueva, `paginar` salta de página ANTES de empezarlo.
+ * Un grupo más alto que una página entera se ignora (no se puede mantener
+ * junto): fluye con normalidad. No se anidan: un `keepStart` abre un grupo
+ * plano que termina en el siguiente `keepEnd` (o en un salto de página).
+ */
+export interface FlowKeepStart { kind: 'keepStart' }
+export interface FlowKeepEnd { kind: 'keepEnd' }
+
+/** Posición horizontal de una imagen flotante, en PUNTOS PDF (no EMU), respecto a `rel`. Con `align` se ignora `offsetPt`. */
+export interface PosFlotanteH { rel: 'page' | 'margin' | 'leftMargin' | 'rightMargin'; offsetPt?: number; align?: 'left' | 'center' | 'right' }
+/** Posición vertical de una imagen flotante, en puntos PDF medidos HACIA ABAJO desde el borde superior de `rel` (`paragraph` = tope del párrafo que la ancla). */
+export interface PosFlotanteV { rel: 'page' | 'margin' | 'topMargin' | 'bottomMargin' | 'paragraph'; offsetPt?: number; align?: 'top' | 'center' | 'bottom' }
+
+/**
+ * Imagen flotante (`wp:anchor` de DOCX, fase 2b), SIN ajuste de texto: ocupa
+ * 0 pt de flujo (el texto no la rodea, queda por encima) y `paginar` la
+ * coloca en la página del siguiente contenido, en su posición absoluta o
+ * relativa al margen/párrafo.
+ */
+export interface FlowFloatImage { kind: 'floatImage'; imgId: string; wPt: number; hPt: number; h: PosFlotanteH; v: PosFlotanteV }
+
+export type FlowItem = FlowLine | FlowGap | FlowRule | FlowPageBreak | FlowImage | FlowTableRow | FlowTableStart | FlowTableEnd | FlowKeepStart | FlowKeepEnd | FlowFloatImage;
 
 /** Tamaño y márgenes de una página, en puntos PDF. */
 export interface PageGeometry {
@@ -323,11 +348,37 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     cursor -= row.height;
   }
 
-  for (const item of items) {
+  // Imágenes flotantes a la espera de la página y el cursor definitivos del siguiente contenido.
+  const flotantesPendientes: FlowFloatImage[] = [];
+  function colocarFlotantes(): void {
+    for (const f of flotantesPendientes) {
+      const { x, yTop } = posicionFlotante(f, geo, cursor);
+      imagenes.push({ page, xPt: x, yPt: geo.heightPt - yTop - f.hPt, wPt: f.wPt, hPt: f.hPt, imgId: f.imgId });
+      pintadoEnPagina = true;
+    }
+    flotantesPendientes.length = 0;
+  }
+
+  for (let idx = 0; idx < items.length; idx++) {
+    const item = items[idx]!;
     if (item.kind === 'tableStart') { encabezadosTabla = item.headerRows; continue; }
     if (item.kind === 'tableEnd') { encabezadosTabla = []; continue; }
+    if (item.kind === 'keepEnd') continue;
+    if (item.kind === 'floatImage') { flotantesPendientes.push(item); continue; }
+    if (item.kind === 'keepStart') {
+      // Altura total del grupo (hasta su `keepEnd` o un salto de página explícito).
+      let total = 0;
+      for (let j = idx + 1; j < items.length; j++) {
+        const q = items[j]!;
+        if (q.kind === 'keepEnd' || q.kind === 'pagebreak' || q.kind === 'keepStart') break;
+        total += alturaDeFlujo(q);
+      }
+      if (cursor < topPt && cursor - total < bottomPt && total <= topPt - bottomPt) nuevaPagina();
+      continue;
+    }
 
     if (item.kind === 'pagebreak') {
+      colocarFlotantes();
       if (pintadoEnPagina) nuevaPagina();
       continue;
     }
@@ -346,12 +397,14 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
         // de la tabla en la página nueva).
         if (!item.esEncabezado) for (const h of encabezadosTabla) colocarFila(h);
       }
+      colocarFlotantes();
       colocarFila(item);
       continue;
     }
 
     if (item.kind === 'image') {
       if (cursor - item.height < bottomPt && cursor < topPt) nuevaPagina();
+      colocarFlotantes();
       const bottom = cursor - item.height;
       imagenes.push({ page, xPt: item.xPt, yPt: bottom, wPt: item.wPt, hPt: item.height, imgId: item.imgId });
       pintadoEnPagina = true;
@@ -366,6 +419,7 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
       if (item.kind === 'gap') continue;
     }
 
+    if (item.kind === 'line' || item.kind === 'rule') colocarFlotantes();
     const bottom = cursor - item.height;
 
     if (item.kind === 'line') {
@@ -390,10 +444,72 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     cursor = bottom;
   }
 
+  colocarFlotantes();
   const advertencias: string[] = [];
   if (mergesPartidos.size > 0) {
     const c = mergesPartidos.size;
     advertencias.push(`${c === 1 ? 'Una celda combinada verticalmente cruza' : `${c} celdas combinadas verticalmente cruzan`} un salto de página: la celda se muestra cortada en el salto (el texto está en la primera página de la combinación).`);
   }
   return { totalPaginas: page + 1, trazos, barras, imagenes, enlaces, advertencias };
+}
+
+/** Altura que un ítem ocupa en el flujo, en puntos PDF (0 para marcadores y flotantes). */
+function alturaDeFlujo(item: FlowItem): number {
+  return item.kind === 'line' || item.kind === 'gap' || item.kind === 'rule' || item.kind === 'image' || item.kind === 'tableRow' ? item.height : 0;
+}
+
+/** Altura total, en puntos PDF, que ocuparían `items` apilados en una zona (encabezado/pie). */
+export function altoZona(items: FlowItem[]): number {
+  return items.reduce((sum, it) => sum + alturaDeFlujo(it), 0);
+}
+
+/**
+ * Esquina superior-izquierda de una imagen flotante, en puntos PDF: `x` desde
+ * el borde izquierdo de la página, `yTop` HACIA ABAJO desde el borde superior.
+ * `cursorPt` es la y PDF (abajo-izquierda) del tope del contenido actual,
+ * para `rel: 'paragraph'`.
+ */
+function posicionFlotante(f: FlowFloatImage, geo: PageGeometry, cursorPt: number): { x: number; yTop: number } {
+  const W = geo.widthPt, H = geo.heightPt;
+  const [x0, x1] = f.h.rel === 'page' ? [0, W]
+    : f.h.rel === 'leftMargin' ? [0, geo.marginLeftPt]
+      : f.h.rel === 'rightMargin' ? [W - geo.marginRightPt, W]
+        : [geo.marginLeftPt, W - geo.marginRightPt];
+  const x = f.h.align === 'left' ? x0
+    : f.h.align === 'center' ? x0 + (x1 - x0 - f.wPt) / 2
+      : f.h.align === 'right' ? x1 - f.wPt
+        : x0 + (f.h.offsetPt ?? 0);
+  const [y0, y1] = f.v.rel === 'page' ? [0, H]
+    : f.v.rel === 'topMargin' ? [0, geo.marginTopPt]
+      : f.v.rel === 'bottomMargin' ? [H - geo.marginBottomPt, H]
+        : f.v.rel === 'paragraph' ? [H - cursorPt, H - geo.marginBottomPt]
+          : [geo.marginTopPt, H - geo.marginBottomPt];
+  const yTop = f.v.align === 'top' ? y0
+    : f.v.align === 'center' ? y0 + (y1 - y0 - f.hPt) / 2
+      : f.v.align === 'bottom' ? y1 - f.hPt
+        : y0 + (f.v.offsetPt ?? 0);
+  return { x, yTop };
+}
+
+/** Lo que `colocarZona` coloca en UNA página concreta (sin `totalPaginas`: la zona nunca pagina). */
+export interface ZonaColocada { trazos: Trazo[]; barras: Barra[]; imagenes: ImagenColocada[]; enlaces: EnlaceColocado[] }
+
+/**
+ * Coloca `items` (el contenido de un encabezado o un pie) en la página
+ * `page`. `'arriba'`: el borde superior del contenido queda a `distanciaPt`
+ * del borde superior de la página (`w:pgMar w:header`). `'abajo'`: el borde
+ * inferior queda a `distanciaPt` del inferior (`w:pgMar w:footer`) y el
+ * contenido crece hacia arriba. Puro: reutiliza `paginar` sobre una página
+ * virtual del alto exacto del contenido y traslada el resultado.
+ */
+export function colocarZona(
+  items: FlowItem[], pagina: { widthPt: number; heightPt: number }, ancla: 'arriba' | 'abajo', distanciaPt: number, page: number, baselineFraction: number
+): ZonaColocada {
+  const alto = altoZona(items);
+  const holgura = 1; // evita que el redondeo de coma flotante fuerce un salto de página dentro de la zona
+  const virtual: PageGeometry = { widthPt: pagina.widthPt, heightPt: alto + holgura, marginTopPt: 0, marginBottomPt: 0, marginLeftPt: 0, marginRightPt: 0 };
+  const res = paginar(items, virtual, baselineFraction);
+  const dy = ancla === 'arriba' ? pagina.heightPt - distanciaPt - (alto + holgura) : distanciaPt - holgura;
+  const mover = <T extends { page: number; yPt: number }>(xs: T[]): T[] => xs.filter((x) => x.page === 0).map((x) => ({ ...x, page, yPt: x.yPt + dy }));
+  return { trazos: mover(res.trazos), barras: mover(res.barras), imagenes: mover(res.imagenes), enlaces: mover(res.enlaces) };
 }

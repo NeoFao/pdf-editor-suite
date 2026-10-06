@@ -5,7 +5,8 @@ import { renderizarModeloDocx } from '../../src/convert/docx/render';
 /** medir falso exacto (5pt por carácter): dimensiones predecibles. */
 const medir = (_f: string, _s: number, t: string): number => t.length * 5;
 
-const BORDES = '<w:tblBorders><w:top w:val="single" w:sz="8" w:color="000000"/></w:tblBorders>'; // 1pt
+// 1pt en los seis lados: desde la fase 2b los bordes se leen POR LADO (antes, un solo lado se aplicaba a toda la tabla).
+const BORDES = '<w:tblBorders>' + ['top', 'bottom', 'left', 'right', 'insideH', 'insideV'].map((l) => '<w:' + l + ' w:val="single" w:sz="8" w:color="000000"/>').join('') + '</w:tblBorders>';
 const SECT_A4 = '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>';
 /** Página de 150pt de alto con 20pt de margen: 110pt útiles. */
 const SECT_BAJA = '<w:sectPr><w:pgSz w:w="12240" w:h="3000"/><w:pgMar w:top="400" w:right="1440" w:bottom="400" w:left="1440"/></w:sectPr>';
@@ -31,9 +32,10 @@ test('vMerge: la celda combinada es UNA celda: texto una vez, sombreado en todas
   const x0 = 72; // margen izquierdo, 1440 twips
   const amarillas = res.barras.filter((b) => b.color[0] === 255 && b.color[1] === 204 && b.xPt === x0);
   expect(amarillas).toHaveLength(3); // una franja por fila combinada
-  // Bordes horizontales de 1pt que cubren toda la columna 1: solo el de arriba y el final de la tabla (no 2 internos).
+  // Bordes horizontales de 1pt de la columna 1 (100pt): solo el de arriba y el de abajo de la celda combinada (no 2 internos).
+  // Desde la fase 2b cada celda dibuja su propio borde inferior en la última fila (antes, una sola barra de 200pt para toda la tabla).
   const horizontales = res.barras.filter((b) => b.hPt === 1 && b.xPt === x0 && Math.abs(b.wPt - 100) < 1);
-  expect(horizontales).toHaveLength(1); // el inferior de la tabla abarca todo el ancho (200pt), el superior es el único de 100pt
+  expect(horizontales).toHaveLength(2);
   expect(res.advertencias).toEqual([]);
 });
 

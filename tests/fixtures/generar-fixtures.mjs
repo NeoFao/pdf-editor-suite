@@ -766,6 +766,89 @@ function docxCompleto() {
 }
 
 /**
+ * Fixture de la fase 2b (encabezados y pies): 3 páginas Carta con encabezado `first` (portada) distinto del `default`
+ * (`w:titlePg`), pie "Página X de Y" con PAGE (w:fldSimple) y NUMPAGES (w:fldChar/w:instrText) en TODAS las páginas, un
+ * título (Heading1) que sin `keepNext` caería solo al pie de la página 1 (52 líneas de 12 pt = 624 pt de 648 útiles; el
+ * título mide ~21 pt: cabe, pero su párrafo siguiente no), y una tabla con bordes POR CELDA (`w:tcBorders`, sin
+ * `w:tblBorders`). El título y su párrafo deben acabar JUNTOS en la página 2.
+ */
+export const DOCX_ENC_PORTADA = 'Encabezado de portada';
+export const DOCX_ENC_GENERAL = 'Encabezado general';
+export const DOCX_ENC_TITULO = 'Resultados del informe';
+export const DOCX_ENC_TEXTO_TRAS_TITULO = 'Texto que acompaña al título.';
+export const DOCX_ENC_CELDAS = ['Celda A1', 'Celda B1', 'Celda A2', 'Celda B2'];
+export const DOCX_ENC_PAGINA_TRES = 'Contenido de la página tres.';
+/** Líneas de relleno de la página 1. */
+export const DOCX_ENC_RELLENO = 52;
+
+function docxEncabezados() {
+  const sz = '<w:rPr><w:sz w:val="20"/></w:rPr>';
+  const linea = (t) => `<w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r>${sz}<w:t>${t}</w:t></w:r></w:p>`;
+  const relleno = Array.from({ length: DOCX_ENC_RELLENO }, (_v, i) => linea(`Línea de relleno ${i + 1}`)).join('');
+  const celda = (t, bordes) => `<w:tc><w:tcPr>${bordes}</w:tcPr><w:p><w:r>${sz}<w:t>${t}</w:t></w:r></w:p></w:tc>`;
+  const rojo = ['top', 'bottom', 'left', 'right'].map((l) => `<w:${l} w:val="single" w:sz="24" w:color="C00000"/>`).join('');
+  const azulAbajo = '<w:bottom w:val="single" w:sz="16" w:color="1F3864"/>';
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  ${relleno}
+  <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>${DOCX_ENC_TITULO}</w:t></w:r></w:p>
+  <w:p><w:r><w:t>${DOCX_ENC_TEXTO_TRAS_TITULO}</w:t></w:r></w:p>
+  <w:tbl>
+    <w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid>
+    <w:tr>${celda(DOCX_ENC_CELDAS[0], `<w:tcBorders>${rojo}</w:tcBorders>`)}${celda(DOCX_ENC_CELDAS[1], `<w:tcBorders>${azulAbajo}</w:tcBorders>`)}</w:tr>
+    <w:tr>${celda(DOCX_ENC_CELDAS[2], '')}${celda(DOCX_ENC_CELDAS[3], `<w:tcBorders>${azulAbajo}</w:tcBorders>`)}</w:tr>
+  </w:tbl>
+  <w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:r><w:t>${DOCX_ENC_PAGINA_TRES}</w:t></w:r></w:p>
+  <w:sectPr>
+    <w:headerReference w:type="default" r:id="rIdH1"/><w:headerReference w:type="first" r:id="rIdH2"/>
+    <w:footerReference w:type="default" r:id="rIdF1"/><w:footerReference w:type="first" r:id="rIdF1"/>
+    <w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/><w:titlePg/>
+  </w:sectPr>
+</w:body></w:document>`;
+  const cab = (t) => `<?xml version="1.0" encoding="UTF-8"?><w:hdr><w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="20"/></w:rPr><w:t>${t}</w:t></w:r></w:p></w:hdr>`;
+  const pie = `<?xml version="1.0" encoding="UTF-8"?><w:ftr><w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="0" w:after="0"/></w:pPr>
+    <w:r>${sz}<w:t xml:space="preserve">Página </w:t></w:r>
+    <w:fldSimple w:instr=" PAGE \\* MERGEFORMAT "><w:r>${sz}<w:t>1</w:t></w:r></w:fldSimple>
+    <w:r>${sz}<w:t xml:space="preserve"> de </w:t></w:r>
+    <w:r>${sz}<w:fldChar w:fldCharType="begin"/></w:r><w:r>${sz}<w:instrText xml:space="preserve"> NUMPAGES </w:instrText></w:r><w:r>${sz}<w:fldChar w:fldCharType="separate"/></w:r><w:r>${sz}<w:t>1</w:t></w:r><w:r>${sz}<w:fldChar w:fldCharType="end"/></w:r>
+  </w:p></w:ftr>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/styles.xml', datos: Buffer.from(STYLES_BASICO, 'utf-8') },
+    { nombre: 'word/_rels/document.xml.rels', datos: Buffer.from(relsXml([relacion('rIdH1', 'header', 'header1.xml', false), relacion('rIdH2', 'header', 'header2.xml', false), relacion('rIdF1', 'footer', 'footer1.xml', false)]), 'utf-8') },
+    { nombre: 'word/header1.xml', datos: Buffer.from(cab(DOCX_ENC_GENERAL), 'utf-8') },
+    { nombre: 'word/header2.xml', datos: Buffer.from(cab(DOCX_ENC_PORTADA), 'utf-8') },
+    { nombre: 'word/footer1.xml', datos: Buffer.from(pie, 'utf-8') }
+  ]);
+}
+
+/** `w:drawing` flotante (`wp:anchor`), sin ajuste de texto real: posición en EMU respecto a la PÁGINA. */
+function drawingAncla(rId, cxEmu, cyEmu, offHEmu, offVEmu) {
+  return `<w:drawing><wp:anchor behindDoc="0"><wp:positionH relativeFrom="page"><wp:posOffset>${offHEmu}</wp:posOffset></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>${offVEmu}</wp:posOffset></wp:positionV><wp:extent cx="${cxEmu}" cy="${cyEmu}"/><wp:wrapSquare wrapText="bothSides"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="${rId}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing>`;
+}
+
+/** Posición y tamaño de la imagen flotante de `word-flotante.docx`, en pt: 72 pt desde la izquierda y 144 pt desde arriba de la página Carta, 72x72 pt. */
+export const DOCX_FLOTANTE = { xPt: 72, desdeArribaPt: 144, wPt: 72, hPt: 72 };
+export const DOCX_FLOTANTE_TEXTO = 'Texto del párrafo que ancla la imagen flotante.';
+
+/** Un .docx con UNA imagen flotante posicionada respecto a la página (el texto no la rodea). */
+function docxFlotante() {
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:p><w:r>${drawingAncla('rId1', 914400, 914400, 914400, 1828800)}<w:t>${DOCX_FLOTANTE_TEXTO}</w:t></w:r></w:p>
+  <w:p><w:r><w:t>Segundo párrafo, sin nada especial.</w:t></w:r></w:p>
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/_rels/document.xml.rels', datos: Buffer.from(relsXml([relacion('rId1', 'image', 'media/image1.png', false)]), 'utf-8') },
+    { nombre: 'word/media/image1.png', datos: pngSolido(16, 16, [255, 0, 0]) }
+  ]);
+}
+
+/**
  * "Zip bomb" real: 8 MB de ceros comprimidos con deflate (que reduce a un
  * puñado de KB) en una única entrada — ejercita la defensa de ratio de
  * compresión de `src/convert/docx/zip.ts` con datos reales, no solo tamaños
@@ -850,6 +933,8 @@ async function main() {
     'word-completo.docx': docxCompleto(),
     'word-jpeg.docx': docxJpeg(),
     'word-combinada.docx': docxCombinada(),
+    'word-encabezados.docx': docxEncabezados(),
+    'word-flotante.docx': docxFlotante(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {

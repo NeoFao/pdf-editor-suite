@@ -3,13 +3,14 @@ import type { PdfEngine, DocHandle, PageOp } from '../engine/PdfEngine';
 import { abrirZip } from './docx/zip';
 import { DocxError } from './docx/DocxError';
 import { construirModeloDocx } from './docx/modelo';
+import { leerRelaciones, rutaMediaDesdeWord } from './docx/rels';
 import { renderizarModeloDocx } from './docx/render';
 import { decodificarImagenDocx, type ResultadoImagenDocx } from './imagenes/decodificarImagenDocx';
 import type { ImagenColocada } from './flujo/layout';
 
 /**
  * Conversor `.docx` (Word) -> PDF, 100% en el navegador, con el motor
- * PDFium (§9 fila #4, FASE 2a). Igual que `ConversorMarkdownNavegador`: el
+ * PDFium (§9 fila #4, FASE 2a + 2b). Igual que `ConversorMarkdownNavegador`: el
  * PDF resultante tiene texto REAL y vectorial (`insertText`), nunca una
  * imagen rasterizada — a diferencia de la app vieja (`docx-preview` +
  * `html2pdf`).
@@ -19,10 +20,15 @@ import type { ImagenColocada } from './flujo/layout';
  * IMÁGENES inline (`w:drawing`, PNG/JPEG, decodificadas por
  * `decodificarImagenDocx` y colocadas con `insertImage`) y ENLACES clicables
  * (`w:hyperlink` externo, anotación `/Link` real vía `addLink`, con la
- * misma validación de esquema que el motor). Sigue sin encabezados/pies de
- * página, cuadros de texto, notas al pie, campos ni control de cambios
+ * misma validación de esquema que el motor). Sigue sin cuadros de texto,
+ * notas al pie, otros campos ni control de cambios
  * resuelto — todo eso se CUENTA en `advertencias` (nunca se pierde en
  * silencio, ver `ConversorDocumento.ResultadoConversion`).
+ *
+ * Fase 2b: ENCABEZADOS y PIES repetidos en cada página (default/first/even,
+ * con `PAGE`/`NUMPAGES` resueltos en dos pasadas), título no huérfano
+ * (`w:keepNext`/`w:keepLines`), bordes por celda (`w:tcBorders`) e imágenes
+ * flotantes (`wp:anchor`) colocadas SIN ajuste de texto (con aviso).
  *
  * Fuentes: Calibri/Arial y similares se mapean a Helvetica, Times New
  * Roman/Cambria a Times, Consolas/Courier New a Courier (`fontClassify`),
@@ -52,7 +58,20 @@ export class ConversorDocxNavegador implements ConversorDocumento {
     const relsBytes = await zip.leer('word/_rels/document.xml.rels');
     const relsXml = relsBytes ? decodificador.decode(relsBytes) : null;
 
-    const modelo = construirModeloDocx(documentXml, stylesXml, numberingXml, relsXml);
+    // Fase 2b: encabezados y pies (`word/header*.xml`/`footer*.xml`, los que enlazan las relaciones del documento) y `settings.xml`
+    // (`w:evenAndOddHeaders`). Se leen aquí (el modelo es puro y no toca el ZIP) y se pasan ya decodificados.
+    const settingsBytes = await zip.leer('word/settings.xml');
+    const partes: Record<string, string> = {};
+    if (relsXml) {
+      for (const rel of leerRelaciones(relsXml).values()) {
+        if (!/(^|\/)(header|footer)\d*\.xml$/i.test(rel.target)) continue;
+        const ruta = rutaMediaDesdeWord(rel.target);
+        const bytesParte = await zip.leer(ruta);
+        if (bytesParte) partes[ruta] = decodificador.decode(bytesParte);
+      }
+    }
+
+    const modelo = construirModeloDocx(documentXml, stylesXml, numberingXml, relsXml, { settingsXml: settingsBytes ? decodificador.decode(settingsBytes) : null, partes });
 
     // Mismo caché de `measureText` por conversión que `ConversorMarkdownNavegador`
     // (ver el comentario allí): evita cruzar la frontera WASM por cada

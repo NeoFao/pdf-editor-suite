@@ -1,6 +1,6 @@
-import { esParrafo, esTabla, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx } from './modelo';
+import { esParrafo, esTabla, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type Borde, type BordesTabla, type ZonaPaginaModelo } from './modelo';
 import {
-  wrapAtoms, lineToFlowLine, paginar,
+  wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona,
   type Atom, type Medir, type FlowItem, type FlowLine, type FlowTableRow, type RelLinea, type RelBarra, type ResultadoLayout, type PageGeometry, type RGB
 } from '../flujo/layout';
 
@@ -20,7 +20,10 @@ import {
  * primera línea/colgante solo mueve la posición X de esa línea (y del
  * marcador de lista), no el ancho disponible para ajustar.
  */
-function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number, anchoPaginaPt: number, medir: Medir): FlowItem[] {
+/** Valores de los campos `PAGE`/`NUMPAGES` al maquetar un encabezado o pie de una página concreta. */
+interface ValoresCampo { pagina: number; total: number }
+
+function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number, anchoPaginaPt: number, medir: Medir, campos: ValoresCampo | null = null): FlowItem[] {
   const salida: FlowItem[] = [];
   if (p.saltoPaginaAntes) salida.push({ kind: 'pagebreak' });
   if (p.espacioAntesPt > 0) salida.push({ kind: 'gap', height: p.espacioAntesPt, bars: [] });
@@ -83,6 +86,12 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
         primerPalabra = false;
       }
       if (parte.texto.length > 0) terminaEnEspacio = /\s$/.test(parte.texto);
+    } else if (parte.tipo === 'campo') {
+      // Número de página/total: se pinta como un átomo de texto con el formato del campo (pegado a lo anterior si no hay espacio real).
+      if (!campos) continue;
+      const pegado = bufferAtomos.length > 0 && !terminaEnEspacio;
+      bufferAtomos.push({ text: String(parte.campo === 'PAGE' ? campos.pagina : campos.total), font: parte.formato.font, sizePt: parte.formato.sizePt, color: parte.formato.color, pegado, underline: parte.formato.underline });
+      terminaEnEspacio = false;
     } else if (parte.tipo === 'tab') {
       // Fase 1 sin tabulaciones reales (sin modelo de tab-stops): se
       // aproxima con un hueco de ancho fijo que participa en el ajuste de
@@ -96,6 +105,9 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
       volcar();
       salida.push({ kind: 'pagebreak' });
       terminaEnEspacio = true;
+    } else if (parte.tipo === 'imagen' && parte.flotante) {
+      // Imagen flotante (fase 2b): SIN ajuste de texto. Ocupa 0 pt de flujo; `paginar` la coloca en su posición en la página del contenido siguiente.
+      salida.push({ kind: 'floatImage', imgId: parte.refId, wPt: parte.wPt, hPt: parte.hPt, h: parte.flotante.h, v: parte.flotante.v });
     } else if (parte.tipo === 'imagen') {
       volcar();
       huboImagen = true;
@@ -166,7 +178,7 @@ function celdaAGrupos(celda: CeldaTabla): Atom[][] {
 }
 
 /** Contadores de degradaciones de tabla (se convierten en avisos al final de `renderizarModeloDocx`). */
-interface AvisosTabla { filasPartidas: number; anchoEscalado: number; gridAmpliado: number; mergeDemasiadoAlto: number; siguienteMerge: number }
+interface AvisosTabla { filasPartidas: number; anchoEscalado: number; gridAmpliado: number; mergeDemasiadoAlto: number; siguienteMerge: number; saltoEnZona: number }
 
 /** Una celda ya colocada en la rejilla de SU fila (x absoluto de página, en pt). */
 interface CeldaPos {
@@ -215,9 +227,9 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
   const tablaXPt = margenIzqPt;
   const xCol: number[] = [tablaXPt];
   for (const w of anchosColPt) xCol.push(xCol[xCol.length - 1]! + w);
-  const anchoTablaPt = xCol[xCol.length - 1]! - tablaXPt;
   const numCols = anchosColPt.length;
-  const g = t.bordeGrosorPt;
+  // Bordes de tabla por lado; un modelo construido a mano sin `bordesTabla` usa el color/grosor único de siempre en todos los lados.
+  const bt: BordesTabla = t.bordesTabla ?? (t.bordeColor ? Object.fromEntries(['top', 'bottom', 'left', 'right', 'insideH', 'insideV'].map((l) => [l, { color: t.bordeColor!, grosorPt: t.bordeGrosorPt }])) : {});
 
   const pos: CeldaPos[][] = t.filas.map((fila) => {
     let col = 0;
@@ -269,7 +281,32 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
 
   const participaEnMerge = (i: number): boolean => pos[i]!.some((p) => p.esContinuacion || p.filasCombinadas > 1);
 
-  function armarFila(i: number, lineasFila: FlowLine[][], altura: number, esEncabezado: boolean, bordeInferior: boolean): FlowTableRow {
+  /** Celda de la fila `i` que cubre la columna `col` (para consultar los bordes de la vecina de arriba/izquierda). */
+  const celdaEn = (i: number, col: number): CeldaPos | undefined => pos[i]?.find((q) => q.colStart <= col && col < q.colStart + Math.max(1, q.celda.gridSpan));
+  /**
+   * Borde efectivo de un lado de la celda `(i, k)`, con precedencia CELDA > TABLA (`undefined`/`null` = sin borde). Cada arista
+   * compartida la dibuja UNA sola celda: la de abajo/derecha (su borde superior/izquierdo), que a su vez hereda el borde
+   * inferior/derecho EXPLÍCITO de la de arriba/izquierda si ella no declara el suyo. Solo se dibujan inferior/derecho en el
+   * borde exterior de la tabla.
+   */
+  function bordeEfectivo(i: number, k: number, lado: 'top' | 'bottom' | 'left' | 'right'): Borde | null | undefined {
+    const p = pos[i]![k]!;
+    const propio = p.celda.bordes?.[lado];
+    if (propio !== undefined) return propio;
+    if (lado === 'top') {
+      if (i === 0) return bt.top;
+      const arriba = celdaEn(i - 1, p.colStart);
+      return arriba?.celda.bordes?.bottom !== undefined ? arriba.celda.bordes.bottom : bt.insideH;
+    }
+    if (lado === 'left') {
+      if (p.colStart === 0) return bt.left;
+      const izq = celdaEn(i, p.colStart - 1);
+      return izq?.celda.bordes?.right !== undefined ? izq.celda.bordes.right : bt.insideV;
+    }
+    return lado === 'bottom' ? bt.bottom : bt.right;
+  }
+
+  function armarFila(i: number, lineasFila: FlowLine[][], altura: number, esEncabezado: boolean, inferior: 'ninguno' | 'interno' | 'tabla'): FlowTableRow {
     const fila = pos[i]!;
     const lineasRel: RelLinea[] = [];
     lineasFila.forEach((ls) => {
@@ -282,14 +319,19 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
     const fondos: RelBarra[] = [];
     for (const p of fila) if (p.colorFondo) fondos.push({ relYPt: 0, hPt: altura, xPt: p.xStart, wPt: p.wPt, color: p.colorFondo });
     const bordes: RelBarra[] = [];
-    if (t.bordeColor) {
-      fila.forEach((p, k) => {
-        if (!p.esContinuacion) bordes.push({ relYPt: 0, hPt: g, xPt: p.xStart, wPt: p.wPt, color: t.bordeColor! });
-        bordes.push({ relYPt: 0, hPt: altura, xPt: p.xStart, wPt: g, color: t.bordeColor! });
-        if (k === fila.length - 1) bordes.push({ relYPt: 0, hPt: altura, xPt: p.xStart + p.wPt - g, wPt: g, color: t.bordeColor! });
-        if (bordeInferior) bordes.push({ relYPt: altura - g, hPt: g, xPt: p.xStart, wPt: p.wPt, color: t.bordeColor! });
-      });
-    }
+    fila.forEach((p, k) => {
+      const top = p.esContinuacion ? null : bordeEfectivo(i, k, 'top');
+      if (top) bordes.push({ relYPt: 0, hPt: top.grosorPt, xPt: p.xStart, wPt: p.wPt, color: top.color });
+      const left = bordeEfectivo(i, k, 'left');
+      if (left) bordes.push({ relYPt: 0, hPt: altura, xPt: p.xStart, wPt: left.grosorPt, color: left.color });
+      if (k === fila.length - 1) {
+        const right = bordeEfectivo(i, k, 'right');
+        if (right) bordes.push({ relYPt: 0, hPt: altura, xPt: p.xStart + p.wPt - right.grosorPt, wPt: right.grosorPt, color: right.color });
+      }
+      // Inferior: en el borde de la tabla (celda > tabla) o, en una fila partida, el interior de la tabla.
+      const bottom = inferior === 'tabla' ? bordeEfectivo(i, k, 'bottom') : inferior === 'interno' ? (p.celda.bordes?.bottom !== undefined ? p.celda.bordes.bottom : bt.insideH) : null;
+      if (bottom) bordes.push({ relYPt: altura - bottom.grosorPt, hPt: bottom.grosorPt, xPt: p.xStart, wPt: p.wPt, color: bottom.color });
+    });
     const mergeInicio = fila.filter((p) => p.filasCombinadas > 1).map((p) => p.mergeId!);
     const mergeContinua = fila.filter((p) => p.esContinuacion).map((p) => p.mergeId!);
     return { kind: 'tableRow', height: altura, lineas: lineasRel, fondos, bordes, esEncabezado, ...(mergeInicio.length ? { mergeInicio } : {}), ...(mergeContinua.length ? { mergeContinua } : {}) };
@@ -318,23 +360,19 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
   const encabezados: FlowTableRow[] = [];
   t.filas.forEach((f, i) => {
     if (alturas[i]! > maxFila && !f.esEncabezado) {
-      if (participaEnMerge(i)) { av.mergeDemasiadoAlto++; filasFlow.push(armarFila(i, lineas[i]!, alturas[i]!, false, false)); return; }
+      if (participaEnMerge(i)) { av.mergeDemasiadoAlto++; filasFlow.push(armarFila(i, lineas[i]!, alturas[i]!, false, i === t.filas.length - 1 ? 'tabla' : 'ninguno')); return; }
       av.filasPartidas++;
       const trozos = partirLineas(lineas[i]!, maxFila - TABLA_PAD_Y_PT * 2);
       trozos.forEach((tr, c) => {
         const alto = Math.max(14, ...tr.map((ls) => altoContenido(ls)));
-        filasFlow.push(armarFila(i, tr, alto, false, c < trozos.length - 1));
+        filasFlow.push(armarFila(i, tr, alto, false, c < trozos.length - 1 ? 'interno' : i === t.filas.length - 1 ? 'tabla' : 'ninguno'));
       });
       return;
     }
-    const fila = armarFila(i, lineas[i]!, alturas[i]!, f.esEncabezado, false);
+    const fila = armarFila(i, lineas[i]!, alturas[i]!, f.esEncabezado, i === t.filas.length - 1 ? 'tabla' : 'ninguno');
     filasFlow.push(fila);
     if (f.esEncabezado) encabezados.push(fila);
   });
-  if (t.bordeColor && filasFlow.length > 0) {
-    const ultima = filasFlow[filasFlow.length - 1]!;
-    ultima.bordes.push({ relYPt: ultima.height - g, hPt: g, xPt: tablaXPt, wPt: anchoTablaPt, color: t.bordeColor });
-  }
 
   return [
     { kind: 'gap', height: 6, bars: [] },
@@ -352,25 +390,120 @@ function mensajesTabla(av: AvisosTabla): string[] {
   if (av.mergeDemasiadoAlto > 0) out.push(c(av.mergeDemasiadoAlto, 'Una fila con celdas combinadas verticalmente es más alta que una página y no se pudo partir: parte de su contenido puede quedar fuera de la página.', '{n} filas con celdas combinadas verticalmente son más altas que una página y no se pudieron partir: parte de su contenido puede quedar fuera de la página.'));
   if (av.gridAmpliado > 0) out.push(c(av.gridAmpliado, 'Una tabla tenía filas con más celdas que columnas en su rejilla; se ampliaron las columnas (72 pt cada una) para no perder celdas.', '{n} tablas tenían filas con más celdas que columnas en su rejilla; se ampliaron las columnas (72 pt cada una) para no perder celdas.'));
   if (av.anchoEscalado > 0) out.push(c(av.anchoEscalado, 'Una tabla más ancha que la página se escaló proporcionalmente al ancho útil.', '{n} tablas más anchas que la página se escalaron proporcionalmente al ancho útil.'));
+  if (av.saltoEnZona > 0) out.push(c(av.saltoEnZona, 'Un salto de página dentro de un encabezado o pie se ignoró.', '{n} saltos de página dentro de encabezados o pies se ignoraron.'));
   return out;
 }
 
+/** Un bloque del documento ya convertido a ítems de flujo, con sus banderas de "mantener junto". */
+interface BloqueRenderizado { items: FlowItem[]; keepNext: boolean; keepLines: boolean }
+
+const KS: FlowItem = { kind: 'keepStart' };
+const KE: FlowItem = { kind: 'keepEnd' };
+
+/** Índice del último ítem que es una línea (o -1). */
+function ultimaLinea(items: FlowItem[]): number {
+  for (let i = items.length - 1; i >= 0; i--) if (items[i]!.kind === 'line') return i;
+  return -1;
+}
+/** Índice del primer ítem con contenido (línea, imagen o fila de tabla), o el último si no hay. */
+function primerContenido(items: FlowItem[]): number {
+  const i = items.findIndex((it) => it.kind === 'line' || it.kind === 'image' || it.kind === 'tableRow');
+  return i === -1 ? items.length - 1 : i;
+}
+
+/**
+ * Aplica `w:keepNext`/`w:keepLines` (fase 2b) envolviendo en `keepStart`/`keepEnd` lo que debe quedar junto:
+ * - `keepLines`: todo el párrafo en una página.
+ * - `keepNext` (sin `keepLines`): la ÚLTIMA línea del párrafo con el contenido que sigue.
+ * - Una cadena de `keepNext` se mantiene toda junta y termina en la primera línea (o fila) del primer bloque sin `keepNext`.
+ * Un grupo más alto que una página lo ignora `paginar` (no se puede mantener junto).
+ */
+function agruparKeep(bloques: BloqueRenderizado[]): FlowItem[] {
+  const out: FlowItem[] = [];
+  let abierto = false; // hay un `keepStart` sin cerrar: el bloque anterior pidió "con el siguiente"
+  for (const b of bloques) {
+    const { items } = b;
+    if (!abierto) {
+      if (!b.keepNext && !b.keepLines) { out.push(...items); continue; }
+      const inicio = b.keepLines ? 0 : Math.max(0, ultimaLinea(items));
+      out.push(...items.slice(0, inicio), KS, ...items.slice(inicio));
+      if (b.keepNext) abierto = true; else out.push(KE);
+      continue;
+    }
+    if (b.keepNext || b.keepLines) {
+      out.push(...items);
+      if (!b.keepNext) { out.push(KE); abierto = false; }
+      continue;
+    }
+    const corte = primerContenido(items);
+    out.push(...items.slice(0, corte + 1), KE, ...items.slice(corte + 1));
+    abierto = false;
+  }
+  if (abierto) out.push(KE);
+  return out;
+}
+
+/** Contenido de un encabezado o pie para una página concreta: sin huecos al principio/final ni saltos de página. */
+function itemsDeZona(ps: Parrafo[], modelo: ModeloDocx, medir: Medir, campos: ValoresCampo, av: AvisosTabla): FlowItem[] {
+  const items: FlowItem[] = [];
+  for (const p of ps) items.push(...renderizarParrafo(p, modelo.margenIzqPt, modelo.margenDerPt, modelo.paginaAnchoPt, medir, campos));
+  const utiles = items.filter((it) => {
+    if (it.kind === 'pagebreak') { av.saltoEnZona++; return false; }
+    return it.kind !== 'keepStart' && it.kind !== 'keepEnd';
+  });
+  while (utiles.length > 0 && utiles[0]!.kind === 'gap') utiles.shift();
+  while (utiles.length > 0 && utiles[utiles.length - 1]!.kind === 'gap') utiles.pop();
+  return utiles;
+}
+
+/** Qué zona (default/first/even) toca en la página `n` (1-based): `first` con `titlePg`, `even` con `evenAndOddHeaders`. `null` = esa página no lleva nada. */
+function zonaDePagina(z: ZonaPaginaModelo, n: number, modelo: ModeloDocx): Parrafo[] | null {
+  if (modelo.tituloPagina && n === 1) return z.first;
+  if (modelo.paresImpares && n % 2 === 0) return z.even;
+  return z.default;
+}
+
 export function renderizarModeloDocx(modelo: ModeloDocx, medir: Medir): ResultadoLayout {
+  const av: AvisosTabla = { filasPartidas: 0, anchoEscalado: 0, gridAmpliado: 0, mergeDemasiadoAlto: 0, siguienteMerge: 0, saltoEnZona: 0 };
+
+  // Los encabezados/pies mas altos que el margen empujan el cuerpo (como Word): el área útil se calcula con el más alto
+  // de los tipos que se llegan a usar (first solo con titlePg, even solo con evenAndOddHeaders).
+  const usados = (z: ZonaPaginaModelo): Parrafo[][] => [z.default, modelo.tituloPagina ? z.first : null, modelo.paresImpares ? z.even : null].filter((x): x is Parrafo[] => x !== null);
+  const altoMax = (z: ZonaPaginaModelo): number => usados(z).reduce((m, ps) => Math.max(m, altoZona(itemsDeZona(ps, modelo, medir, { pagina: 888, total: 888 }, av))), 0);
+  const altoCab = altoMax(modelo.encabezados);
+  const altoPie = altoMax(modelo.pies);
+  const margenSupPt = altoCab > 0 ? Math.max(modelo.margenSupPt, modelo.margenEncabezadoPt + altoCab) : modelo.margenSupPt;
+  const margenInfPt = altoPie > 0 ? Math.max(modelo.margenInfPt, modelo.margenPiePt + altoPie) : modelo.margenInfPt;
+  av.saltoEnZona = 0; // el cálculo de alturas no cuenta: solo las zonas realmente pintadas
+
   const geo: PageGeometry = {
     widthPt: modelo.paginaAnchoPt, heightPt: modelo.paginaAltoPt,
-    marginTopPt: modelo.margenSupPt, marginBottomPt: modelo.margenInfPt,
+    marginTopPt: margenSupPt, marginBottomPt: margenInfPt,
     marginLeftPt: modelo.margenIzqPt, marginRightPt: modelo.margenDerPt
   };
-  const alturaUtilPt = modelo.paginaAltoPt - modelo.margenSupPt - modelo.margenInfPt;
-  const av: AvisosTabla = { filasPartidas: 0, anchoEscalado: 0, gridAmpliado: 0, mergeDemasiadoAlto: 0, siguienteMerge: 0 };
-  const items: FlowItem[] = [];
+  const alturaUtilPt = modelo.paginaAltoPt - margenSupPt - margenInfPt;
+  const bloques: BloqueRenderizado[] = [];
   for (const bloque of modelo.bloques) {
-    if (esParrafo(bloque)) items.push(...renderizarParrafo(bloque, modelo.margenIzqPt, modelo.margenDerPt, modelo.paginaAnchoPt, medir));
-    else if (esTabla(bloque)) items.push(...renderizarTabla(bloque, modelo.margenIzqPt, modelo.margenDerPt, modelo.paginaAnchoPt, alturaUtilPt, medir, av));
+    if (esParrafo(bloque)) bloques.push({ items: renderizarParrafo(bloque, modelo.margenIzqPt, modelo.margenDerPt, modelo.paginaAnchoPt, medir), keepNext: bloque.mantenerConSiguiente, keepLines: bloque.mantenerLineasJuntas });
+    else if (esTabla(bloque)) bloques.push({ items: renderizarTabla(bloque, modelo.margenIzqPt, modelo.margenDerPt, modelo.paginaAnchoPt, alturaUtilPt, medir, av), keepNext: false, keepLines: false });
   }
+  const items = agruparKeep(bloques);
   // Fracción de línea donde cae la línea base: mismo valor que Markdown
   // (`BASELINE_FRACTION`) y que `TABLA_BASELINE_FRACTION` de arriba,
   // aproximación documentada en `../markdown/layout.ts`.
   const res = paginar(items, geo, TABLA_BASELINE_FRACTION);
-  return { ...res, advertencias: [...mensajesTabla(av), ...res.advertencias] };
+
+  // Segunda pasada: con el total de páginas conocido, cada página recibe su encabezado y su pie (PAGE/NUMPAGES ya resueltos).
+  const trazos = [...res.trazos], barras = [...res.barras], imagenes = [...res.imagenes], enlaces = [...res.enlaces];
+  const pagina = { widthPt: modelo.paginaAnchoPt, heightPt: modelo.paginaAltoPt };
+  for (let n = 1; n <= res.totalPaginas; n++) {
+    const campos: ValoresCampo = { pagina: n, total: res.totalPaginas };
+    for (const [z, ancla, dist] of [[modelo.encabezados, 'arriba', modelo.margenEncabezadoPt], [modelo.pies, 'abajo', modelo.margenPiePt]] as const) {
+      const ps = zonaDePagina(z, n, modelo);
+      if (!ps || ps.length === 0) continue;
+      const zona = colocarZona(itemsDeZona(ps, modelo, medir, campos, av), pagina, ancla, dist, n - 1, TABLA_BASELINE_FRACTION);
+      trazos.push(...zona.trazos); barras.push(...zona.barras); imagenes.push(...zona.imagenes); enlaces.push(...zona.enlaces);
+    }
+  }
+  return { totalPaginas: res.totalPaginas, trazos, barras, imagenes, enlaces, advertencias: [...mensajesTabla(av), ...res.advertencias] };
 }

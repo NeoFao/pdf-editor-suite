@@ -226,13 +226,13 @@ test('imagen inline resuelta: refId apunta a word/media/..., tamaño convertido 
   expect(modelo.advertencias.some((a) => /imagen/i.test(a))).toBe(false);
 });
 
-test('imagen flotante (wp:anchor) se omite y se avisa', () => {
+test('imagen flotante (wp:anchor) sin datos de origen se omite y se avisa (la colocada vive en docx-modelo-2b.test.ts)', () => {
   const documentXml = `<w:document><w:body>
     <w:p><w:r><w:drawing><wp:anchor><wp:extent cx="914400" cy="914400"/></wp:anchor></w:drawing></w:r></w:p>
   </w:body></w:document>`;
   const modelo = construirModeloDocx(documentXml, null, null, RELS_UNA_IMAGEN);
   expect(soloParrafos(modelo)[0]!.partes).toEqual([]);
-  expect(modelo.advertencias.some((a) => /flotante/i.test(a))).toBe(true);
+  expect(modelo.advertencias.some((a) => /no se pudo insertar una imagen/i.test(a))).toBe(true);
 });
 
 test('imagen sin relación resoluble (r:embed que no existe en los rels) se omite y se avisa', () => {
