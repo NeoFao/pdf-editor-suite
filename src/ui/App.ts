@@ -4,7 +4,7 @@ import { EditSession } from '../model/EditSession';
 import { CommandBus } from '../commands/Command';
 import { EditTextRunCmd } from '../commands/EditTextRun';
 import { EditarLineaCmd } from '../commands/EditarLinea';
-import { lineaDeRun } from '../texto/lineasEditables';
+import { agruparLineasEditables, lineaDeRun, type LineaEditable } from '../texto/lineasEditables';
 import { ReplaceRunFontCmd } from '../commands/ReplaceRunFont';
 import { ReemplazarTextoCmd, type CambioTexto } from '../commands/ReemplazarTexto';
 import { buscarEnRuns, aplicarReemplazos, type Coincidencia, type OpcionesBusqueda } from '../texto/buscarReemplazar';
@@ -142,7 +142,8 @@ function cederHilo(): Promise<void> {
 
 /** Resultado de recorrer el documento buscando para reemplazar: runs con coincidencias propias + nº de coincidencias que cruzan runs. */
 interface EscaneoReemplazo {
-  runs: { pageIndex: number; runId: number; texto: string; coincidencias: Coincidencia[] }[];
+  /** Una entrada por LÍNEA EDITABLE con coincidencias (N1 F4): `runId` es su primer objeto y `texto` su texto real. */
+  runs: { pageIndex: number; runId: number; texto: string; coincidencias: Coincidencia[]; linea: LineaEditable }[];
   cruzan: number;
 }
 
@@ -2683,8 +2684,10 @@ export class App {
     const total = s.model.pages.length;
     for (let i = 0; i < total; i++) {
       if (this.session !== s) return null; // se abrió otro documento mientras tanto
-      const runs = s.ensureText(i);
-      const r = buscarEnRuns(runs, q, opts);
+      // Por LÍNEA editable, no por objeto: en un PDF por glifo (Chrome) una palabra casi nunca cabe en un solo objeto.
+      const lineas = agruparLineasEditables(s.ensureText(i), i)
+        .sort((a, b) => a.runIds[0]! - b.runIds[0]!);
+      const r = buscarEnRuns(lineas.map((l) => ({ runId: l.runIds[0]!, text: l.text })), q, opts);
       cruzan += r.cruzan;
       const porRun = new Map<number, Coincidencia[]>();
       for (const c of r.dentro) {
@@ -2692,9 +2695,9 @@ export class App {
         if (!l) { l = []; porRun.set(c.runId, l); }
         l.push(c);
       }
-      for (const run of runs) {
-        const l = porRun.get(run.runId);
-        if (l) out.push({ pageIndex: i, runId: run.runId, texto: run.text, coincidencias: l });
+      for (const linea of lineas) {
+        const l = porRun.get(linea.runIds[0]!);
+        if (l) out.push({ pageIndex: i, runId: linea.runIds[0]!, texto: linea.text, coincidencias: l, linea });
       }
       if ((i + 1) % PAGE_YIELD_CHUNK === 0 || i === total - 1) {
         if (total > PAGE_YIELD_CHUNK) this.setStatus(`Buscando… ${i + 1}/${total}`);
@@ -2731,9 +2734,9 @@ export class App {
       const esc = await this.escanearReemplazo(q);
       if (!esc) return;
       const cur = this.cursorReemplazo ?? { pageIndex: this.currentPage, runId: -1, pos: 0 };
-      interface Hit { pageIndex: number; runId: number; texto: string; c: Coincidencia }
+      interface Hit { pageIndex: number; runId: number; texto: string; c: Coincidencia; linea: LineaEditable }
       const hits: Hit[] = [];
-      for (const r of esc.runs) for (const c of r.coincidencias) hits.push({ pageIndex: r.pageIndex, runId: r.runId, texto: r.texto, c });
+      for (const r of esc.runs) for (const c of r.coincidencias) hits.push({ pageIndex: r.pageIndex, runId: r.runId, texto: r.texto, c, linea: r.linea });
       const despues = (h: Hit): boolean =>
         h.pageIndex > cur.pageIndex ||
         (h.pageIndex === cur.pageIndex && (h.runId > cur.runId || (h.runId === cur.runId && h.c.inicio >= cur.pos)));
@@ -2745,7 +2748,7 @@ export class App {
       const reemplazo = this.replaceInput.value;
       const cambio: CambioTexto = {
         pageIndex: hit.pageIndex, runId: hit.runId, oldText: hit.texto,
-        newText: aplicarReemplazos(hit.texto, [hit.c], reemplazo)
+        newText: aplicarReemplazos(hit.texto, [hit.c], reemplazo), linea: hit.linea
       };
       const cmd = new ReemplazarTextoCmd([cambio], 'Reemplazar');
       await this.bus.execute(cmd);
@@ -2777,15 +2780,13 @@ export class App {
     const esc = await this.escanearReemplazo(q);
     if (!esc || this.session !== s) return;
     const cur = this.cursorReemplazo ?? { pageIndex: this.currentPage, runId: -1, pos: 0 };
-    interface Cand { pageIndex: number; runId: number; k: number; inicio: number }
+    interface Cand { pageIndex: number; runId: number; k: number; inicio: number; linea: LineaEditable }
     const cands: Cand[] = [];
-    for (const r of esc.runs) r.coincidencias.forEach((c, k) => cands.push({ pageIndex: r.pageIndex, runId: r.runId, k, inicio: c.inicio }));
+    for (const r of esc.runs) r.coincidencias.forEach((c, k) => cands.push({ pageIndex: r.pageIndex, runId: r.runId, k, inicio: c.inicio, linea: r.linea }));
     const h = cands.find((c) => c.pageIndex > cur.pageIndex ||
       (c.pageIndex === cur.pageIndex && (c.runId > cur.runId || (c.runId === cur.runId && c.inicio >= cur.pos)))) ?? cands[0];
     if (!h) { this.viewer.setCurrentMatch(null); return; }
-    const run = s.ensureText(h.pageIndex).find((x) => x.runId === h.runId);
-    if (!run) return;
-    const b = run.boxPt;
+    const b = h.linea.boxPt;
     const cajas = s.engine.findText(s.doc, h.pageIndex, q, this.opcionesBusqueda())
       .filter((r) => {
         const cx = r.xPt + r.wPt / 2, cy = r.yPt + r.hPt / 2;
@@ -2815,7 +2816,7 @@ export class App {
       for (const r of esc.runs) {
         n += r.coincidencias.length;
         coincidenciasPorRun.set(`${r.pageIndex}:${r.runId}`, r.coincidencias.length);
-        cambios.push({ pageIndex: r.pageIndex, runId: r.runId, oldText: r.texto, newText: aplicarReemplazos(r.texto, r.coincidencias, reemplazo) });
+        cambios.push({ pageIndex: r.pageIndex, runId: r.runId, oldText: r.texto, newText: aplicarReemplazos(r.texto, r.coincidencias, reemplazo), linea: r.linea });
       }
       if (cambios.length === 0) {
         this.anunciarReemplazo(esc.cruzan > 0 ? `0 reemplazos; ${this.textoAvisoCruces(esc.cruzan)}.` : 'No hay coincidencias.');
