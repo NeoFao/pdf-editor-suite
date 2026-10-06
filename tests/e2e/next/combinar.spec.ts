@@ -13,5 +13,5 @@ test('insertar otro PDF añade sus páginas (miniaturas e indicador)', async ({ 
 
   await page.locator('#btn-insert-pdf').setInputFiles(EXTRA);
   await expect(page.locator('#thumbs canvas')).toHaveCount(3);
-  await expect(page.locator('#page-indicator')).toHaveText('1 / 3');
+  await expect(page.locator('#page-indicator')).toHaveText('2 / 3'); // E-065: la actual pasa a la copia / primera página insertada
 });
