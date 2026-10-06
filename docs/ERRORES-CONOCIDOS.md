@@ -2793,3 +2793,64 @@ navegador dispara ambos; la emulación por CDP solo `resize`).
 `tests/e2e/next/nitidez-pagina.spec.ts` (DPR 2: bitmap ≈ ancho CSS × 2 con el CSS intacto; cambio de DPR en caliente repinta;
 DPR 1 sigue 1:1; DPR 3 acotado y con límite de píxeles a zoom alto; la prueba de oro de reposo, E-029, con DPR 1 y 2).
 Fallaban antes. Sin regla guard: es cálculo de maquetación, no un patrón estático.
+
+---
+
+### E-079 · En subconjuntos CID, el texto con un carácter ausente se guardaba como `.notdef` y se perdía (N1)
+
+**Síntoma.** En un PDF de Chrome, Skia o LibreOffice (fuentes incrustadas como subconjunto CID), editar una línea tecleando un
+carácter que el subconjunto no trae (`€`, `Q`, `Z`…) «funcionaba»: `editTextRun` devolvía `ok`, el PDF guardado dibujaba cuadros
+`.notdef` y al extraer el texto esos caracteres habían desaparecido (`HOLA MUNDO €` → `HOLA MUNDO `, `HOLZ` → `HOL`). Pérdida de
+datos silenciosa: el texto escrito no estaba en el documento y la sustitución de fuente (E-047) nunca entraba.
+
+**Causa raíz.** `editTextRun` y `swapTextObject` preguntaban `FPDFFont_GetGlyphPath(fuente, carácter)` antes de escribir. En un
+subconjunto CID esa función da falsos positivos: PDFium convierte un Unicode sin entrada en `/ToUnicode` en un código que
+Identity-H lleva a un GID cualquiera, así que dice «sí» a glifos que no están. El fixture que cubría E-047 (`subconjunto.pdf`,
+ZapfDingbats estándar) no es un subconjunto CID y no lo detectaba.
+
+**Arreglo.** La cobertura ya no se consulta: se **escribe y se relee** (`textoEscritoCoincide`: `FPDFText_LoadPage` sobre la MISMA
+página tras `SetText` y comparación con lo pedido, sin los caracteres generados). Si no coincide se devuelve `glyph-missing` sin
+llamar a `FPDFPage_GenerateContent` y se cierra la página: el cambio se descarta solo, porque cada llamada del motor reparsea la
+página desde el content stream. `editTextRun` y `swapTextObject` (sustitución E-047, `setRunFont`, `setRunFontSize`) usan esa vía.
+
+**Cómo se detecta ahora.** Fixture determinista `cid-subconjunto.pdf` (TrueType sintética incrustada como Type0/CIDFontType2 con 10
+glifos, generada a mano en `generar-fixtures.mjs`) y `tests/unit/PdfiumEngine.cobertura.test.ts`: con un carácter ausente
+`editTextRun` devuelve `glyph-missing` y el texto no cambia ni en memoria ni tras guardar; con la sustitución de fuente el texto
+nuevo se extrae tras guardar y reabrir. Fallaban antes. Regla `no-glyphpath-como-cobertura`: prohíbe `FPDFFont_GetGlyphPath` en
+`src/` (código, no comentarios).
+
+---
+
+### E-080 · El editor y el panel de propiedades mostraban el texto un 33 % más grande en PDFs con CTM escalada (N1)
+
+**Síntoma.** En un PDF de Chrome la línea de 11 pt se editaba a 14,66 px × escala y el panel de propiedades mostraba «14.5»; el
+cuadro de edición salía un 33 % mayor que el texto pintado. Pedir «11» en el panel dejaba el texto a 8,25 pt.
+
+**Causa raíz.** `TextRun.sizePt` era el `Tf` NOMINAL del objeto, pero Chrome escribe `0.75 0 0 -0.75 0 H cm`: la matriz del objeto
+escala 0,75 y el tamaño real es `Tf × hypot(a, b)`. Todos los consumidores usaban el nominal como si fuera lo que se ve.
+
+**Arreglo.** `TextRun` expone `sizeEfectivoPt` (`Tf × hypot(a, b)`, lo que ve el usuario) y conserva `sizePt` (nominal, lo que hay
+que pasar a `NewTextObj`/`CreateTextObj`). `TextLayer` (`cssFontFor`, línea base E-030), el panel de propiedades, los cuadros de
+marcado y `estructura.ts` (encabezados) usan el efectivo; `setRunFontSize` recibe el efectivo y lo convierte (`Tf = pedido /
+escala`, porque la matriz se copia); `replaceRunWithStandardFont` y `setRunFont` siguen con el nominal porque copian la matriz.
+
+**Cómo se detecta ahora.** `tests/unit/PdfiumEngine.size.test.ts` sobre `por-glifo.pdf` (Chrome simulado: 14,66 nominal → 11 pt
+efectivos; pedir 22 deja 22 pt efectivos y la matriz intacta; la sustitución de fuente conserva el efectivo) y sobre `nativo.pdf`
+(matriz identidad: efectivo = nominal). Fallaban antes. Sin regla guard: depende de la matriz de cada documento.
+
+---
+
+### E-081 · `FPDFText_SetText` con la cadena vacía mata el WASM del motor (N1)
+
+**Síntoma.** Vaciar una línea y confirmar, o insertar un texto vacío, provocaba `RuntimeError: unreachable`: el motor entero
+quedaba inservible (todas las páginas abiertas dejaban de responder) hasta recargar la pestaña.
+
+**Causa raíz.** PDFium aborta con `SetText("")`; ningún sitio del motor lo impedía (`editTextRun` pasaba el texto tal cual).
+
+**Arreglo.** Única vía de escritura `PdfiumEngine.escribirTexto`, que lanza un error recuperable con cadena vacía. `editTextRun`
+devuelve `{ ok: false, reason: 'empty-text' }` sin tocar el documento (la UI repone el texto y avisa); `insertText` con texto vacío
+lanza antes de crear el objeto. Quitar una línea es eliminar el objeto (`deleteRun`), nunca dejarla vacía.
+
+**Cómo se detecta ahora.** `tests/unit/PdfiumEngine.settextvacio.test.ts` (tras `editTextRun('')` el motor sigue vivo y editando;
+`insertText('')` lanza; `deleteRun` sí borra). Regla `settext-solo-via-escribirtexto`: `FPDFText_SetText` solo puede aparecer dentro
+de `escribirTexto` (comentarios aparte), con su test en `reglas.test.mjs`.

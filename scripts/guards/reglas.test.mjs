@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -735,6 +735,68 @@ describe('capa-texto-sin-rotacion-por-run', () => {
 
   test('sobre el repo real no encuentra nada', () => {
     assert.ok(regla.comoArreglar.includes('transformCapaSinGirar'));
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('settext-solo-via-escribirtexto', () => {
+  const regla = detectarEn('settext-solo-via-escribirtexto');
+  const MOTOR = 'src/engine/pdfium/PdfiumEngine.ts';
+
+  test('detecta el patrón que mató el motor (E-081): SetText directo en un método de edición', () => {
+    const codigo = [
+      '  editTextRun(doc) {',
+      '    const wptr = this.mem.wide(newText);',
+      '    this.p.FPDFText_SetText(obj, wptr);',
+      '  }'
+    ].join('\n');
+    const h = analizarSetText(MOTOR, codigo);
+    assert.equal(h.length, 1);
+    assert.match(h[0].mensaje, /fuera de PdfiumEngine\.escribirTexto/);
+  });
+
+  test('detecta SetText en cualquier otro fichero, aunque se llame escribirTexto', () => {
+    const codigo = '  private escribirTexto(obj, t) {\n    this.p.FPDFText_SetText(obj, w);\n  }';
+    assert.equal(analizarSetText('src/otro.ts', codigo).length, 1);
+  });
+
+  test('no señala la llamada dentro de escribirTexto del motor ni los comentarios', () => {
+    const codigo = [
+      '  /** Única vía: `FPDFText_SetText(obj, texto)` con la cadena vacía bloquea el WASM. */',
+      '  private escribirTexto(obj: number, texto: string): void {',
+      "    if (texto === '') throw new Error('vacío');",
+      '    try { this.p.FPDFText_SetText(obj, wptr); } finally { this.mem.free(wptr); }',
+      '  }',
+      '  // FPDFText_SetText(obj, w) en un comentario no cuenta'
+    ].join('\n');
+    assert.deepEqual(analizarSetText(MOTOR, codigo), []);
+  });
+
+  test('el escape con razón la desactiva en esa línea; sin razón, no', () => {
+    const con = '// guard-disable-next-line settext-solo-via-escribirtexto: prueba aislada del motor\nthis.p.FPDFText_SetText(o, w);';
+    assert.deepEqual(analizarSetText('src/otro.ts', con), []);
+    const sin = '// guard-disable-next-line settext-solo-via-escribirtexto: x\nthis.p.FPDFText_SetText(o, w);';
+    assert.equal(analizarSetText('src/otro.ts', sin).length, 1);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('no-glyphpath-como-cobertura', () => {
+  const regla = detectarEn('no-glyphpath-como-cobertura');
+
+  test('detecta el patrón que dio falsos positivos en subconjuntos CID (E-079)', () => {
+    const codigo = "      if (this.p.FPDFFont_GetGlyphPath(font, cp, size) === 0) {\n        return { ok: false, reason: 'glyph-missing' };\n      }";
+    assert.equal(analizarGlyphPath('src/engine/pdfium/PdfiumEngine.ts', codigo).length, 1);
+  });
+
+  test('no señala los comentarios que lo mencionan', () => {
+    assert.deepEqual(analizarGlyphPath('src/x.ts', '   * `FPDFFont_GetGlyphPath` da falsos positivos\n// FPDFFont_GetGlyphPath(f, c, s)'), []);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
     assert.deepEqual(regla.ejecutar(), []);
   });
 });

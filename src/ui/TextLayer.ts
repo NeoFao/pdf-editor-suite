@@ -130,9 +130,9 @@ export class TextLayer {
 
       // Mejor aproximación tipográfica del run real, calculada una vez y
       // aplicada en línea SOLO mientras se edita (ver comentario de clase).
-      // El tamaño sale de sizePt del PDF × la escala de la geometría, nunca
+      // El tamaño sale de sizeEfectivoPt del PDF × la escala de la geometría, nunca
       // del alto de la caja (E-002).
-      const sizeCss = run.sizePt * this.geom.scale;
+      const sizeCss = run.sizeEfectivoPt * this.geom.scale; // E-080: efectivo (Tf × escala de la matriz), no el Tf nominal
       const editFont = cssFontFor(run.fontName, sizeCss);
       const editColor = `rgb(${run.color[0]}, ${run.color[1]}, ${run.color[2]})`;
 
