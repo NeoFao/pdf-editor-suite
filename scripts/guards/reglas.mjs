@@ -1264,6 +1264,59 @@ export const geometriaSoloConFabrica = {
   }
 };
 
+/* ── E-084 · la geometría de página conoce el origen de la caja visible ── */
+/**
+ * Analiza el texto de un fichero de src/. Dos patrones que olvidan el origen de la caja visible (CropBox/MediaBox
+ * con origen distinto de (0,0)): (1) `PageGeometry.desdeTamanoVisual(...)` sin pasar el origen en la misma línea
+ * (desde src se entra por `PageGeometry.desdePagina(pagina, escala)`); (2) `.pageSize(`, que da solo el tamaño
+ * visual y empuja a convertir pt <-> px "a mano" sin origen (usa `pageBox` o el modelo de página).
+ * Devuelve [{ linea, mensaje }].
+ */
+export function analizarGeometriaSinOrigen(contenido) {
+  const problemas = [];
+  const exentas = lineasExentas(contenido, 'pagegeometry-con-origen');
+  contenido.split('\n').forEach((linea, i) => {
+    const n = i + 1;
+    if (exentas.has(n)) return;
+    if (/^\s*(\/\/|\/?\*)/.test(linea)) return;
+    if (/desdeTamanoVisual\s*\(/.test(linea) && !/origen/i.test(linea)) {
+      problemas.push({ linea: n, mensaje: 'desdeTamanoVisual sin origen de la caja visible — usa PageGeometry.desdePagina(pagina, escala)' });
+    }
+    if (/\.pageSize\s*\(/.test(linea)) {
+      problemas.push({ linea: n, mensaje: 'pageSize no trae el origen de la caja visible — usa engine.pageBox o el PageModel (origenPt)' });
+    }
+  });
+  return problemas;
+}
+
+export const geometriaConOrigen = {
+  id: 'pagegeometry-con-origen',
+  titulo: 'Toda conversión pt <-> px pasa por PageGeometry con el origen de la caja visible',
+  comoArreglar:
+    'Construye la geometría con PageGeometry.desdePagina(pagina, escala) (el PageModel lleva origenPt) y no ' +
+    'conviertas coordenadas con pageSize: con CropBox o MediaBox cuyo origen no es (0,0) (plantillas de Acrobat ' +
+    'Distiller) el espacio de usuario del motor y el render difieren en ese origen y todo queda desplazado (E-084).',
+  ejecutar() {
+    const raizSrc = path.join(RAIZ, 'src');
+    if (!fs.existsSync(raizSrc)) return [];
+    const hallazgos = [];
+    // El motor define pageSize, el modelo lo lee junto a pageBox y la fábrica es la autoridad.
+    const permitidos = new Set(['src/coords/PageGeometry.ts', 'src/model/EditSession.ts', 'src/engine/PdfEngine.ts', 'src/engine/pdfium/PdfiumEngine.ts']);
+    const recorrer = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { recorrer(full); continue; }
+        if (!e.name.endsWith('.ts')) continue;
+        const rel = path.relative(RAIZ, full).replace(/\\/g, '/');
+        if (permitidos.has(rel) || tieneDeuda(rel, this.id)) continue;
+        for (const p of analizarGeometriaSinOrigen(leer(rel))) hallazgos.push(hallazgo(rel, p.linea, p.mensaje));
+      }
+    };
+    recorrer(raizSrc);
+    return hallazgos;
+  }
+};
+
 /* ── E-063 · la capa de texto no calcula rotaciones por run ───────────── */
 /**
  * Analiza el texto de src/ui/TextLayer.ts. La rotación de página se resuelve UNA vez, con una
@@ -1403,6 +1456,7 @@ export const TODAS = [
   conDescompresionAcotada,
   conTextoPerezosoViaEditSession,
   geometriaSoloConFabrica,
+  geometriaConOrigen,
   capaTextoSinRotacionPorRun,
   conRegistroSinDuplicados,
   conPuertosE2eSincronizados

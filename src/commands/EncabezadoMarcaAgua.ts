@@ -42,8 +42,10 @@ const PAGINAS_POR_TANDA = 10;
 const ceder = (): Promise<void> => new Promise((r) => setTimeout(r, 0));
 
 function paginaVisual(engine: PdfEngine, doc: DocHandle, i: number): PaginaVisual {
+  // guard-disable-next-line pagegeometry-con-origen: aquí solo se lee el tamaño visual; el origen viene de pageBox en la línea siguiente
   const s = engine.pageSize(doc, i);
-  return { anchoPt: s.widthPt, altoPt: s.heightPt, rotation: engine.pageRotation(doc, i) };
+  // E-084: el origen de la caja visible (pt de usuario) entra en la conversión visual -> usuario.
+  return { anchoPt: s.widthPt, altoPt: s.heightPt, rotation: engine.pageRotation(doc, i), origenPt: engine.pageBox(doc, i).origenPt };
 }
 
 /** Lote de operaciones de encabezado/pie de UNA página (para `applyPageOps`, E-037). */

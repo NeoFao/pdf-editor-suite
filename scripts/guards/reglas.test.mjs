@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -930,6 +930,30 @@ describe('puertos-e2e-sincronizados (E-062)', () => {
   });
 
   test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('pagegeometry-con-origen', () => {
+  const regla = detectarEn('pagegeometry-con-origen');
+
+  test('detecta desdeTamanoVisual sin origen y el uso de pageSize', () => {
+    const p = analizarGeometriaSinOrigen('const g = PageGeometry.desdeTamanoVisual(w, h, 1, rot);\nconst s = engine.pageSize(doc, i);');
+    assert.equal(p.length, 2);
+    assert.equal(p[0].linea, 1);
+    assert.equal(p[1].linea, 2);
+  });
+
+  test('no señala la fábrica con origen, desdePagina, pageBox, comentarios ni el escape con razón', () => {
+    assert.deepEqual(analizarGeometriaSinOrigen('const g = PageGeometry.desdeTamanoVisual(w, h, 1, rot, p.origenPt);'), []);
+    assert.deepEqual(analizarGeometriaSinOrigen('const g = PageGeometry.desdePagina(page, 1);\nconst b = engine.pageBox(doc, i);'), []);
+    assert.deepEqual(analizarGeometriaSinOrigen('// engine.pageSize( en un comentario'), []);
+    const conEscape = '// guard-disable-next-line pagegeometry-con-origen: solo necesita el ancho visual, no convierte\nconst s = engine.pageSize(doc, i);';
+    assert.deepEqual(analizarGeometriaSinOrigen(conEscape), []);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.ok(regla.comoArreglar.includes('desdePagina'));
     assert.deepEqual(regla.ejecutar(), []);
   });
 });

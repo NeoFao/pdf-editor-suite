@@ -25,8 +25,9 @@ export class OcrPageCmd implements Command {
     this.before = c.engine.save(c.doc);
     const { width, height, data } = c.engine.renderPage(c.doc, this.pageIndex, this.scale);
     const lines = await this.provider.recognize({ rgba: new Uint8Array(data), width, height }, this.lang);
-    const heightPt = c.engine.pageSize(c.doc, this.pageIndex).heightPt;
-    const specs = mapOcrLines(lines, this.scale, heightPt);
+    // E-084: el bitmap es la caja visible; sus px pasan a pt de usuario con el origen de esa caja.
+    const caja = c.engine.pageBox(c.doc, this.pageIndex);
+    const specs = mapOcrLines(lines, this.scale, caja.tamanoPt.heightPt, caja.origenPt);
     // Lote (E-037, docs/ERRORES-CONOCIDOS.md): una página densa puede traer
     // 50-100 líneas reconocidas; un insertText por línea era O(N²) porque
     // cada uno regeneraba el contenido entero de la página. applyPageOps

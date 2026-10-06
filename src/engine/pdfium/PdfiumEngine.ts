@@ -4,7 +4,7 @@ import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
 import { validarUrlEnlace } from '../validarUrlEnlace';
 import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
 import type { QuadPt } from '../../coords/quads';
-import type { PdfEngine, CharBox, DocHandle, SizePt, TextRun, EditResult, EditLineResult, LineaParaEditar, SetLinePropsResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
+import type { PdfEngine, CharBox, DocHandle, SizePt, PageBox, TextRun, EditResult, EditLineResult, LineaParaEditar, SetLinePropsResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_PAGEOBJ_PATH = 2;
@@ -147,6 +147,33 @@ export class PdfiumEngine implements PdfEngine {
     try {
       return { widthPt: this.p.FPDF_GetPageWidthF(page), heightPt: this.p.FPDF_GetPageHeightF(page) };
     } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  pageBox(doc: DocHandle, pageIndex: number): PageBox {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const mem = this.mem;
+    const buf = mem.malloc(16);
+    try {
+      /** (left, bottom, right, top) en pt de usuario, o null si la página no declara esa caja. */
+      const leer = (declarada: boolean): { l: number; b: number; r: number; t: number } | null =>
+        declarada
+          ? { l: mem.getValue(buf, 'float'), b: mem.getValue(buf + 4, 'float'), r: mem.getValue(buf + 8, 'float'), t: mem.getValue(buf + 12, 'float') }
+          : null;
+      const media = leer(this.p.FPDFPage_GetMediaBox(page, buf, buf + 4, buf + 8, buf + 12)) ?? { l: 0, b: 0, r: 612, t: 792 };
+      const crop = leer(this.p.FPDFPage_GetCropBox(page, buf, buf + 4, buf + 8, buf + 12));
+      // Como PDFium: la caja visible es la CropBox recortada a la MediaBox (la MediaBox si no hay CropBox).
+      const mL = Math.min(media.l, media.r), mR = Math.max(media.l, media.r), mB = Math.min(media.b, media.t), mT = Math.max(media.b, media.t);
+      const caja = crop
+        ? { l: Math.max(mL, Math.min(crop.l, crop.r)), b: Math.max(mB, Math.min(crop.b, crop.t)),
+            r: Math.min(mR, Math.max(crop.l, crop.r)), t: Math.min(mT, Math.max(crop.b, crop.t)) }
+        : { l: mL, b: mB, r: mR, t: mT };
+      const rotacion = ((this.p.FPDFPage_GetRotation(page) * 90) % 360) as 0 | 90 | 180 | 270;
+      return { origenPt: { xPt: caja.l, yPt: caja.b }, tamanoPt: { widthPt: caja.r - caja.l, heightPt: caja.t - caja.b }, rotacion };
+    } finally {
+      mem.free(buf);
       this.p.FPDF_ClosePage(page);
     }
   }

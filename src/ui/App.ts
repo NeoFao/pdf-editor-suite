@@ -1944,9 +1944,11 @@ export class App {
     const anchoUsuarioPt = girada ? page.sizePt.heightPt : page.sizePt.widthPt;
     const altoUsuarioPt = girada ? page.sizePt.widthPt : page.sizePt.heightPt;
     const centro = this.viewer?.centroVisiblePt(this.currentPage) ?? null;
-    const acotar = (v: number, max: number): number => Math.max(0, Math.min(v, Math.max(0, max)));
-    const xPt = acotar(centro ? centro.xPt - wPt / 2 : (anchoUsuarioPt - wPt) / 2, anchoUsuarioPt - wPt);
-    const yPt = acotar(centro ? centro.yPt - hPt / 2 : altoUsuarioPt * 0.15, altoUsuarioPt - hPt);
+    // E-084: la caja visible empieza en `origenPt` (pt de usuario), no en (0,0): se acota a [origen, origen + tamaño].
+    const o = page.origenPt;
+    const acotar = (v: number, min: number, max: number): number => Math.max(min, Math.min(v, Math.max(min, max)));
+    const xPt = acotar(centro ? centro.xPt - wPt / 2 : o.xPt + (anchoUsuarioPt - wPt) / 2, o.xPt, o.xPt + anchoUsuarioPt - wPt);
+    const yPt = acotar(centro ? centro.yPt - hPt / 2 : o.yPt + altoUsuarioPt * 0.15, o.yPt, o.yPt + altoUsuarioPt - hPt);
     await this.bus.execute(new InsertImageCmd(this.currentPage, { rgba, imgWidth: width, imgHeight: height, xPt, yPt, wPt, hPt }));
     const imagenes = s.engine.listImageObjects(s.doc, this.currentPage);
     const insertada = imagenes.reduce((max, im) => (im.objIndex > max.objIndex ? im : max), imagenes[0]!);
@@ -1980,7 +1982,7 @@ export class App {
     if (!run || !this.bus || !this.selection || !this.session) { this.setStatus(`Selecciona una línea para ${verbo}.`); return; }
     const page = this.session.model.pages[this.selection.pageIndex]!;
     // Escala 1: px CSS == pt visuales; las cajas del run están en pt de usuario.
-    const geo = PageGeometry.desdeTamanoVisual(page.sizePt.widthPt, page.sizePt.heightPt, 1, page.rotation);
+    const geo = PageGeometry.desdePagina(page, 1);
     // La línea editable entera (N1): en un PDF por glifo el objeto suelto es un solo carácter.
     const caja = this.selectedLinea()?.boxPt ?? run.boxPt;
     const quads = quadsPorLinea([{ boxPt: caja, sizePt: run.sizeEfectivoPt }], geo);
@@ -2110,7 +2112,9 @@ export class App {
     const pageW = page.sizePt.widthPt, pageH = page.sizePt.heightPt;
     const wPt = Math.min(pageW * 0.6, 200);
     const hPt = wPt * (height / width);
-    const xPt = (pageW - wPt) / 2, yPt = (pageH - hPt) / 2;
+    // E-084: el centro de la caja visible, en pt de usuario, sale de la geometría (origen de la caja y /Rotate).
+    const centro = PageGeometry.desdePagina(page, 1).cssToPt(pageW / 2, pageH / 2); // escala 1: px CSS = pt visuales
+    const xPt = centro.xPt - wPt / 2, yPt = centro.yPt - hPt / 2;
     await this.bus.execute(new InsertImageCmd(this.currentPage, { rgba, imgWidth: width, imgHeight: height, xPt, yPt, wPt, hPt }));
     this.setStatus('Imagen insertada.');
   }

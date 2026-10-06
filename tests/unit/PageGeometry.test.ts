@@ -84,3 +84,32 @@ test('E-063: sin rotación no hay transformación y el tamaño de la capa es el 
   expect(g0.tamanoCapaSinGirarCss()).toEqual({ width: 400, height: 200 });
   expect(g0.deltaVisualACapaSinGirar(7, 3)).toEqual({ dx: 7, dy: 3 });
 });
+
+// E-084: la caja visible puede empezar en (ox, oy) ≠ (0,0) del espacio de usuario (CropBox/MediaBox desplazados).
+// Caja de 200x100 pt con origen (36, 20) pt de usuario; escala 2.
+const ORIGEN = { xPt: 36, yPt: 20 };
+test('E-084 sin rotación: la esquina inferior-izq de la caja visible es el (0, alto) CSS y la superior-der el (ancho, 0)', () => {
+  const g = PageGeometry.desdeTamanoVisual(200, 100, 2, 0, ORIGEN);
+  expect(g.ptToCss(36, 20)).toEqual({ x: 0, y: 200 });      // inferior-izq de la caja (pt de usuario 36,20)
+  expect(g.ptToCss(236, 120)).toEqual({ x: 400, y: 0 });    // superior-der (pt de usuario 236,120)
+  expect(g.ptToCss(0, 0).x).toBe(-72);                      // el (0,0) de usuario queda FUERA de la caja visible
+});
+for (const rot of [0, 90, 180, 270] as const) {
+  test(`E-084 rotación ${rot}: ida y vuelta con origen desplazado es identidad y desplazar la caja desplaza el punto`, () => {
+    const vis = rot === 90 || rot === 270 ? [100, 200] as const : [200, 100] as const; // tamaño visual pt
+    const g = PageGeometry.desdeTamanoVisual(vis[0], vis[1], 2, rot, ORIGEN);
+    const g0 = PageGeometry.desdeTamanoVisual(vis[0], vis[1], 2, rot);
+    for (const [x, y] of [[40, 30], [100, 60], [230, 110]] as const) { // pt de usuario
+      const c = g.ptToCss(x, y);
+      const p = g.cssToPt(c.x, c.y);
+      expect(p.xPt).toBeCloseTo(x, 6);
+      expect(p.yPt).toBeCloseTo(y, 6);
+      // Un punto con origen = el mismo punto relativo a la caja sin origen.
+      const c0 = g0.ptToCss(x - ORIGEN.xPt, y - ORIGEN.yPt);
+      expect(c.x).toBeCloseTo(c0.x, 6);
+      expect(c.y).toBeCloseTo(c0.y, 6);
+    }
+    // sinGirar conserva el origen.
+    expect(g.sinGirar().origenPt).toEqual(ORIGEN);
+  });
+}

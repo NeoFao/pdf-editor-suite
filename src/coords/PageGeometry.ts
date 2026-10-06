@@ -20,6 +20,11 @@ export interface CssRect { left: CssPx; top: CssPx; width: CssPx; height: CssPx 
  * escriben sobre ese espacio. Lo que devuelve el motor (`engine.pageSize`) es el
  * tamaño VISUAL, ya girado: por eso el constructor es privado y se entra por
  * `PageGeometry.desdeTamanoVisual`, que hace el intercambio en un único sitio.
+ *
+ * CONTRATO (E-084): los puntos PDF (`xPt`,`yPt`) están en espacio de usuario, con el origen en el (0,0) de
+ * ese espacio; la página VISIBLE (CropBox, o MediaBox) puede empezar en `origenPt` distinto de (0,0) (plantillas
+ * de Acrobat Distiller). El render y `pageSize` hablan de la caja visible, así que aquí se resta el origen al
+ * pasar pt a px y se suma al volver. `widthPt`/`heightPt` son el tamaño de ESA caja, sin girar.
  */
 export class PageGeometry {
   private constructor(
@@ -29,7 +34,9 @@ export class PageGeometry {
     readonly heightPt: number,
     /** px CSS por pt PDF. */
     readonly scale: number,
-    readonly rotation: Rotation
+    readonly rotation: Rotation,
+    /** Esquina inferior-izquierda de la caja visible SIN girar, en pt de usuario (E-084). */
+    readonly origenPt: { xPt: number; yPt: number } = { xPt: 0, yPt: 0 }
   ) {}
 
   /**
@@ -37,14 +44,29 @@ export class PageGeometry {
    * ya aplicada (pt PDF), tal como lo da `engine.pageSize`; con 90/270 el
    * ancho de usuario es el alto visual y viceversa.
    */
-  static desdeTamanoVisual(anchoVisualPt: number, altoVisualPt: number, scale: number, rotation: Rotation): PageGeometry {
+  static desdeTamanoVisual(
+    anchoVisualPt: number, altoVisualPt: number, scale: number, rotation: Rotation,
+    origenPt: { xPt: number; yPt: number } = { xPt: 0, yPt: 0 }
+  ): PageGeometry {
     const gira = rotation === 90 || rotation === 270;
-    return new PageGeometry(gira ? altoVisualPt : anchoVisualPt, gira ? anchoVisualPt : altoVisualPt, scale, rotation);
+    return new PageGeometry(gira ? altoVisualPt : anchoVisualPt, gira ? anchoVisualPt : altoVisualPt, scale, rotation, origenPt);
+  }
+
+  /**
+   * Fábrica para una página del modelo (`sizePt` visual en pt, `rotation`, `origenPt` de la caja visible en pt de
+   * usuario): la ÚNICA vía desde `src/` (regla `pagegeometry-solo-con-fabrica`), así nadie olvida el origen (E-084).
+   */
+  static desdePagina(
+    p: { sizePt: { widthPt: number; heightPt: number }; rotation: Rotation; origenPt: { xPt: number; yPt: number } },
+    scale: number
+  ): PageGeometry {
+    return PageGeometry.desdeTamanoVisual(p.sizePt.widthPt, p.sizePt.heightPt, scale, p.rotation, p.origenPt);
   }
 
   /** Punto PDF (origen abajo-izq, Y arriba) → punto CSS (origen arriba-izq, Y abajo). */
-  ptToCss(xPt: number, yPt: number): CssPoint {
+  ptToCss(xUsuarioPt: number, yUsuarioPt: number): CssPoint {
     const s = this.scale, W = this.widthPt, H = this.heightPt;
+    const xPt = xUsuarioPt - this.origenPt.xPt, yPt = yUsuarioPt - this.origenPt.yPt; // pt dentro de la caja visible
     switch (this.rotation) {
       case 0:   return { x: css(xPt * s), y: css((H - yPt) * s) };
       case 90:  return { x: css(yPt * s), y: css(xPt * s) };
@@ -56,11 +78,12 @@ export class PageGeometry {
   /** Inverso de ptToCss. */
   cssToPt(x: number, y: number): PtPoint {
     const s = this.scale, W = this.widthPt, H = this.heightPt;
+    const ox = this.origenPt.xPt, oy = this.origenPt.yPt; // + origen: de la caja visible al espacio de usuario
     switch (this.rotation) {
-      case 0:   return { xPt: pt(x / s), yPt: pt(H - y / s) };
-      case 90:  return { xPt: pt(y / s), yPt: pt(x / s) };
-      case 180: return { xPt: pt(W - x / s), yPt: pt(y / s) };
-      case 270: return { xPt: pt(W - y / s), yPt: pt(H - x / s) };
+      case 0:   return { xPt: pt(ox + x / s), yPt: pt(oy + H - y / s) };
+      case 90:  return { xPt: pt(ox + y / s), yPt: pt(oy + x / s) };
+      case 180: return { xPt: pt(ox + W - x / s), yPt: pt(oy + y / s) };
+      case 270: return { xPt: pt(ox + W - y / s), yPt: pt(oy + H - x / s) };
     }
   }
 
@@ -71,7 +94,7 @@ export class PageGeometry {
    * (`transformCapaSinGirar`) las lleva al espacio visual.
    */
   sinGirar(): PageGeometry {
-    return new PageGeometry(this.widthPt, this.heightPt, this.scale, 0);
+    return new PageGeometry(this.widthPt, this.heightPt, this.scale, 0, this.origenPt);
   }
 
   /** Tamaño en px CSS de la página SIN girar (el de la capa que se dibuja con `sinGirar()`). */

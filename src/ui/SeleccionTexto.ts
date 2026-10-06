@@ -13,7 +13,7 @@ export interface DepsSeleccionTexto {
   /** Geometría de la página `i` con la escala real del visor (px CSS). */
   geom(i: number): PageGeometry;
   /** Tamaño VISUAL (pt, ya girado) y rotación de la página `i`. */
-  pagina(i: number): { sizePt: SizePt; rotation: 0 | 90 | 180 | 270 };
+  pagina(i: number): { sizePt: SizePt; rotation: 0 | 90 | 180 | 270; origenPt: { xPt: number; yPt: number } };
   /** Caracteres con caja de la página `i` (perezosos y cacheados por `EditSession`). */
   chars(i: number): CharBox[];
   /** Solo se selecciona con la herramienta "ninguna" (V). */
@@ -142,7 +142,7 @@ export class SeleccionTexto {
   /** Geometría a escala 1 (px CSS = pt visuales) que pide `quadsPorLinea`. */
   private geoUnidad(pageIndex: number): PageGeometry {
     const p = this.deps.pagina(pageIndex);
-    return PageGeometry.desdeTamanoVisual(p.sizePt.widthPt, p.sizePt.heightPt, 1, p.rotation);
+    return PageGeometry.desdePagina(p, 1);
   }
 
   /** Redibuja un rectángulo translúcido por línea visual (px CSS de página, vía la geometría real). */

@@ -2919,3 +2919,35 @@ fuente de una línea de varios estilos conserva el color de cada tramo pero no l
 (c) Un marcado ajeno que cubra el sufijo se traslada igual que uno propio: el PDF no distingue quién lo creó (el editor no escribe
 `/T`). (d) Un marcado que abarca a la vez lo editado y el sufijo no se estira ni se mueve. (e) Sin tratar aún: RTL, ligaduras,
 Type3 y `Tc`.
+
+### E-084 · Con una CropBox/MediaBox de origen distinto de (0,0) la capa de texto, la inserción y las notas quedaban desplazadas
+
+**Síntoma.** Abrir un PDF de Acrobat Distiller (plantillas con CropBox `x=4,02 y=6`, o `x=187,8 y=28,3` con `/Rotate -90`): las
+cajas `.run` caían unos 13 px fuera del texto visible, un clic sobre el texto no entraba en edición (`elementFromPoint` daba la capa
+de texto) y, con `/Rotate`, las cajas salían en cualquier sitio. Insertar texto, notas, imágenes o un resaltado también caían
+desplazados; guardar y reabrir los dejaba donde se pintaron mal.
+
+**Causa raíz.** Tres sistemas de coordenadas (AGENTS.md §1) y un origen olvidado. Las coordenadas del motor (`FPDFText_GetCharBox`,
+`FPDFPageObj_GetBounds`, la matriz) están en el espacio de usuario del PDF; el render de PDFium y `FPDF_GetPageWidthF/HeightF` hablan
+de la caja VISIBLE (CropBox recortada a la MediaBox), cuya esquina inferior-izquierda puede estar en `(x0, y0) ≠ (0, 0)`.
+`PageGeometry` suponía origen (0,0): convertía `y_css = (alto − yPt)·escala` sin restar `y0`. Con origen 0 (casi todos los PDF y todos
+los fixtures) cuadra, por eso nadie lo vio. Además, varios consumidores convertían por su cuenta: la imagen insertada se centraba
+con `(anchoPagina − w) / 2` en pt de usuario, la firma acotaba a `[0, tamaño]`, el OCR hacía `alto − y/escala` y el encabezado/marca
+de agua pasaba el tamaño visual sin origen.
+
+**Arreglo.** `engine.pageBox(doc, i): { origenPt, tamanoPt, rotacion }` (CropBox ∩ MediaBox, o MediaBox; pt de usuario sin girar).
+`PageModel.origenPt` lo guarda `EditSession`. `PageGeometry` recibe el origen y lo resta en `ptToCss`, lo suma en `cssToPt`
+(`sinGirar()` lo conserva). Desde `src/` se entra solo por `PageGeometry.desdePagina(pagina, escala)`. Corregidos los consumidores
+que convertían a mano: `handleInsertImage` (centro por `cssToPt`), `colocarFirmaSeleccionada` (acota a `[origen, origen + tamaño]`),
+`mapOcrLines`/`OcrPage` (origen de la caja), encabezado/pie y marca de agua (`PaginaVisual.origenPt`). Texto, notas, formularios, quads
+de marcado, selección de texto, búsqueda (E-067), `centroVisiblePt` (E-070) e `ImageLayer` ya pasaban por la geometría y quedan
+corregidos con ella.
+
+**Cómo se detecta ahora.** `tests/e2e/next/cropbox-origen.spec.ts` (fixture `cropbox-desplazado.pdf`: CropBox `[36 36 436 336]`,
+MediaBox de origen negativo y CropBox con `/Rotate 90`; la `.run` cae sobre los píxeles, un clic edita la línea correcta y al guardar
+queda en su sitio, insertar texto, nota, imagen y resaltado caen donde se hace clic), `tests/unit/PageGeometry.test.ts`,
+`tests/unit/PdfiumEngine.pageBox.test.ts` y `tests/unit/mapOcrLines.test.ts`. Regla `pagegeometry-con-origen`: prohíbe en `src/`
+`desdeTamanoVisual(` sin origen y `.pageSize(` fuera del motor y de `EditSession`.
+
+**Límites conocidos.** `UserUnit` (escala de página) sigue sin tratarse. El OCR sobre una página con `/Rotate` ≠ 0 sigue ignorando la
+rotación (anterior a E-084).

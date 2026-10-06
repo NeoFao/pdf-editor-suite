@@ -2,6 +2,8 @@
 import type { QuadPt } from '../coords/quads';
 
 export interface SizePt { widthPt: number; heightPt: number }
+/** Caja visible de una página: ver `PdfEngine.pageBox`. */
+export interface PageBox { origenPt: { xPt: number; yPt: number }; tamanoPt: SizePt; rotacion: 0 | 90 | 180 | 270 }
 export interface RectPt { xPt: number; yPt: number; wPt: number; hPt: number }
 
 /** Un carácter de la página con su caja (pt PDF de usuario). Sin caja (ancho/alto 0) en los saltos de línea que genera PDFium. */
@@ -283,6 +285,13 @@ export interface PdfEngine {
   open(bytes: Uint8Array): Promise<DocHandle>;
   pageCount(doc: DocHandle): number;
   pageSize(doc: DocHandle, pageIndex: number): SizePt;
+  /**
+   * Caja VISIBLE de la página (CropBox recortada a la MediaBox; la MediaBox si no hay CropBox), en pt de usuario y
+   * SIN girar: `origenPt` es su esquina inferior-izquierda (distinta de (0,0) en las plantillas de Acrobat
+   * Distiller, E-084), `tamanoPt` su ancho/alto sin girar y `rotacion` el /Rotate. Las coordenadas del motor
+   * (cajas de carácter, `GetBounds`, matrices) están en espacio de usuario; el render y `pageSize` hablan de esta caja.
+   */
+  pageBox(doc: DocHandle, pageIndex: number): PageBox;
   /** Rotación de la página en grados: 0, 90, 180 o 270. */
   pageRotation(doc: DocHandle, pageIndex: number): 0 | 90 | 180 | 270;
   /** Renderiza la página a un bitmap RGBA a la escala dada. */

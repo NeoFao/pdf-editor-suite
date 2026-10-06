@@ -49,8 +49,12 @@ export interface CajaEncabezado { zona: Zona; alineacion: Alineacion; texto: str
 /** Posición de un texto ya resuelta al espacio de usuario del PDF (pt) y giro en grados antihorario. */
 export interface TextoColocado { xPt: number; yPt: number; giroGrados: number }
 
-/** Tamaño visual de la página (pt) y su /Rotate. */
-export interface PaginaVisual { anchoPt: number; altoPt: number; rotation: Rotation }
+/**
+ * Tamaño visual de la página (pt) y su /Rotate. `origenPt` (pt de usuario) es la esquina inferior-izquierda de la
+ * caja visible sin girar (E-084); sin él vale (0,0), que es lo que quiere la vista previa del diálogo (dibuja en
+ * pt visuales, no en espacio de usuario).
+ */
+export interface PaginaVisual { anchoPt: number; altoPt: number; rotation: Rotation; origenPt?: { xPt: number; yPt: number } }
 
 /** Ascendente/descendente aproximados de las fuentes estándar, en fracción del cuerpo. */
 const ASCENDENTE = 0.72;
@@ -59,7 +63,7 @@ const DESCENDENTE = 0.2;
 /** Punto VISUAL (origen abajo-izq, pt) a punto de usuario (pt). */
 export function visualAUsuario(p: PaginaVisual, vx: number, vy: number): { xPt: number; yPt: number } {
   // Escala 1: px CSS = pt. El tamaño visual -> de usuario lo hace la fábrica (E-053).
-  const geo = PageGeometry.desdeTamanoVisual(p.anchoPt, p.altoPt, 1, p.rotation);
+  const geo = PageGeometry.desdeTamanoVisual(p.anchoPt, p.altoPt, 1, p.rotation, p.origenPt);
   // visual (Y arriba) -> css (Y abajo, escala 1) -> usuario.
   return geo.cssToPt(vx, p.altoPt - vy);
 }
