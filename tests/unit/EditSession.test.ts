@@ -134,3 +134,23 @@ test('reload() (deshacer un borrado/inserción) también limpia el caché de tex
   expect(s.hasLoadedText(0)).toBe(false);
   expect(s.model.pages[0]!.runs).toEqual([]);
 });
+
+test('ensureChars es perezoso, cachea por página y se invalida con refreshPage (T12)', async () => {
+  const s = await sesionDeNPaginas(4);
+  const spy = vi.spyOn(s.engine, 'getCharBoxes');
+  expect(spy).not.toHaveBeenCalled(); // abrir el documento no pide caracteres
+
+  const a = s.ensureChars(1);
+  const b = s.ensureChars(1);
+  expect(spy).toHaveBeenCalledTimes(1);
+  expect(b).toBe(a);
+  expect(a.map((c) => c.ch).join('')).toContain('Pagina');
+
+  s.ensureChars(2); // otra página: otra llamada, la 1 sigue cacheada
+  expect(spy).toHaveBeenCalledTimes(2);
+
+  s.refreshPage(1); // el texto de esa página pudo cambiar: se descarta SOLO su caché
+  s.ensureChars(1);
+  s.ensureChars(2);
+  expect(spy).toHaveBeenCalledTimes(3);
+});

@@ -4,6 +4,9 @@ import type { QuadPt } from '../coords/quads';
 export interface SizePt { widthPt: number; heightPt: number }
 export interface RectPt { xPt: number; yPt: number; wPt: number; hPt: number }
 
+/** Un carácter de la página con su caja (pt PDF de usuario). Sin caja (ancho/alto 0) en los saltos de línea que genera PDFium. */
+export interface CharBox { ch: string; boxPt: RectPt }
+
 export interface TextRun {
   runId: number;               // índice del objeto de texto en la página
   text: string;
@@ -231,6 +234,12 @@ export interface PdfEngine {
   findText(doc: DocHandle, pageIndex: number, query: string, opciones?: { mayusculas?: boolean; palabraCompleta?: boolean }): RectPt[];
   /** Runs de texto de la página, con su caja, fuente, tamaño y color. Vacío si no hay texto (escaneado). */
   getPageText(doc: DocHandle, pageIndex: number): TextRun[];
+  /**
+   * Texto de la página CARÁCTER a CARÁCTER, en orden de lectura de PDFium, con la
+   * caja de cada uno (pt PDF de usuario). Base de la selección de texto (T12).
+   * Igual de caro que `getPageText`: se pide solo vía `EditSession.ensureChars`.
+   */
+  getCharBoxes(doc: DocHandle, pageIndex: number): CharBox[];
   /**
    * Árbol de marcadores (outline) del documento, en el orden en que Acrobat
    * lo muestra. `[]` si el documento no tiene marcadores. Fase 1: solo

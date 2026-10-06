@@ -401,6 +401,23 @@ select, input[type="text"], input[type="search"], input[type="number"] {
  * (nunca se mueve ni se reposiciona), que es quien de verdad garantiza
  * E-002: tapar la línea original pase lo que pase con `.run`.
  */
+/*
+ * Selección de texto por arrastre (T12). La capa `.seleccion-texto` solo existe
+ * mientras hay selección; en reposo no hay nodos y nada pinta (E-029). Las líneas
+ * (.run) no deben dejar que el navegador pinte su propia selección nativa al arrastrar.
+ */
+.sel-rect {
+  background: rgba(37, 99, 235, 0.3);
+  border-radius: 1px;
+}
+.run {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.run.editing {
+  -webkit-user-select: text;
+  user-select: text;
+}
 .run {
   color: transparent;
   background: transparent;

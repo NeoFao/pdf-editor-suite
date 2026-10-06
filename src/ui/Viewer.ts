@@ -8,6 +8,8 @@ import type { RectPt } from '../engine/PdfEngine';
 import { pathMasCercano, normalizeRect, type PathCandidate } from './toolGeometry';
 import { contarRenderPage, fijarPaginasPintadas } from '../diagnostico';
 import { hayGestoEnCurso } from './gesto';
+import { SeleccionTexto } from './SeleccionTexto';
+import type { QuadPt } from '../coords/quads';
 
 const GAP = 16;
 
@@ -54,6 +56,8 @@ export interface ViewerCallbacks {
   onImageSelect?: (pageIndex: number, objIndex: number) => void;
   /** Fin de un gesto de mover/redimensionar una imagen: rect final en puntos PDF. */
   onImageChangeRect?: (pageIndex: number, objIndex: number, newRectPt: RectPt, oldRectPt: RectPt) => void;
+  /** Empieza un arrastre de selección de texto: la selección de línea/imagen vigente ya no vale. */
+  onTextSelectionStart?: () => void;
 }
 
 /** Renderiza páginas visibles (canvas del motor) con su capa de texto encima. */
@@ -106,6 +110,37 @@ export class Viewer {
    * imagen, para que quede lista para reposicionarla sin un segundo clic.
    */
   private selectedImage: { pageIndex: number; objIndex: number } | null = null;
+
+  /**
+   * Selección de texto por arrastre (T12). Solo con la herramienta "ninguna";
+   * pinta únicamente mientras existe (en reposo no hay nodos, E-029). Se descarta
+   * al re-pintar o desalojar su página y al reconstruir el visor: los índices de
+   * carácter solo valen para el texto que había al seleccionar.
+   */
+  private readonly textoSel = new SeleccionTexto({
+    wrapper: (i) => this.wrappers[i],
+    geom: (i) => this.geoms[i]!,
+    pagina: (i) => {
+      const p = this.session.model.pages[i]!;
+      return { sizePt: p.sizePt, rotation: p.rotation };
+    },
+    chars: (i) => this.session.ensureChars(i),
+    activa: () => this.tool === 'none',
+    alEmpezar: () => {
+      // La selección de texto sustituye a la de una línea o imagen.
+      this.root.querySelectorAll('.run.selected').forEach((el) => el.classList.remove('selected'));
+      this.cb.onTextSelectionStart?.();
+    }
+  });
+
+  /** Texto y quads de la selección de texto vigente (con ratón), o `null` si no hay. */
+  seleccionTexto(): { pageIndex: number; texto: string; quads: QuadPt[] } | null {
+    const pageIndex = this.textoSel.pageIndex;
+    if (pageIndex === null) return null;
+    return { pageIndex, texto: this.textoSel.texto(), quads: this.textoSel.quads() };
+  }
+
+  limpiarSeleccionTexto(): void { this.textoSel.limpiar(); }
 
   constructor(
     private readonly root: HTMLElement,
@@ -653,6 +688,7 @@ export class Viewer {
     // las páginas: un pin apuntando al índice antiguo ya no significa nada.
     // `App.onReload` recalcula y vuelve a fijar `currentPage` por su cuenta.
     this.pinnedPage = null;
+    this.textoSel.limpiar();
     this.finishProgrammaticScroll(); // limpia también el temporizador de respaldo
     this.layout();
     this.renderVisible();
@@ -675,6 +711,7 @@ export class Viewer {
         width: `${page.sizePt.widthPt * this.scale}px`,
         height: `${page.sizePt.heightPt * this.scale}px`
       });
+      w.addEventListener('pointerdown', (e) => this.textoSel.alPulsar(page.index, e));
       // Clic en el fondo (no en un run ni en el marco de una imagen) → insertar en ese punto y deseleccionar la imagen activa.
       w.addEventListener('click', (e) => {
         const target = e.target as HTMLElement;
@@ -770,6 +807,7 @@ export class Viewer {
     if (!wrapper) return;
     if (wrapper.querySelector('.run.editing')) return;
     if (this.selectedImage?.pageIndex === i) return;
+    if (this.textoSel.pageIndex === i) return; // selección de texto viva: no se pierde al desalojar
     if (wrapper.querySelector('.tool-layer > canvas, .tool-layer > .rect-preview')) return;
     wrapper.textContent = '';
     this.rendered.delete(i);
@@ -785,6 +823,7 @@ export class Viewer {
     // `page` sigue viendo los runs recién cargados más abajo.
     this.session.ensureText(i);
     const wrapper = this.wrappers[i]!;
+    if (this.textoSel.pageIndex === i) this.textoSel.limpiar();
     wrapper.textContent = '';
     contarRenderPage();
     const { width, height, data } = this.session.engine.renderPage(this.session.doc, i, this.scale);
@@ -807,7 +846,7 @@ export class Viewer {
     const geom = this.geoms[i]!;
     new TextLayer(layer, page, geom, {
       onEdit: this.cb.onEdit,
-      onSelect: this.cb.onSelect,
+      onSelect: (pageIndex, runId) => { this.textoSel.limpiar(); this.cb.onSelect(pageIndex, runId); },
       onMove: (pageIndex, runId, dxCss, dyCss) => {
         // La conversión pt es afín: el delta no depende del punto base.
         const o = geom.cssToPt(0, 0);

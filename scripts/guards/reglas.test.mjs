@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -706,6 +706,31 @@ describe('pagegeometry-solo-con-fabrica', () => {
 
   test('no señala la fábrica', () => {
     assert.doesNotMatch('const g = PageGeometry.desdeTamanoVisual(w, h, 1, rot);', patron);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('registro-sin-duplicados', () => {
+  const regla = detectarEn('registro-sin-duplicados');
+
+  test('detecta un número duplicado', () => {
+    const p = analizarRegistroErrores('### E-001 · a\n\n### E-002 · b\n\n### E-002 · c\n');
+    assert.equal(p.length, 1);
+    assert.match(p[0].mensaje, /E-002 está duplicado/);
+    assert.equal(p[0].linea, 5);
+  });
+
+  test('detecta un número fuera de orden', () => {
+    const p = analizarRegistroErrores('### E-001 · a\n### E-003 · b\n### E-002 · c\n');
+    assert.equal(p.length, 1);
+    assert.match(p[0].mensaje, /E-002 está fuera de orden/);
+  });
+
+  test('no señala un registro correcto (con huecos permitidos) ni texto que no es encabezado', () => {
+    assert.deepEqual(analizarRegistroErrores('### E-001 · a\nver E-001 de nuevo\n### E-004 · b\n'), []);
   });
 
   test('sobre el repo real no encuentra nada', () => {

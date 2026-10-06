@@ -2249,3 +2249,44 @@ bordes por lado, flotante), `ConversorDocxNavegador.test.ts` con el motor real
 (`word-encabezados.docx`, `word-flotante.docx`) y `tests/e2e/next/word-a-pdf.spec.ts`.
 Dos tests antiguos asumían "un lado = toda la tabla" y se corrigieron (no se
 borró cobertura). Regla determinista: no se añade (no hay firma sintáctica única).
+
+### E-057 · El marcado solo podía cubrir líneas enteras; la selección por arrastre exigió tres cuidados (T12)
+
+**Síntoma.** Resaltar/subrayar/tachar solo funcionaban sobre la línea seleccionada
+entera (T11): no había forma de marcar un tramo, ni de copiarlo (Ctrl+C), ni de
+abarcar varias líneas, como en Acrobat.
+
+**Causa raíz.** El modelo solo conocía runs (`TextRun`: un objeto de texto con una
+caja), no caracteres. Al añadir la selección por arrastre aparecieron tres trampas
+que conviene no volver a pisar: (1) la caja de un carácter (`FPDFText_GetCharBox`)
+es la del GLIFO, no la de la línea: una "a" es más baja que una "l", así que marcar
+solo "ea" daba un quad de la mitad de alto; `quadsDeRango` toma la horizontal del
+carácter y la vertical de su LÍNEA (envolvente de los caracteres consecutivos que
+solapan, en espacio visual, E-053). (2) Tras un arrastre el navegador dispara un
+`click` en la línea donde se soltó: sin tragarlo en captura, soltar encima de un run
+abría la edición (y en el fondo insertaba texto). (3) Las `.run` tienen texto
+transparente pero real: sin `user-select: none` el navegador pinta su propia
+selección nativa gris encima mientras se arrastra (y rompe la prueba de oro de reposo
+de E-029 si queda algo seleccionado).
+
+**Arreglo.** `engine.getCharBoxes` (perezoso y cacheado por página en
+`EditSession.ensureChars`, invalidado como el texto, E-043/E-044); funciones puras en
+`src/texto/seleccionTexto.ts` (`indiceCaracterMasCercano`, `quadsDeRango`,
+`textoDeRango`); `SeleccionTexto` (UI) con el gesto en `registrarGesto` (E-034), solo
+con la herramienta "ninguna" y empezando sobre una `.run` fuera del tirador y de una
+línea en edición. La selección solo pinta mientras existe (`.sel-rect`): en reposo no
+hay nodos. Ctrl/Cmd+C usa el evento `copy` (no se interpone en un campo editable).
+
+**Cómo se detecta ahora.** `tests/unit/seleccionTexto.test.ts` (punto → carácter;
+quads por línea, también con /Rotate 270; altura de línea frente a glifo),
+`PdfiumEngine.charBoxes.test.ts` (coincide con `getPageText`), `EditSession.test.ts`
+(caché) y `tests/e2e/next/seleccion-texto.spec.ts` (3 quads recortados, copiar, clic
+corto sigue editando, tirador, herramienta pluma, páginas /Rotate).
+Pendiente: ampliar la selección con Mayús+flechas desde una línea enfocada.
+
+**Regla determinista de registro (misma PR).** Esta entrada se escribió como E-055 y
+colisionó con la de T9 (ramas paralelas, tercera colisión de números). La regla
+`registro-sin-duplicados` (`scripts/guards/reglas.mjs`) exige que cada `### E-0NN`
+aparezca una vez y en orden creciente en este fichero; su test cubre duplicado, fuera
+de orden y el repo real. El orden se exige a toda entrada nueva; las 13 que ya estaban desordenadas
+(E-004, 005, 007, 008, 009, 012, 015-019, 029, 030) se toleran en una lista fija que no crece.
