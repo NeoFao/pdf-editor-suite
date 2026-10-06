@@ -34,6 +34,7 @@ import { OcrPageCmd } from '../commands/OcrPage';
 import { TesseractOcr } from '../ocr/TesseractOcr';
 import { FiltrarPaginaCmd, type TipoFiltro } from '../commands/FiltrarPagina';
 import { ComprimirDocumentoCmd, CompresionCancelada } from '../commands/ComprimirDocumento';
+import { crearAdaptadorImagenWorker } from './adaptadorImagenWorker';
 import { AnadirEncabezadoMarcaCmd, QuitarEncabezadosMarcasCmd } from '../commands/EncabezadoMarcaAgua';
 import { EncabezadoPanel } from './EncabezadoPanel';
 import { SignaturePad } from './SignaturePad';
@@ -1820,7 +1821,7 @@ export class App {
     this.setStatus('Comprimiendo…');
     try {
       // Cede el hilo tras cada imagen (cederHilo, E-043/E-055) y avisa del avance en #status y en el panel.
-      const cmd = new ComprimirDocumentoCmd({ calidad, dpiMax }, undefined, {
+      const cmd = new ComprimirDocumentoCmd({ calidad, dpiMax }, crearAdaptadorImagenWorker(control.signal), {
         ceder: cederHilo,
         signal: control.signal,
         alProgreso: (p) => {

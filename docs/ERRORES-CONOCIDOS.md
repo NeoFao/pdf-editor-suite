@@ -2345,3 +2345,34 @@ vértices, quad girado 30 grados, degenerado, /Rotate 270) y
 guardado, Retroceso, Escape, nota, borrador, arrastre sigue seleccionando texto, precedencia,
 quads frente a /Rect, página girada). No se añade regla determinista: no hay patrón de código
 repetible, el riesgo ya lo cubre `pagegeometry-solo-con-fabrica` y el test E2E.
+
+### E-060 · Decodificar/codificar UNA imagen grande seguía bloqueando el hilo al comprimir (T15)
+
+**Síntoma.** Tras T9 (E-055) la interfaz respondía entre imágenes, pero una sola imagen grande
+(p. ej. 2000×2800 px) congelaba la pestaña durante su reescalado (`drawImage` + `getImageData`)
+y su codificación JPEG.
+
+**Causa raíz.** El adaptador de imagen usaba canvas del DOM en el hilo principal. El trabajo de
+píxeles no cede en mitad de una operación, por mucho que el comando ceda entre imágenes.
+
+**Arreglo.** `src/ui/compresorWorker.ts` (Worker módulo empaquetado por Vite, mismo origen: la CSP
+`worker-src 'self' blob:` no cambia) reescala y codifica con `OffscreenCanvas` +
+`convertToBlob`; PDFium sigue en el hilo principal (WASM síncrono con estado del documento) y el
+worker solo recibe píxeles RGBA (transferidos) y devuelve bytes. El protocolo (petición con id,
+respuesta, error, timeout) y el fallback son lógica pura en `src/image/protocoloCompresor.ts`. Si
+no hay Worker/OffscreenCanvas, no se puede crear el worker, responde error o expira, se degrada al
+camino del hilo principal de T9 (aviso solo en consola de desarrollo, nunca un fallo visible) y no
+se vuelve a intentar en esa compresión. Los píxeles se COPIAN antes de transferirlos: el fallback
+y el comando los necesitan intactos tras el envío (un buffer transferido queda detached). Al
+cancelar se cierra el worker y lo pendiente se rechaza sin caer al fallback (el comando restaura el
+snapshot y lanza `CompresionCancelada`); el comando cierra el adaptador siempre en `finally` (§2.6).
+
+**Cómo se detecta ahora.** `tests/unit/protocoloCompresor.test.ts` (ids, emparejado, timeout,
+cierre, fallback, cancelación, sin Worker real) y `tests/e2e/next/comprimir-worker.spec.ts`: medición
+ESTRUCTURAL (E-040) sobre `escaneado.pdf` — para cada petición al worker, una tarea de
+`MessageChannel` encolada tras el envío se ejecuta antes que la respuesta y, en el reescalado de la
+imagen entera, avanzan frames de un `requestAnimationFrame` encadenado; más fallback sin
+`OffscreenCanvas` y con `Worker` roto. `tests/e2e/deploy/csp-compresion-worker.spec.ts`: bajo la CSP
+real, 0 violaciones y las operaciones se resuelven en el worker. **Límite conocido:** PDFium
+decodificando la imagen (`getImagePixels`) y reinsertándola sigue en el hilo principal. Los filtros
+(grises, B/N, color mágico) siguen en el hilo principal: moverlos es el siguiente paso.

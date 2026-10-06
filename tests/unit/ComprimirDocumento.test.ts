@@ -193,3 +193,33 @@ test('T9: una señal ya abortada antes de empezar tampoco toca el documento', as
   await expect(bus.execute(new ComprimirDocumentoCmd({ calidad: 0.5, dpiMax: 150 }, fakeAdaptador(), { signal: ctl.signal }))).rejects.toBeInstanceOf(CompresionCancelada);
   expect(Buffer.from(engine.save(s.doc)).equals(Buffer.from(antes))).toBe(true);
 });
+
+test('T15: el comando cierra el adaptador (el worker) al terminar, con éxito o cancelado', async () => {
+  const { bus } = await docConImagenes(2);
+  let cierres = 0;
+  const ad = { ...fakeAdaptador(), cerrar: () => { cierres++; } };
+  await bus.execute(new ComprimirDocumentoCmd({ calidad: 0.5, dpiMax: 150 }, ad));
+  expect(cierres).toBe(1);
+
+  const { bus: bus2 } = await docConImagenes(2);
+  const ctl = new AbortController(); ctl.abort();
+  await expect(bus2.execute(new ComprimirDocumentoCmd({ calidad: 0.5, dpiMax: 150 }, ad, { signal: ctl.signal }))).rejects.toBeInstanceOf(CompresionCancelada);
+  expect(cierres).toBe(2);
+});
+
+test('T15: si el adaptador falla porque se canceló en pleno encargo, el llamador ve CompresionCancelada y el documento se restaura', async () => {
+  const { engine, s, bus } = await docConImagenes(3);
+  const antes = engine.save(s.doc);
+  const ref = await engine.open(antes);
+  const refBytes = engine.save(ref);
+  const ctl = new AbortController();
+  let llamadas = 0;
+  const ad = {
+    ...fakeAdaptador(),
+    // Simula el worker cerrado por cancelación a mitad de una codificación: rechaza con otro error.
+    async codificarJpeg() { if (++llamadas === 2) { ctl.abort(); throw new Error('worker cerrado'); } return JPEG_PEQUENO; }
+  };
+  await expect(bus.execute(new ComprimirDocumentoCmd({ calidad: 0.5, dpiMax: 150 }, ad, { signal: ctl.signal }))).rejects.toBeInstanceOf(CompresionCancelada);
+  expect(Buffer.from(engine.save(s.doc)).equals(Buffer.from(refBytes))).toBe(true);
+  expect(bus.canUndo()).toBe(false);
+});
