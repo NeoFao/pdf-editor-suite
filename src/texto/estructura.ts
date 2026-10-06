@@ -1,4 +1,5 @@
 import type { TextRun } from '../engine/PdfEngine';
+import { agruparLineasEditables, type LineaEditable } from './lineasEditables';
 
 /**
  * Reconstruye la estructura de lectura (líneas, párrafos) de los `TextRun`
@@ -7,13 +8,18 @@ import type { TextRun } from '../engine/PdfEngine';
  * Node a secas (`tests/unit/estructura.test.ts`). Lo usa la UI para "Texto…"
  * (#27 de la tabla de paridad, §9) y "Exportar Markdown" (#31).
  *
+ * Los objetos de texto de un PDF de Chrome son de UN glifo: antes de agrupar por Y, `piezasDeLectura` los reúne en
+ * «líneas editables» (`lineasEditables.ts`, N1) y trabaja con una pieza por tramo de estilo, con el texto REAL (sin
+ * espacios generados por PDFium, así que no se duplican, N6).
+ *
  * Limitaciones conocidas (fase 1, documentadas a propósito):
  * - Sin tablas: una tabla se lee como líneas de texto sueltas, sin la
  *   estructura de celdas.
  * - Sin columnas múltiples: el orden de lectura es "de arriba abajo por Y",
  *   así que en un documento a dos columnas el texto de la columna derecha
  *   puede intercalarse con el de la izquierda si ambas comparten alturas de
- *   línea. No hay detección de columnas en esta fase.
+ *   línea. No hay detección de columnas en esta fase (N5 sigue abierto: la
+ *   agrupación en líneas ya no las fusiona, falta el ORDEN de lectura).
  */
 
 /** Una línea de lectura: sus runs originales (ya ordenados de izquierda a derecha) y el texto ya unido. */
@@ -23,7 +29,7 @@ export interface Linea {
   text: string;
   /** Línea base representativa en puntos PDF (promedio de `originPt.yPt` de sus runs). */
   yPt: number;
-  /** Tamaño representativo en puntos: el MAYOR `sizePt` de sus runs (una línea con un superíndice pequeño sigue contando como del tamaño grande). */
+  /** Tamaño representativo en puntos: el MAYOR `sizeEfectivoPt` de sus runs (una línea con un superíndice pequeño sigue contando como del tamaño grande). */
   sizePt: number;
 }
 
@@ -48,7 +54,9 @@ function huecoEntre(a: TextRun, b: TextRun): number {
 
 /** Si hay que insertar un espacio entre `a` y `b` al unir su texto (§ del módulo: ~0.25 × sizePt). */
 function necesitaEspacio(a: TextRun, b: TextRun): boolean {
-  const refSize = Math.max(a.sizePt, b.sizePt);
+  // N6: si uno de los dos textos ya trae el espacio (`'Hola '` + `'mundo'`), no se añade otro.
+  if (/\s$/.test(a.text) || /^\s/.test(b.text)) return false;
+  const refSize = Math.max(a.sizeEfectivoPt, b.sizeEfectivoPt);
   return huecoEntre(a, b) > HUECO_ESPACIO * refSize;
 }
 
@@ -63,35 +71,156 @@ function unirTexto(runs: TextRun[]): string {
   return out;
 }
 
+/** Una línea editable lista para leer: sus piezas (una por tramo de estilo, de izquierda a derecha) y su geometría en pt. */
+interface Unidad {
+  piezas: TextRun[];
+  /** Línea base del primer objeto. */
+  yPt: number;
+  /** El MAYOR tamaño efectivo de sus tramos. */
+  sizePt: number;
+  x0: number;
+  x1: number;
+}
+
 /**
- * Agrupa runs sueltos en líneas de lectura, ordenadas de arriba abajo (Y PDF
- * descendente = orden de lectura) y, dentro de cada línea, de izquierda a
- * derecha. Ignora runs cuyo texto queda vacío tras `trim()` (no aportan nada
- * y solo estorban al agrupar).
+ * Reúne los objetos de texto en líneas editables (`lineasEditables.ts`) y devuelve una `Unidad` por línea, con UNA
+ * pieza (`TextRun`) por tramo de estilo: texto real, caja unida y el origen, la fuente, el tamaño efectivo y el color
+ * del tramo. Un PDF por glifo pasa de cientos de objetos a unas pocas líneas; uno con un objeto por línea (pdf-lib,
+ * Word) queda igual. Salen en el orden del content stream.
  */
-export function agruparLineas(runs: TextRun[]): Linea[] {
-  const utiles = runs.filter((r) => r.text.trim() !== '');
-  // Orden descendente de Y: en puntos PDF el eje Y crece hacia arriba, así
-  // que "arriba abajo" (orden de lectura) es Y decreciente.
-  const ordenados = utiles.slice().sort((a, b) => b.originPt.yPt - a.originPt.yPt);
+function unidadesDeLectura(runs: TextRun[]): Unidad[] {
+  const porId = new Map(runs.map((r) => [r.runId, r]));
+  return agruparLineasEditables(runs)
+    .filter((l) => l.text.trim() !== '')
+    .map((l) => ({
+      piezas: piezasDeLinea(l, porId),
+      yPt: l.originPt.yPt,
+      sizePt: Math.max(...l.estilos.map((e) => e.sizeEfectivoPt)),
+      x0: l.boxPt.xPt,
+      x1: l.boxPt.xPt + l.boxPt.wPt
+    }));
+}
 
-  const grupos: TextRun[][] = [];
-  for (const run of ordenados) {
-    const grupo = grupos.find((g) => {
-      const referencia = g[0]!;
-      const tolerancia = TOLERANCIA_LINEA * Math.max(referencia.sizePt, run.sizePt);
-      return Math.abs(referencia.originPt.yPt - run.originPt.yPt) <= tolerancia;
-    });
-    if (grupo) grupo.push(run);
-    else grupos.push([run]);
-  }
-
-  return grupos.map((grupo) => {
-    const porX = grupo.slice().sort((a, b) => a.boxPt.xPt - b.boxPt.xPt);
-    const yPt = porX.reduce((suma, r) => suma + r.originPt.yPt, 0) / porX.length;
-    const sizePt = Math.max(...porX.map((r) => r.sizePt));
-    return { runs: porX, text: unirTexto(porX), yPt, sizePt };
+function piezasDeLinea(linea: LineaEditable, porId: Map<number, TextRun>): TextRun[] {
+  return linea.estilos.map((estilo) => {
+    const tramos = linea.tramos.filter((t) => t.inicio < estilo.fin && t.fin > estilo.inicio);
+    const objetos = tramos.map((t) => porId.get(t.runId)!);
+    const primero = objetos[0]!;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const o of objetos) {
+      const b = o.boxPt;
+      if (!(b.wPt > 0) || !(b.hPt > 0)) continue;
+      x0 = Math.min(x0, b.xPt); y0 = Math.min(y0, b.yPt); x1 = Math.max(x1, b.xPt + b.wPt); y1 = Math.max(y1, b.yPt + b.hPt);
+    }
+    const boxPt = Number.isFinite(x0) ? { xPt: x0, yPt: y0, wPt: x1 - x0, hPt: y1 - y0 } : { ...primero.boxPt };
+    // Un espacio generado entre objetos queda dentro del texto del tramo (`linea.text` lo trae una sola vez).
+    const texto = linea.text.slice(estilo.inicio, estilo.fin);
+    return { ...primero, text: texto, textoReal: texto, boxPt, sizeEfectivoPt: estilo.sizeEfectivoPt, fontName: estilo.fontName, color: estilo.color };
   });
+}
+
+/** Una línea siguiente está en el mismo bloque (columna o párrafo) si va justo debajo y se solapa en horizontal. Fracción de tamaño: salto máximo. */
+const BLOQUE_SALTO_MAX = 2.5;
+/** Solape horizontal mínimo (fracción de la línea más estrecha) para estar en el mismo bloque. */
+const BLOQUE_SOLAPE_X_MIN = 0.3;
+/** Dos bloques de varias líneas son columnas si coinciden en vertical al menos esta fracción del más bajo. */
+const COLUMNAS_SOLAPE_Y_MIN = 0.5;
+/** …y se solapan en horizontal a lo sumo esta fracción del más estrecho. */
+const COLUMNAS_SOLAPE_X_MAX = 0.1;
+
+function continuaBloque(a: Unidad, b: Unidad): boolean {
+  const dy = a.yPt - b.yPt; // b debajo de a (Y PDF crece hacia arriba)
+  const tam = Math.max(a.sizePt, b.sizePt);
+  if (!(dy > 0.5 * tam) || dy > BLOQUE_SALTO_MAX * tam) return false;
+  const estrecho = Math.min(a.x1 - a.x0, b.x1 - b.x0);
+  const solape = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+  return estrecho > 0 && solape >= BLOQUE_SOLAPE_X_MIN * estrecho;
+}
+
+interface Bloque { unidades: Unidad[]; x0: number; x1: number; top: number; bottom: number }
+
+/** Elemento de lectura: una «fila» (unidades en la misma línea base, una sola línea de lectura) o un grupo de columnas. */
+interface Elemento { filas: Unidad[][]; top: number; x0: number }
+
+/**
+ * Bloques en el ORDEN DEL CONTENT STREAM: Chrome, Word o LibreOffice escriben una columna entera y después la otra.
+ * Dos bloques de varias líneas, uno al lado del otro, son columnas y se leen uno entero tras otro; lo demás (una
+ * celda de tabla, una línea suelta) se agrupa por línea base como siempre.
+ */
+function elementosDeLectura(unidades: Unidad[]): Elemento[] {
+  const bloques: Bloque[] = [];
+  let actual: Bloque | null = null;
+  for (const u of unidades) {
+    const ultima: Unidad | undefined = actual?.unidades[actual.unidades.length - 1];
+    if (actual && ultima && continuaBloque(ultima, u)) {
+      actual.unidades.push(u);
+      actual.x0 = Math.min(actual.x0, u.x0); actual.x1 = Math.max(actual.x1, u.x1); actual.bottom = u.yPt;
+    } else {
+      actual = { unidades: [u], x0: u.x0, x1: u.x1, top: u.yPt + u.sizePt, bottom: u.yPt };
+      bloques.push(actual);
+    }
+  }
+  // Columnas: bloques de varias líneas que coinciden en vertical y no se solapan en horizontal (union-find).
+  const multi = bloques.filter((b) => b.unidades.length >= 2);
+  const padre = new Map<Bloque, Bloque>(multi.map((b) => [b, b]));
+  const raiz = (b: Bloque): Bloque => { let r = b; while (padre.get(r) !== r) r = padre.get(r)!; return r; };
+  for (let i = 0; i < multi.length; i++) {
+    for (let j = i + 1; j < multi.length; j++) {
+      const A = multi[i]!, B = multi[j]!;
+      const solapeY = Math.min(A.top, B.top) - Math.max(A.bottom, B.bottom);
+      const bajo = Math.min(A.top - A.bottom, B.top - B.bottom);
+      const solapeX = Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0);
+      const estrecho = Math.min(A.x1 - A.x0, B.x1 - B.x0);
+      if (bajo > 0 && solapeY >= COLUMNAS_SOLAPE_Y_MIN * bajo && solapeX <= COLUMNAS_SOLAPE_X_MAX * estrecho) padre.set(raiz(A), raiz(B));
+    }
+  }
+  const grupos = new Map<Bloque, Bloque[]>();
+  for (const b of multi) grupos.set(raiz(b), [...(grupos.get(raiz(b)) ?? []), b]);
+
+  const elementos: Elemento[] = [];
+  for (const miembros of grupos.values()) {
+    const ordenados = miembros.slice().sort((a, b) => a.x0 - b.x0);
+    elementos.push({
+      filas: ordenados.flatMap((b) => b.unidades.map((u) => [u])),
+      top: Math.max(...ordenados.map((b) => b.top)),
+      x0: ordenados[0]!.x0
+    });
+  }
+  // Líneas sueltas (bloques de una sola línea): se reúnen por línea base, como siempre (celdas de una tabla, columnas
+  // de una sola línea…): una fila de lectura con sus unidades de izquierda a derecha.
+  const sueltas = bloques.filter((b) => b.unidades.length === 1).map((b) => b.unidades[0]!).sort((a, b) => b.yPt - a.yPt);
+  const filas: Unidad[][] = [];
+  for (const u of sueltas) {
+    const fila = filas.find((f) => Math.abs(f[0]!.yPt - u.yPt) <= TOLERANCIA_LINEA * Math.max(f[0]!.sizePt, u.sizePt));
+    if (fila) fila.push(u); else filas.push([u]);
+  }
+  for (const f of filas) {
+    f.sort((a, b) => a.x0 - b.x0);
+    elementos.push({ filas: [f], top: Math.max(...f.map((u) => u.yPt + u.sizePt)), x0: f[0]!.x0 });
+  }
+  return elementos.sort((a, b) => b.top - a.top || a.x0 - b.x0);
+}
+
+/**
+ * Agrupa runs sueltos en líneas de lectura, ordenadas de arriba abajo (Y PDF descendente = orden de lectura) y,
+ * dentro de cada línea, de izquierda a derecha. Los objetos se reúnen antes en líneas editables (un PDF de Chrome
+ * trae un objeto por glifo); las columnas de varias líneas se leen una tras otra (N5). Ignora lo que queda vacío
+ * tras `trim()`.
+ */
+export function agruparLineas(runsDelMotor: TextRun[]): Linea[] {
+  const lineas: Linea[] = [];
+  for (const el of elementosDeLectura(unidadesDeLectura(runsDelMotor))) {
+    for (const fila of el.filas) {
+      const piezas = fila.flatMap((u) => u.piezas);
+      lineas.push({
+        runs: piezas,
+        text: unirTexto(piezas),
+        yPt: fila.reduce((suma, u) => suma + u.yPt, 0) / fila.length,
+        sizePt: Math.max(...fila.map((u) => u.sizePt))
+      });
+    }
+  }
+  return lineas;
 }
 
 /**
@@ -156,7 +285,7 @@ function tamanoCuerpo(paginas: Linea[][]): number {
     for (const linea of lineas) {
       for (const run of linea.runs) {
         const peso = Math.max(1, run.text.length);
-        pesos.set(run.sizePt, (pesos.get(run.sizePt) ?? 0) + peso);
+        pesos.set(run.sizeEfectivoPt, (pesos.get(run.sizeEfectivoPt) ?? 0) + peso);
       }
     }
   }

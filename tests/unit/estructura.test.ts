@@ -1,6 +1,11 @@
-import { test, expect } from 'vitest';
+import { test, expect, describe } from 'vitest';
 import { agruparLineas, agruparParrafos, aTextoPlano, aMarkdown } from '../../src/texto/estructura';
 import type { TextRun } from '../../src/engine/PdfEngine';
+import { crearTextRun } from './_util/textRun';
+import { PdfiumEngine } from '../../src/engine/pdfium/PdfiumEngine';
+import { fixture } from './_util/fixtures';
+
+let siguienteRunId = 0;
 
 /** Construye un TextRun de prueba con los campos mínimos que usa `estructura.ts`. */
 function run(partial: {
@@ -11,16 +16,8 @@ function run(partial: {
   fontName?: string;
   wPt?: number;
 }): TextRun {
-  const wPt = partial.wPt ?? partial.text.length * partial.sizePt * 0.5;
-  return {
-    runId: 0,
-    text: partial.text,
-    boxPt: { xPt: partial.xPt, yPt: partial.yPt, wPt, hPt: partial.sizePt },
-    fontName: partial.fontName ?? 'Helvetica',
-    sizePt: partial.sizePt,
-    color: [0, 0, 0, 255],
-    originPt: { xPt: partial.xPt, yPt: partial.yPt }
-  };
+  // runId único por run, como en el motor (la agrupación en líneas editables se apoya en él).
+  return crearTextRun({ ...partial, runId: siguienteRunId++, wPt: partial.wPt ?? partial.text.length * partial.sizePt * 0.5 });
 }
 
 test('agruparLineas: dos runs en la misma línea base con hueco amplio se unen con un espacio', () => {
@@ -171,4 +168,73 @@ test('aMarkdown: una página vacía no rompe nada', () => {
   const vacia: ReturnType<typeof agruparLineas> = [];
   expect(() => aMarkdown([p1, vacia])).not.toThrow();
   expect(aMarkdown([vacia])).toBe('');
+});
+
+// ---- N1: lectura sobre líneas editables (N5 columnas, N6 espacios) ----
+
+test('N5 (sintético): dos columnas de varias líneas escritas una tras otra se leen enteras, la izquierda primero', () => {
+  const izq1 = run({ text: 'izquierda uno', xPt: 40, yPt: 700, sizePt: 12 });
+  const izq2 = run({ text: 'izquierda dos', xPt: 40, yPt: 686, sizePt: 12 });
+  const der1 = run({ text: 'derecha uno', xPt: 200, yPt: 700, sizePt: 12 });
+  const der2 = run({ text: 'derecha dos', xPt: 200, yPt: 686, sizePt: 12 });
+  // content stream: columna izquierda entera y después la derecha.
+  expect(agruparLineas([izq1, izq2, der1, der2]).map((l) => l.text)).toEqual(['izquierda uno', 'izquierda dos', 'derecha uno', 'derecha dos']);
+});
+
+test('N5 (sintético): celdas de UNA línea en la misma línea base siguen siendo una fila de lectura', () => {
+  const a = run({ text: 'Celda A1', xPt: 40, yPt: 700, sizePt: 12 });
+  const b = run({ text: 'Celda B1', xPt: 200, yPt: 700, sizePt: 12 });
+  const c = run({ text: 'Celda A2', xPt: 40, yPt: 686, sizePt: 12 });
+  const d = run({ text: 'Celda B2', xPt: 200, yPt: 686, sizePt: 12 });
+  expect(agruparLineas([a, b, c, d]).map((l) => l.text)).toEqual(['Celda A1 Celda B1', 'Celda A2 Celda B2']);
+});
+
+test('N6 (sintético): el espacio ya presente o generado no se duplica al unir piezas', () => {
+  const a = run({ text: 'Hola ', xPt: 40, yPt: 700, sizePt: 12 }); // acaba en espacio real; el hueco de cajas lo pediría de nuevo
+  const b = run({ text: 'mundo', xPt: 80, yPt: 700, sizePt: 12, wPt: 30 });
+  expect(agruparLineas([a, b])[0]!.text).toBe('Hola mundo');
+});
+
+describe('con el motor real sobre por-glifo.pdf (un Tj por glifo)', () => {
+  async function lineasPorGlifo() {
+    const eng = await PdfiumEngine.create();
+    const doc = await eng.open(fixture('por-glifo.pdf'));
+    const lineas = agruparLineas(eng.getPageText(doc, 0));
+    eng.close(doc);
+    return lineas;
+  }
+
+  test('N5: las dos columnas se leen enteras (no intercaladas) y las celdas de la tabla forman filas', async () => {
+    const textos = (await lineasPorGlifo()).map((l) => l.text);
+    expect(textos).toEqual([
+      'Tabla de cifras',
+      'Columna izquierda uno', 'Columna izquierda dos', 'Columna derecha uno', 'Columna derecha dos',
+      'Bloque amplio izquierdo Bloque amplio derecho',
+      'Estilo mixto: normal NEGRITA y fin.',
+      'uno dos tres cuatro cinco seis',
+      'E=mc2 fin.',
+      'Celda A1 Celda B1 Celda C1', 'Celda A2 Celda B2 Celda C2',
+      'Texto con recorte activo', 'Capa OCR invisible', 'Texto NEGRITA final', 'Texto girado'
+    ]);
+  });
+
+  test('N6: ninguna línea tiene espacios dobles ni empieza o acaba en espacio', async () => {
+    for (const l of await lineasPorGlifo()) {
+      expect(l.text).not.toMatch(/ {2}/);
+      expect(l.text).toBe(l.text.trim());
+    }
+  });
+
+  test('N6: Markdown de una línea multiestilo: negrita bien formada y sin "** **"', async () => {
+    const md = aMarkdown([await lineasPorGlifo()]);
+    expect(md).toContain('Estilo mixto: normal **NEGRITA** y fin.');
+    expect(md).toContain('Texto **NEGRITA** final');
+    expect(md).toContain('# Tabla de cifras');
+    expect(md).not.toMatch(/\*\* \*\*|\*\*\*\*/);
+  });
+
+  test('el tamaño de los encabezados sale del tamaño EFECTIVO (22 pt frente a 11 pt = H1), no del Tf nominal', async () => {
+    const md = aMarkdown([await lineasPorGlifo()]);
+    expect(md.split('\n')[0]).toBe('# Tabla de cifras');
+  });
 });
