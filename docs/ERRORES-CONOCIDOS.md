@@ -2665,3 +2665,31 @@ vertical y desbordaba el visor por la derecha (scroll horizontal, texto fuera de
 **Cómo se detecta ahora.** `tests/e2e/next/zoom-tras-rotar.spec.ts`: en modo ancho la página apaisada mide el ancho
 útil del visor (±4 px) sin scroll horizontal; con zoom manual (+) rotar no cambia el porcentaje. Fallaba antes.
 Sin regla guard: es estado de interfaz, no un patrón estático.
+
+---
+
+### E-073 · Nota y Rectángulo solo se podían usar con ratón (WCAG 2.1.1)
+
+**Síntoma.** Con el teclado, `N` activaba «Modo nota» y `R` el rectángulo, pero ninguna tecla colocaba la nota ni
+dibujaba nada: Enter/Espacio/flechas no hacían nada. Seleccionar, resaltar, subrayar, recorrer anotaciones y editar
+sí tenían teclado (E-061).
+
+**Causa raíz.** Ambas herramientas nacieron como gestos de puntero (`onBackgroundClick`, `pointerdown/move/up` de
+`attachToolCapture`) y la accesibilidad por teclado se fue añadiendo herramienta a herramienta (A-03, T16) sin una
+lista de «qué acciones de creación siguen dependiendo del ratón». Nadie la comprobó para las herramientas de dibujo.
+
+**Arreglo.** Atajos contextuales (`contextual: true` en `TABLA_ATAJOS`, `resolverAtajoContextual`; solo aplican con
+la herramienta activa y el foco en el visor, en fase de captura para adelantarse al Enter que edita una línea):
+- Nota: Enter la coloca sobre la línea enfocada o, si no hay, en la esquina superior izquierda de lo visible y abre
+  el diálogo de texto.
+- Rectángulo: Enter crea un borrador de 120×80 pt centrado en lo visible; flechas lo mueven 5 pt, Mayús+flechas lo
+  redimensionan (← → ancho, ↑ ↓ alto); Enter lo confirma (un único \`DrawRectCmd\`, un solo paso de deshacer) y Esc
+  lo cancela. El borrador vive en puntos visuales de página (independiente de zoom y de /Rotate) y cada paso se
+  anuncia en \`#status\`.
+- Pluma: EXCEPCIÓN documentada (ayuda \`?\` y este registro). Un trazo a mano alzada depende del recorrido del
+  movimiento, que WCAG 2.1.1 exime de requerir teclado; la alternativa para marcar sin ratón es Rectángulo,
+  Resaltar, Subrayar, Tachar o Nota.
+
+**Cómo se detecta ahora.** `tests/e2e/next/herramientas-teclado.spec.ts` (sin `page.mouse` ni clics: nota con y sin
+línea enfocada, rectángulo crear/mover/redimensionar/confirmar con el PDF guardado, Esc, Enter sigue editando sin
+herramienta, ayuda) y `tests/unit/atajos.test.ts`. Fallaban antes. Sin regla guard: es cobertura funcional.

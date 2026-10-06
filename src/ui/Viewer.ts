@@ -439,6 +439,7 @@ export class Viewer {
    */
   setTool(tool: ToolMode): void {
     if (tool !== this.tool) this.limpiarMarcadoSeleccionado();
+    if (tool !== 'rect') this.cancelarRectTeclado();
     this.tool = tool;
     const activo = tool === 'pen' || tool === 'rect' || tool === 'eraser';
     const cursor = tool === 'eraser' ? 'cell' : 'crosshair';
@@ -654,17 +655,119 @@ export class Viewer {
    * página está a la vista. Sirve para colocar lo recién insertado donde el usuario mira (E-070).
    */
   centroVisiblePt(pageIndex: number): { xPt: number; yPt: number } | null {
-    const wrapper = this.wrappers[pageIndex];
+    const v = this.zonaVisibleCss(pageIndex);
     const geom = this.geoms[pageIndex];
-    if (!wrapper || !geom) return null;
+    if (!v || !geom) return null;
+    const p = geom.cssToPt((v.izq + v.der) / 2, (v.arr + v.aba) / 2);
+    return { xPt: p.xPt, yPt: p.yPt };
+  }
+
+  /**
+   * Parte de la página `pageIndex` que el visor muestra ahora, en px CSS DENTRO de la página
+   * (origen arriba-izquierda de la página, visual). `null` si ninguna parte está a la vista.
+   */
+  private zonaVisibleCss(pageIndex: number): { izq: number; der: number; arr: number; aba: number } | null {
+    const wrapper = this.wrappers[pageIndex];
+    if (!wrapper) return null;
     const w = wrapper.getBoundingClientRect();
     const r = this.root.getBoundingClientRect();
     const izq = Math.max(w.left, r.left), der = Math.min(w.right, r.right);
     const arr = Math.max(w.top, r.top), aba = Math.min(w.bottom, r.bottom);
     if (der <= izq || aba <= arr) return null;
-    // px CSS dentro de la página (origen arriba-izquierda de la página).
-    const p = geom.cssToPt((izq + der) / 2 - w.left, (arr + aba) / 2 - w.top);
-    return { xPt: p.xPt, yPt: p.yPt };
+    return { izq: izq - w.left, der: der - w.left, arr: arr - w.top, aba: aba - w.top };
+  }
+
+  /** Esquina superior izquierda de la parte visible de la página (con un margen de 16 px CSS), en puntos PDF. */
+  esquinaVisiblePt(pageIndex: number): PtPoint | null {
+    const v = this.zonaVisibleCss(pageIndex);
+    const geom = this.geoms[pageIndex];
+    if (!v || !geom) return null;
+    const p = geom.cssToPt(Math.min(v.izq + 16, v.der), Math.min(v.arr + 16, v.aba));
+    return p;
+  }
+
+  /** Esquina superior izquierda de un elemento de la página (p. ej. una línea enfocada), en puntos PDF. */
+  puntoDeElementoPt(pageIndex: number, el: HTMLElement): PtPoint | null {
+    const wrapper = this.wrappers[pageIndex];
+    const geom = this.geoms[pageIndex];
+    if (!wrapper || !geom) return null;
+    const w = wrapper.getBoundingClientRect();
+    const b = el.getBoundingClientRect();
+    const p = geom.cssToPt(b.left - w.left, b.top - w.top);
+    return p;
+  }
+
+  // ---- Rectángulo por teclado (E-073, WCAG 2.1.1) ----
+  // El borrador vive en puntos VISUALES de página (pt = px CSS / escala, origen arriba-izquierda, Y hacia
+  // abajo): no depende del zoom ni de /Rotate hasta que se confirma y pasa a puntos PDF con `cssToPt`.
+  private borradorRect: { pageIndex: number; x: number; y: number; w: number; h: number } | null = null;
+
+  hayBorradorRect(): boolean { return this.borradorRect !== null; }
+
+  /** Crea el borrador (120×80 pt) centrado en la parte visible de la página, acotado a ella. */
+  iniciarRectTeclado(pageIndex: number): string | null {
+    const p = this.session.model.pages[pageIndex];
+    const v = this.zonaVisibleCss(pageIndex);
+    if (!p || !v) return null;
+    const w = Math.min(120, p.sizePt.widthPt), h = Math.min(80, p.sizePt.heightPt);
+    const cx = (v.izq + v.der) / 2 / this.scale, cy = (v.arr + v.aba) / 2 / this.scale;
+    this.borradorRect = { pageIndex, x: cx - w / 2, y: cy - h / 2, w, h };
+    return this.ajustarYPintarBorrador();
+  }
+
+  /** Mueve (o, con `redimensionar`, cambia ancho/alto) el borrador 5 pt. dx/dy: -1, 0 o 1 (visual: +x derecha, +y abajo). */
+  moverRectTeclado(dx: number, dy: number, redimensionar: boolean): string | null {
+    const b = this.borradorRect;
+    if (!b) return null;
+    if (redimensionar) { b.w += dx * 5; b.h += dy * 5; } else { b.x += dx * 5; b.y += dy * 5; }
+    return this.ajustarYPintarBorrador();
+  }
+
+  /** Confirma el borrador: emite `onDrawRect` en puntos PDF y lo limpia. */
+  confirmarRectTeclado(): boolean {
+    const b = this.borradorRect;
+    const geom = b ? this.geoms[b.pageIndex] : null;
+    if (!b || !geom) return false;
+    const s = this.scale;
+    const a = geom.cssToPt(b.x * s, b.y * s);
+    const c = geom.cssToPt((b.x + b.w) * s, (b.y + b.h) * s);
+    const rect = normalizeRect(a.xPt, a.yPt, c.xPt, c.yPt);
+    this.cancelarRectTeclado();
+    this.cb.onDrawRect?.(b.pageIndex, rect);
+    return true;
+  }
+
+  cancelarRectTeclado(): void {
+    const b = this.borradorRect;
+    this.borradorRect = null;
+    if (b) this.wrappers[b.pageIndex]?.querySelector('.tool-layer > .rect-preview')?.remove();
+  }
+
+  /** Acota el borrador a la página (mín. 6 pt), lo pinta en la capa de herramienta, lo revela y devuelve el aviso para `#status`. */
+  private ajustarYPintarBorrador(): string | null {
+    const b = this.borradorRect;
+    const p = b ? this.session.model.pages[b.pageIndex] : null;
+    const layer = b ? this.wrappers[b.pageIndex]?.querySelector<HTMLElement>('.tool-layer') : null;
+    if (!b || !p || !layer) return null;
+    const W = p.sizePt.widthPt, H = p.sizePt.heightPt;
+    b.w = Math.min(W, Math.max(6, b.w)); b.h = Math.min(H, Math.max(6, b.h));
+    b.x = Math.min(W - b.w, Math.max(0, b.x)); b.y = Math.min(H - b.h, Math.max(0, b.y));
+    let el = layer.querySelector<HTMLElement>(':scope > .rect-preview');
+    if (!el) {
+      el = document.createElement('div');
+      el.className = 'rect-preview';
+      layer.appendChild(el);
+    }
+    const s = this.scale;
+    Object.assign(el.style, {
+      position: 'absolute', boxSizing: 'border-box', pointerEvents: 'none',
+      border: `2px dashed rgb(${this.toolColor.join(',')})`,
+      left: `${b.x * s}px`, top: `${b.y * s}px`, width: `${b.w * s}px`, height: `${b.h * s}px`
+    });
+    // Si el desplazamiento lo sacó de la vista, se desplaza el visor (el wrapper conserva tamaño aunque no esté pintado).
+    const v = this.zonaVisibleCss(b.pageIndex);
+    if (!v || b.y * s < v.arr || (b.y + b.h) * s > v.aba || b.x * s < v.izq || (b.x + b.w) * s > v.der) el.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    return `Rectángulo en preparación: ${Math.round(b.w)} por ${Math.round(b.h)} pt, a ${Math.round(b.x)} pt del borde izquierdo y ${Math.round(b.y)} pt del superior. Enter lo confirma, Escape lo cancela.`;
   }
 
   /** true si la caja del rect (puntos PDF) está entera dentro de lo que el visor muestra ahora. */

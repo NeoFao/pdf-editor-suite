@@ -41,6 +41,12 @@ export class AtajosPanel {
       tabla.appendChild(fila);
     }
 
+    // Excepción WCAG 2.1.1: la pluma (trazo a mano alzada) no tiene equivalente de teclado.
+    const notaPluma = document.createElement('p');
+    notaPluma.id = 'shortcuts-pluma';
+    notaPluma.textContent = 'Pluma: el trazo a mano alzada depende del recorrido del movimiento, por lo que WCAG 2.1.1 lo exime de tener teclado. Para marcar sin ratón usa Rectángulo, Resaltar, Subrayar, Tachar o Nota.';
+    Object.assign(notaPluma.style, { font: '12px sans-serif', margin: '8px 0 0' });
+
     // Enlace discreto a la app vieja (cutover de despliegue, 2026-09-29):
     // se sirve temporalmente en /legacy/ para quien la necesite mientras la
     // app nueva alcanza paridad completa — ver AGENTS.md y el registro de la
@@ -61,7 +67,7 @@ export class AtajosPanel {
     btnCerrar.addEventListener('click', () => dialog.close());
     barra.append(enlaceLegacy, btnCerrar);
 
-    dialog.append(titulo, tabla, barra);
+    dialog.append(titulo, tabla, notaPluma, barra);
     dialog.addEventListener('close', () => dialog.remove());
     document.body.appendChild(dialog);
     dialog.showModal();
