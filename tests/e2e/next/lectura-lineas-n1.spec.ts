@@ -19,8 +19,8 @@ test('E-080: en un PDF con CTM 0,75 el editor y el panel usan el tamaño EFECTIV
   // Escala REAL de la app (px CSS por pt): ancho del `.page` ÷ ancho de la página en pt (595,28).
   const escala = (await pagina.boundingBox())!.width / 595.28;
 
-  // La «C» de «Columna izquierda uno»: un objeto de un glifo en Helvetica, 11 pt efectivos.
-  const run = page.locator('.run').filter({ hasText: /^C$/ }).first();
+  // «Columna izquierda uno»: una línea de objetos de un glifo en Helvetica, 11 pt efectivos (N1: una .run por línea).
+  const run = page.locator('.run', { hasText: 'Columna izquierda uno' });
   await expect(run).toBeVisible();
   await run.click();
   await expect(run).toHaveClass(/editing/);
@@ -32,23 +32,18 @@ test('E-080: en un PDF con CTM 0,75 el editor y el panel usan el tamaño EFECTIV
   await expect(page.locator('#prop-size')).toHaveValue('11'); // antes: 14.5
 });
 
-test('E-080: pedir 22 pt en el panel deja la línea a 22 pt efectivos (el doble de 11), no a 16,5', async ({ page }) => {
+test('N1: en una línea compuesta (varios objetos) el panel de propiedades se desactiva con un aviso, no cambia solo un glifo', async ({ page }) => {
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(path.join(GEN, 'por-glifo.pdf'));
-  const run = page.locator('.run').filter({ hasText: /^C$/ }).first();
+  const run = page.locator('.run', { hasText: 'Columna izquierda uno' });
   await run.click();
   await page.keyboard.press('Escape');
-  const antes = (await run.boundingBox())!;
-
-  await page.locator('#prop-size').fill('22');
-  await page.locator('#prop-size').dispatchEvent('change');
-  await expect(page.locator('#status')).toHaveText('Tamaño cambiado.');
-  await expect(page.locator('#prop-size')).toHaveValue('22');
-
-  const despues = (await page.locator('.run').filter({ hasText: /^C$/ }).first().boundingBox())!;
-  // El alto de la caja del glifo se duplica (±10 %): con la conversión nominal incorrecta sería ×1,5.
-  expect(despues.height / antes.height).toBeGreaterThan(1.8);
-  expect(despues.height / antes.height).toBeLessThan(2.2);
+  await expect(page.locator('#props-panel')).toBeVisible();
+  await expect(page.locator('#prop-size')).toHaveValue('11');
+  for (const id of ['#prop-size', '#prop-font', '#btn-color']) {
+    await expect(page.locator(id)).toBeDisabled();
+    await expect(page.locator(id)).toHaveAttribute('title', /varios tramos/);
+  }
 });
 
 test('E-079: editar un subconjunto CID con un carácter ausente sustituye la fuente y el texto sobrevive (no .notdef)', async ({ page }) => {

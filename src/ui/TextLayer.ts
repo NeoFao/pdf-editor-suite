@@ -3,19 +3,26 @@ import type { PageGeometry } from '../coords/PageGeometry';
 import { cssFontFor } from './cssFontFor';
 import { measureFontAscent } from './measureFontAscent';
 import { registrarGesto } from './gesto';
+import { agruparLineasEditables, type LineaEditable } from '../texto/lineasEditables';
 
-export interface EditRequest { pageIndex: number; runId: number; newText: string; oldText: string; el: HTMLElement }
+/** `runId` es el del PRIMER objeto de la línea (el que da su tipografía); `linea` trae todos (N1). */
+export interface EditRequest { pageIndex: number; runId: number; newText: string; oldText: string; el: HTMLElement; linea: LineaEditable }
 export interface TextLayerCallbacks {
   onEdit: (req: EditRequest) => void;
+  /** `runId`: el primer objeto de la línea. */
   onSelect: (pageIndex: number, runId: number) => void;
-  onMove: (pageIndex: number, runId: number, dxCss: number, dyCss: number) => void;
+  /** `runIds`: TODOS los objetos de la línea (una línea compuesta se mueve entera). */
+  onMove: (pageIndex: number, runId: number, dxCss: number, dyCss: number, runIds: readonly number[]) => void;
   /** true si hay una herramienta de colocación activa (nota, insertar…): un clic sobre la línea coloca, no edita (N7). */
   colocando?: () => boolean;
 }
 
 /**
- * Capa de bloques de texto editables sobre una página. Cada run es un div
- * posicionado por PageGeometry. Clic selecciona/edita; un tirador permite
+ * Capa de bloques de texto editables sobre una página. Cada LÍNEA EDITABLE (N1,
+ * `agruparLineasEditables`) es un div posicionado por PageGeometry: en un PDF de Chrome una línea
+ * son decenas de objetos de un glifo y la capa pinta UNA `.run` por línea, con la caja de la línea
+ * entera, el tamaño efectivo (E-080) y la línea base del primer objeto (E-030). Una línea de un solo
+ * objeto se comporta exactamente como antes (su texto, su caja y su comando). Clic selecciona/edita; un tirador permite
  * arrastrarlo. El texto se pone con textContent, nunca innerHTML.
  *
  * E-029 — En reposo el `<div class="run">` es INVISIBLE (texto transparente,
@@ -83,14 +90,21 @@ export class TextLayer {
   }
 
   private build(): void {
-    for (const run of this.page.runs) {
-      // Rect de reposo: SIEMPRE la caja original de los glifos (`run.boxPt`).
+    const porId = new Map(this.page.runs.map((r) => [r.runId, r]));
+    for (const linea of agruparLineasEditables(this.page.runs, this.page.index)) {
+      // El primer objeto de la línea da la tipografía, el color y el origen de la línea base (E-030).
+      const run = porId.get(linea.runIds[0]!)!;
+      const compuesta = linea.runIds.length > 1;
+      // Una línea de un objeto conserva su texto y su caja de siempre; una compuesta, el texto y la unión de cajas.
+      const texto = compuesta ? linea.text : run.text;
+      const cajaPt = compuesta ? linea.boxPt : run.boxPt;
+      // Rect de reposo: SIEMPRE la caja original de los glifos de la línea (unión de las cajas originales).
       // Es la geometría a la que el bloque vuelve al salir de edición y la
       // que usa la máscara — nunca se recalcula desde el DOM (E-002).
-      const r = this.geom.rectPtToCss(run.boxPt);
+      const r = this.geom.rectPtToCss(cajaPt);
       // Dirección del texto en el espacio de usuario (múltiplos de 90, E-063): con 90/270 el texto es
       // vertical en la capa sin girar, así que su LARGO es el alto de la caja y no el ancho.
-      const anguloDeg = ((run.anguloDeg ?? 0) % 360 + 360) % 360;
+      const anguloDeg = ((linea.anguloDeg ?? 0) % 360 + 360) % 360;
       const anguloCss = anguloDeg % 90 === 0 ? anguloDeg : 0; // otros ángulos: se tratan como horizontal
       const largoCss = anguloCss % 180 !== 0 ? r.height : r.width; // px CSS de la capa
 
@@ -110,7 +124,8 @@ export class TextLayer {
       const block = document.createElement('div');
       block.className = 'run';
       block.dataset.runId = String(run.runId);
-      block.textContent = run.text;
+      block.dataset.lineaId = linea.lineaId;
+      block.textContent = texto;
       block.setAttribute('role', 'textbox');
       block.setAttribute('aria-readonly', 'true');
       block.setAttribute('aria-label', `Línea de texto ${this.bloques.length + 1}`);
@@ -136,7 +151,7 @@ export class TextLayer {
       const editFont = cssFontFor(run.fontName, sizeCss);
       const editColor = `rgb(${run.color[0]}, ${run.color[1]}, ${run.color[2]})`;
 
-      let oldText = run.text;
+      let oldText = texto;
       let editadoConTeclado = false;
       const empezarEdicion = (): void => {
         for (const el of Array.from(this.host.querySelectorAll<HTMLElement>('.run'))) el.classList.remove('selected');
@@ -217,7 +232,7 @@ export class TextLayer {
         });
         const newText = block.textContent ?? '';
         if (newText !== oldText) {
-          this.cb.onEdit({ pageIndex: this.page.index, runId: run.runId, newText, oldText, el: block });
+          this.cb.onEdit({ pageIndex: this.page.index, runId: run.runId, newText, oldText, el: block, linea });
         }
       };
       block.addEventListener('blur', commit);
@@ -245,7 +260,7 @@ export class TextLayer {
         else if (e.key === 'Enter') { e.preventDefault(); editadoConTeclado = true; empezarEdicion(); }
       });
 
-      block.appendChild(this.makeDragHandle(block, run.runId));
+      block.appendChild(this.makeDragHandle(block, run.runId, linea.runIds));
       this.host.appendChild(block);
     }
   }
@@ -257,7 +272,7 @@ export class TextLayer {
    * deshacer en el motor porque `onMove` es lo único que llega a ejecutar
    * un comando.
    */
-  private makeDragHandle(block: HTMLElement, runId: number): HTMLElement {
+  private makeDragHandle(block: HTMLElement, runId: number, runIds: readonly number[]): HTMLElement {
     const handle = document.createElement('div');
     handle.className = 'run-drag';
     // Posición/tamaño (geometría) inline; color, opacidad y visibilidad por
@@ -287,7 +302,7 @@ export class TextLayer {
         },
         onUp: (ev) => {
           const dx = ev.clientX - startX, dy = ev.clientY - startY;
-          if (dx !== 0 || dy !== 0) this.cb.onMove(this.page.index, runId, dx, dy);
+          if (dx !== 0 || dy !== 0) this.cb.onMove(this.page.index, runId, dx, dy, runIds);
         },
         onCancel: () => {
           block.style.left = `${baseLeft}px`;

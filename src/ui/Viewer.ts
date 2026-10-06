@@ -12,6 +12,7 @@ import { hayGestoEnCurso } from './gesto';
 import { SeleccionTexto } from './SeleccionTexto';
 import { marcadoBajoPunto, ordenLecturaMarcados, type MarcadoHit, type QuadPt } from '../coords/quads';
 import { textoDeMarcado } from '../texto/seleccionTexto';
+import { lineaDeRun } from '../texto/lineasEditables';
 
 const GAP = 16;
 /** E-068: espera máxima hasta el PRIMER evento de scroll de `scrollToPage` (con la CPU cargada tarda más de 150 ms). */
@@ -46,7 +47,8 @@ export interface ViewerCallbacks {
   onEdit: (req: EditRequest) => void;
   onSelect: (pageIndex: number, runId: number) => void;
   onBackgroundClick: (pageIndex: number, at: PtPoint) => void;
-  onMove: (pageIndex: number, runId: number, dxPt: number, dyPt: number) => void;
+  /** `runIds`: todos los objetos de la línea que se mueve (una línea compuesta, N1). */
+  onMove: (pageIndex: number, runId: number, dxPt: number, dyPt: number, runIds: readonly number[]) => void;
   onPageChange?: (pageIndex: number) => void;
   onStroke?: (pageIndex: number, points: PtPoint[]) => void;
   /** Fin de un arrastre en modo rectángulo (#16): rect ya normalizado, en puntos PDF. */
@@ -170,10 +172,12 @@ export class Viewer {
    */
   extenderSeleccionTeclado(pageIndex: number, runId: number, mov: 'caracter' | 'linea', dir: 1 | -1): string | null {
     if (this.tool !== 'none') return null;
-    const run = this.session.model.pages[pageIndex]?.runs.find((r) => r.runId === runId);
-    if (!run) return null;
+    const runs = this.session.model.pages[pageIndex]?.runs;
+    // La línea editable entera (N1): en un PDF por glifo el objeto suelto es un solo carácter.
+    const caja = runs ? (lineaDeRun(runs, pageIndex, runId)?.boxPt ?? runs.find((r) => r.runId === runId)?.boxPt) : undefined;
+    if (!caja) return null;
     this.limpiarMarcadoSeleccionado(); // la selección de texto sustituye a la de una anotación
-    return this.textoSel.extender(pageIndex, run.boxPt, mov, dir) ? this.textoSel.texto() : null;
+    return this.textoSel.extender(pageIndex, caja, mov, dir) ? this.textoSel.texto() : null;
   }
 
   /**
@@ -1231,11 +1235,11 @@ export class Viewer {
       colocando: () => this.tool !== 'none',
       onEdit: this.cb.onEdit,
       onSelect: (pageIndex, runId) => { this.textoSel.limpiar(); this.cb.onSelect(pageIndex, runId); },
-      onMove: (pageIndex, runId, dxCss, dyCss) => {
+      onMove: (pageIndex, runId, dxCss, dyCss, runIds) => {
         // La conversión pt es afín: el delta no depende del punto base.
         const o = geom.cssToPt(0, 0);
         const d = geom.cssToPt(dxCss, dyCss);
-        this.cb.onMove(pageIndex, runId, d.xPt - o.xPt, d.yPt - o.yPt);
+        this.cb.onMove(pageIndex, runId, d.xPt - o.xPt, d.yPt - o.yPt, runIds);
       }
     });
     this.drawHighlights(i); // conserva los resaltados tras un re-render

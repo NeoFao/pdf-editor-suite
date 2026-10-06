@@ -73,3 +73,14 @@ test('setRunFontSize conserva el texto y la fuente del subconjunto', async () =>
   expect(despues!.fuenteSubconjunto).toBe(antes.fuenteSubconjunto);
   eng.close(doc);
 });
+
+test('un espacio final o doble que teclea el usuario no es un glifo ausente (editTextRun)', async () => {
+  const eng = await PdfiumEngine.create();
+  const doc = await eng.open(fixture('nativo.pdf'));
+  const run = eng.getPageText(doc, 0)[0]!;
+  // PDFium recorta el espacio final al releer el texto de la página y puede colapsar los dobles: no es una pérdida de glifos.
+  for (const texto of ['Dos  espacios', 'Con espacio final ', ' Con espacio inicial']) {
+    expect(eng.editTextRun(doc, 0, run.runId, texto), texto).toEqual({ ok: true });
+  }
+  eng.close(doc);
+});

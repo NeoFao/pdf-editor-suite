@@ -656,6 +656,34 @@ export const sinGlyphPathComoCobertura = {
   }
 };
 
+/**
+ * Pura: hallazgos de `FPDFPageObj_SetIsActive(` (fuera de comentarios). Los objetos inactivos no se escriben en
+ * `FPDFPage_GenerateContent` y la siguiente `FPDF_LoadPage` ya no los tiene: no sirve como borrado reversible (E-082).
+ */
+export function analizarSetIsActive(rel, contenido) {
+  const exentas = lineasExentas(contenido, 'no-setisactive-como-borrado');
+  const hallazgos = [];
+  contenido.split('\n').forEach((linea, i) => {
+    if (esComentario(linea) || exentas.has(i + 1)) return;
+    if (/\bFPDFPageObj_SetIsActive\s*\(/.test(linea)) {
+      hallazgos.push(hallazgo(rel, i + 1, 'FPDFPageObj_SetIsActive como borrado reversible'));
+    }
+  });
+  return hallazgos;
+}
+
+export const sinSetIsActiveComoBorrado = {
+  id: 'no-setisactive-como-borrado',
+  titulo: 'FPDFPageObj_SetIsActive no se usa como borrado reversible',
+  comoArreglar:
+    'Un objeto inactivo no se escribe al generar el contenido y la siguiente carga de la página ya no lo tiene: ' +
+    'reactivarlo no recupera nada (E-082). Para deshacer un cambio que elimina objetos, guarda un snapshot ' +
+    '(engine.save) antes y recárgalo al deshacer, como EditarLineaCmd, ReplaceRunFontCmd o DeleteRunCmd.',
+  ejecutar() {
+    return recorrerFuentesTs((rel, contenido) => analizarSetIsActive(rel, contenido));
+  }
+};
+
 /* ── E-032 · toda navegación de página pasa por App.goToPage() ─────────── */
 export const conNavegacionPorGoToPage = {
   id: 'navegacion-por-gotopage',
@@ -1332,6 +1360,7 @@ export const TODAS = [
   conPdfiumBufferFijo,
   conSetTextSoloViaEscribirTexto,
   sinGlyphPathComoCobertura,
+  sinSetIsActiveComoBorrado,
   conNavegacionPorGoToPage,
   conWebServerNextSinReusar,
   conGestoConCancelacion,
