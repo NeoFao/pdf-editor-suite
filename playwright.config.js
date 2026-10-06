@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+import { PUERTOS_E2E } from './scripts/puertos-e2e.mjs';
 
 /**
  * Chromium REAL, nunca jsdom.
@@ -60,8 +61,8 @@ export default defineConfig({
       // caché en memoria de una versión anterior): reutilizar un proceso ya
       // arrancado nunca sirve código viejo, así que reusar aquí es seguro.
       command: 'node server.js',
-      port: 3100,
-      env: { PORT: '3100' },
+      port: PUERTOS_E2E.appVieja,
+      env: { PORT: String(PUERTOS_E2E.appVieja) },
       reuseExistingServer: !process.env.CI,
       timeout: 30_000
     },
@@ -77,7 +78,7 @@ export default defineConfig({
       // Fallar alto con "puerto ya en uso" es preferible: ver
       // scripts/liberar-puertos.mjs (`npm run e2e:liberar`) y docs/TESTING.md.
       command: 'npm run build:next && npm run preview:next',
-      port: 4173,
+      port: PUERTOS_E2E.appNueva,
       reuseExistingServer: false,
       timeout: 120_000
     },
@@ -89,7 +90,7 @@ export default defineConfig({
       // construye la app nueva Y copia la app vieja a `legacy/` — ver
       // scripts/construir-despliegue.mjs.
       command: 'npm run build:deploy && npm run preview:deploy',
-      port: 4174,
+      port: PUERTOS_E2E.despliegue,
       reuseExistingServer: false,
       timeout: 120_000
     }

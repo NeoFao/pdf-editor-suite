@@ -1,6 +1,9 @@
 /**
  * Libera los puertos que usan los servidores de test E2E (3100 app vieja,
- * 4173 app nueva) — pensado sobre todo para 4173: playwright.config.js fija
+ * 4173 app nueva, 4174 despliegue; la lista sale de scripts/puertos-e2e.mjs,
+ * la misma que usa playwright.config.js — E-062) y cierra los procesos
+ * huérfanos de ESTE repo (node/vite/vitest/chrome cuya línea de comandos cita
+ * la ruta del repo; nunca el propio script ni sus ancestros). Pensado sobre todo para 4173: playwright.config.js fija
  * `reuseExistingServer: false` en el webServer de la app nueva (E-033), así
  * que un `vite preview` que quedó vivo de una sesión anterior hace que
  * Playwright falle con "puerto ya en uso" en vez de reconstruir. Este script
@@ -19,8 +22,16 @@
  * local; el error de Playwright ya explica qué comando ejecutar.
  */
 import { execSync } from 'node:child_process';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { LISTA_PUERTOS_E2E } from './puertos-e2e.mjs';
+import {
+  parsearProcesosWindows, parsearProcesosUnix, pidsProtegidos, seleccionarHuerfanos
+} from './procesos-e2e.mjs';
 
-const PUERTOS = [4173, 3100];
+// Misma lista que usa playwright.config.js (E-062): nunca una copia a mano.
+const PUERTOS = LISTA_PUERTOS_E2E;
+const RAIZ_REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const esWindows = process.platform === 'win32';
 
 /** PIDs en escucha en `puerto`, vía `netstat -ano` (Windows). */
@@ -129,5 +140,52 @@ function liberarPuerto(puerto) {
   }
 }
 
-console.log('Liberando puertos de test E2E (4173 app nueva, 3100 app vieja)...');
+/** Lista todos los procesos (pid, ppid, nombre, línea de comandos). */
+function listarProcesos() {
+  try {
+    if (esWindows) {
+      const salida = execSync(
+        'powershell -NoProfile -Command "Get-CimInstance Win32_Process | ' +
+        'Select-Object ProcessId,ParentProcessId,Name,CommandLine | ConvertTo-Json -Compress"',
+        { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }
+      );
+      return parsearProcesosWindows(salida);
+    }
+    return parsearProcesosUnix(
+      execSync('ps -eo pid=,ppid=,args=', { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+    );
+  } catch (e) {
+    console.warn(`  no se pudo listar los procesos (${e.message.split('\n')[0]}): no se buscan huérfanos.`);
+    return null;
+  }
+}
+
+/** Cierra los procesos node/vite/vitest/chrome cuya línea de comandos cita este repo. */
+function liberarHuerfanos() {
+  const procesos = listarProcesos();
+  if (!procesos) return;
+  const protegidos = pidsProtegidos(procesos, process.pid);
+  const { cerrar, desconocidos } = seleccionarHuerfanos(procesos, RAIZ_REPO, protegidos);
+  for (const p of desconocidos) {
+    console.warn(`  PID ${p.pid} (${p.nombre}): no se puede leer su línea de comandos — no se cierra.`);
+  }
+  if (cerrar.length === 0) {
+    console.log('  procesos huérfanos de este repo: ninguno');
+    return;
+  }
+  for (const p of cerrar) {
+    try {
+      // p.pid ya está validado como entero positivo en seleccionarHuerfanos.
+      if (esWindows) matarWindows(String(p.pid)); else matarUnix(String(p.pid));
+      console.log(`  huérfano PID ${p.pid} (${p.nombre}) cerrado`);
+    } catch {
+      // Puede haber muerto ya (hijo de otro huérfano cerrado antes).
+      console.warn(`  huérfano PID ${p.pid} (${p.nombre}): no se pudo cerrar (¿ya terminó?)`);
+    }
+  }
+}
+
+console.log(`Liberando puertos de test E2E (${PUERTOS.join(', ')})...`);
 for (const puerto of PUERTOS) liberarPuerto(puerto);
+console.log('Buscando procesos huérfanos de este repo...');
+liberarHuerfanos();

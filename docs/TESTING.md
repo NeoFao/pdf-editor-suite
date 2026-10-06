@@ -52,7 +52,7 @@ npm run test:e2e        # suite completa
 npm run test:e2e:ui     # modo interactivo, para depurar un test concreto
 npm run test:unit       # tests de las reglas, sin navegador (rápido)
 npm run verify          # TODO: lo mismo que corre CI
-npm run e2e:liberar     # libera los puertos 4173/3100 si quedaron ocupados (ver abajo)
+npm run e2e:liberar     # libera 3100/4173/4174 y cierra procesos huérfanos de este repo (ver abajo)
 ```
 
 ## El webServer de la app nueva nunca reutiliza un proceso vivo (E-033)
@@ -75,9 +75,17 @@ dando un resultado falso sobre código que ya no existe.
 Si te encuentras ese error de puerto ocupado:
 
 ```bash
-npm run e2e:liberar     # mata SOLO si el proceso en 4173/3100 es node o vite
+npm run e2e:liberar     # libera TODOS los puertos del webServer y cierra huérfanos del repo
 npm run test:e2e        # vuelve a intentar: ahora reconstruye de verdad
 ```
+
+Los puertos (3100 app vieja, 4173 app nueva, 4174 despliegue) viven en
+`scripts/puertos-e2e.mjs`, fuente única que importan `playwright.config.js` y
+`liberar-puertos.mjs`; la regla `puertos-e2e-sincronizados` impide que se
+desincronicen (E-062). Además de los puertos, el script cierra los procesos
+huérfanos de ESTE repo (node, vite, vitest, chrome-headless-shell cuya línea de
+comandos contiene la ruta del repo): acumularlos entre corridas agota la
+memoria. Nunca toca procesos ajenos ni al propio script y sus ancestros.
 
 `scripts/liberar-puertos.mjs` es multiplataforma (netstat/taskkill en
 Windows, lsof/kill en Unix) y nunca mata un proceso que no pueda identificar

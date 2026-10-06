@@ -1125,6 +1125,67 @@ export const geometriaSoloConFabrica = {
   }
 };
 
+/* ── E-062 · e2e:liberar debe cubrir todos los puertos del webServer ────── */
+/**
+ * Analiza el texto de playwright.config.js y de scripts/liberar-puertos.mjs.
+ * Devuelve [{ mensaje }]. `clavesModulo` son las claves exportadas por
+ * scripts/puertos-e2e.mjs (PUERTOS_E2E) y `puertosModulo` sus valores.
+ */
+export function analizarPuertosE2E(config, liberar, clavesModulo, puertosModulo) {
+  const problemas = [];
+  if (!/from\s+['"]\.\/scripts\/puertos-e2e\.mjs['"]/.test(config)) {
+    problemas.push({ mensaje: 'playwright.config.js no importa scripts/puertos-e2e.mjs (fuente única de puertos)' });
+  }
+  if (!/from\s+['"]\.\/puertos-e2e\.mjs['"]/.test(liberar)) {
+    problemas.push({ mensaje: 'scripts/liberar-puertos.mjs no importa ./puertos-e2e.mjs: lista de puertos escrita a mano' });
+  }
+  const usados = [...config.matchAll(/\bport\s*:\s*([^,\n}]+)/g)].map((m) => m[1].trim());
+  if (usados.length === 0) {
+    problemas.push({ mensaje: 'no se encuentra ningún `port:` en el webServer — la regla no puede verificar el invariante' });
+  }
+  for (const valor of usados) {
+    const m = valor.match(/^PUERTOS_E2E\.(\w+)$/);
+    if (!m) {
+      const n = Number(valor);
+      problemas.push({
+        mensaje: Number.isInteger(n) && puertosModulo.includes(n)
+          ? `port: ${valor} escrito a mano; usa PUERTOS_E2E.<clave> de scripts/puertos-e2e.mjs`
+          : `port: ${valor} no sale de PUERTOS_E2E — e2e:liberar no lo libera`
+      });
+    } else if (!clavesModulo.includes(m[1])) {
+      problemas.push({ mensaje: `PUERTOS_E2E.${m[1]} no existe en scripts/puertos-e2e.mjs` });
+    }
+  }
+  return problemas;
+}
+
+export const conPuertosE2eSincronizados = {
+  id: 'puertos-e2e-sincronizados',
+  titulo: 'todo puerto del webServer de playwright.config.js lo libera npm run e2e:liberar',
+  comoArreglar:
+    'Declara el puerto en scripts/puertos-e2e.mjs (PUERTOS_E2E) y úsalo como ' +
+    '`port: PUERTOS_E2E.<clave>` en playwright.config.js; liberar-puertos.mjs ya lee esa ' +
+    'lista. Un servidor huérfano en un puerto que e2e:liberar no conoce hizo fallar el ' +
+    'proyecto `next` sin ejecutar tests (E-062: el 4174 del proyecto `deploy`).',
+  ejecutar() {
+    const rutaConfig = 'playwright.config.js';
+    const rutaLiberar = 'scripts/liberar-puertos.mjs';
+    const rutaModulo = 'scripts/puertos-e2e.mjs';
+    if (!existe(rutaConfig)) return [];
+    for (const r of [rutaLiberar, rutaModulo]) {
+      if (!existe(r)) return [hallazgo(r, null, 'falta el fichero: e2e:liberar no puede cubrir los puertos de Playwright')];
+    }
+    if (tieneDeuda(rutaConfig, this.id)) return [];
+    const modulo = leer(rutaModulo);
+    const bloque = modulo.match(/PUERTOS_E2E\s*=\s*Object\.freeze\(\{([\s\S]*?)\}\)/);
+    const pares = bloque ? [...bloque[1].matchAll(/(\w+)\s*:\s*(\d+)/g)] : [];
+    const claves = pares.map((m) => m[1]);
+    const puertos = pares.map((m) => Number(m[2]));
+    return analizarPuertosE2E(leer(rutaConfig), leer(rutaLiberar), claves, puertos)
+      .map((p) => hallazgo(rutaConfig, null, p.mensaje));
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -1154,5 +1215,6 @@ export const TODAS = [
   conDescompresionAcotada,
   conTextoPerezosoViaEditSession,
   geometriaSoloConFabrica,
-  conRegistroSinDuplicados
+  conRegistroSinDuplicados,
+  conPuertosE2eSincronizados
 ];

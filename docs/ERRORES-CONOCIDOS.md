@@ -2409,3 +2409,33 @@ colapso de blancos escrito sin la barra invertida se comía las "s"), `atajos.te
 no se interceptan en un campo editable) y `tests/e2e/next/teclado-seleccion.spec.ts`, que no usa el ratón.
 Límite conocido: la selección vive en UNA página; Mayús+↓ más allá de la última línea de la página selecciona
 hasta el final de su texto.
+
+### E-062 · `npm run e2e:liberar` no conocía el puerto 4174 ni cerraba los procesos huérfanos
+
+**Síntoma.** Un `servir-despliegue.mjs` huérfano en el 4174 (proyecto `deploy`, PR #69) hizo fallar el
+proyecto `next` sin ejecutar ni un test: Playwright arranca los `webServer` antes de correr nada, y como
+`reuseExistingServer` es `false` en los dos servidores congelados (E-033), un puerto ocupado aborta la
+corrida entera. `npm run e2e:liberar` solo liberaba 4173 y 3100, así que el aviso "ejecuta e2e:liberar" no
+arreglaba nada. Además, los `node`/`vite`/`chrome-headless-shell` de corridas anteriores se acumulaban
+vivos (aunque no escucharan en ningún puerto) y son la causa probable de las dos "muertes por memoria"
+de la tanda.
+
+**Causa raíz.** Dos listas de puertos escritas a mano en dos sitios (`playwright.config.js` y
+`scripts/liberar-puertos.mjs`) que se desincronizaron al añadir el servidor de despliegue: nadie tenía
+por qué acordarse del segundo fichero. Y liberar solo "lo que escucha en un puerto" no cubre a los
+procesos que sobreviven sin puerto.
+
+**Arreglo.** Fuente única `scripts/puertos-e2e.mjs` (`PUERTOS_E2E`), importada por el config (`port:
+PUERTOS_E2E.x`, mismo comportamiento) y por `liberar-puertos.mjs`. El script, además, lista los procesos
+(`Get-CimInstance Win32_Process` vía `powershell -NoProfile` en Windows, `ps -eo pid=,ppid=,args=` en Unix)
+y cierra los huérfanos con la lógica pura de `scripts/procesos-e2e.mjs`: solo nombre node/vite/vitest/
+chrome(-headless-shell) Y línea de comandos que contiene la ruta de ESTE repo (con límite de ruta: `PDF
+Editor 2` no casa); si no puede leer nombre o línea de comandos, avisa y no cierra; nunca el propio
+proceso ni sus ancestros (npm, la shell). Límite conocido: un chrome huérfano cuyo padre ya murió no cita
+la ruta del repo en su línea de comandos y no se cierra (se cierra si su padre era un node del repo y se
+mata el árbol, o a mano).
+
+**Cómo se detecta ahora.** Regla `puertos-e2e-sincronizados` (todo `port:` del config sale de
+`PUERTOS_E2E`, y ambos ficheros importan el módulo) con su test en `reglas.test.mjs`, y
+`scripts/procesos-e2e.test.mjs` (clasificación repo/ajeno/desconocido, ancestros protegidos y parsers, con
+datos falsos).
