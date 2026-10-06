@@ -3056,3 +3056,20 @@ solapes y con el hueco conservado.
 
 **Límite.** Una palabra con «f» o «i» que el subconjunto no trae sueltas (ligadura sin glifos separados) sigue usando la fuente de reserva
 con aviso (E-047) solo en el tramo editado.
+
+### E-089 · El OCR ignoraba `/Rotate`: el texto invisible quedaba mal colocado o girado en una página girada
+
+**Síntoma.** Con OCR en una página con `/Rotate` 90, 180 o 270 (un escaneo girado es lo normal), el texto reconocido se insertaba lejos de
+las palabras: seleccionar o buscar caía en otro sitio de la página (E-084 solo había corregido el origen de la caja visible).
+
+**Causa raíz.** `OcrPageCmd` reconoce sobre el render YA girado (px del bitmap visual, origen arriba-izquierda), pero `mapOcrLines` los pasaba
+a pt con la fórmula de una página sin girar (`y = alto − y1/escala`) y sin giro del texto. Con 90/270 además el alto de usuario es el ancho visual.
+
+**Arreglo.** `mapOcrLines(lines, scale, pagina)` recibe la página visual (`anchoVisualPt`, `altoVisualPt`, `rotacion`, `origenPt`) y usa la
+geometría común (`PageGeometry.desdeTamanoVisual` a escala 1, E-053/E-084) para pasar la esquina inferior-izquierda de cada caja al espacio de
+usuario; el texto se inserta con `giroGrados = rotacion` para quedar horizontal en la página girada. `OcrPageCmd` da el tamaño visual
+intercambiando ancho y alto de `pageBox` con 90/270.
+
+**Cómo se detecta ahora.** `tests/unit/OcrRotada.test.ts`: proveedor OCR falso con cajas conocidas sobre páginas `/Rotate` 0/90/180/270,
+con y sin CropBox desplazada; `findText` + `PageGeometry.rectPtToCss` deben caer sobre cada caja (izquierda ±2 pt, dentro de su franja
+vertical, horizontal).

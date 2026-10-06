@@ -72,9 +72,9 @@ test('E-037: OcrPageCmd con 80 líneas reconocidas (página densa) hace UNA sola
   // una a una" ya lo cubre a nivel de motor; aquí se repite a nivel del
   // comando completo, con las líneas que de verdad produce el proveedor de
   // OCR y el mapeo de coordenadas de mapOcrLines).
-  const heightPt = engine.pageSize(s.doc, 0).heightPt;
+  const { widthPt, heightPt } = engine.pageSize(s.doc, 0);
   const lines = await fake.recognize({ rgba: new Uint8Array(0), width: 1, height: 1 }, 'spa+eng');
-  const specs = mapOcrLines(lines, 2, heightPt);
+  const specs = mapOcrLines(lines, 2, { anchoVisualPt: widthPt, altoVisualPt: heightPt, rotacion: 0 });
 
   const dRef = await PDFDocument.create();
   dRef.addPage([600, 900]);
