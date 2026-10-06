@@ -92,8 +92,11 @@ for (const { pagina, rot } of CASOS) {
   test(`capa-texto-rotada ${rot}: arrastrar el tirador mueve la línea en la dirección visual del ratón`, async ({ page }) => {
     const wrapper = await abrir(page, pagina);
     const run = wrapper.locator('.run', { hasText: 'LINEA-3-ROTADA' });
+    // En 180 la línea 3 queda cerca del borde inferior de la página: se centra para que el tirador (en la
+    // esquina de la caja, fuera de ella) no caiga bajo la barra inferior del visor.
+    await run.evaluate((el) => el.scrollIntoView({ block: 'center', inline: 'center' }));
     await run.hover();
-    const h = (await run.locator('.run-drag').boundingBox())!;
+    const h =(await run.locator('.run-drag').boundingBox())!;
     const D = 60; // px CSS visuales de arrastre
     // 90/270: el eje X de usuario es el eje Y visual; 180: es el eje X visual (invertido).
     const [dx, dy] = rot === 180 ? [D, 0] : [0, D];
