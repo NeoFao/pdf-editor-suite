@@ -70,9 +70,10 @@ test.describe('documento grande (500 páginas): apertura y comandos perezosos', 
     const despues = await page.evaluate(() => ({ ...(window as unknown as { __diagnostico: { renderPage: number; getPageText: number } }).__diagnostico }));
 
     // Rotar UNA página cuesta un puñado de llamadas (esa página + quizá su
-    // miniatura), nunca 500.
+    // miniatura), nunca 500. Desde E-072 la rotación en modo "ajustar al ancho" además reajusta la escala,
+    // lo que repinta las pocas páginas VISIBLES (no las 500): de ahí el margen de 10 en vez de 5.
     expect(despues.getPageText - antes.getPageText).toBeLessThan(5);
-    expect(despues.renderPage - antes.renderPage).toBeLessThan(5);
+    expect(despues.renderPage - antes.renderPage).toBeLessThan(10);
   });
 
   test('saltar a la página 400 por miniatura la pinta y actualiza el indicador', async ({ page }) => {
