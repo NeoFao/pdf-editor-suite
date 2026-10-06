@@ -2713,3 +2713,23 @@ o «Nuevo», con cambios pide `window.confirm` y, si se cancela, no toca nada.
 **Cómo se detecta ahora.** `tests/e2e/next/cambios-sin-guardar.spec.ts` (limpio al abrir, sucio tras ejecutar y tras
 deshacer, limpio al guardar, `beforeunload` solo cuando está sucio —con diálogo real—, confirmación de Nuevo/abrir y
 silencio con el documento limpio). Fallaban antes. Sin regla guard: es estado de interfaz, no un patrón estático.
+
+---
+
+### E-075 · Con un diálogo modal abierto, los atajos globales actuaban sobre el documento de detrás (N4)
+
+**Síntoma.** Con Ayuda, Texto…, Comprimir, firma o Encabezado abiertos y el foco en un botón del diálogo, `n`/`t`/`r`
+cambiaban la herramienta, `End` saltaba de página, Ctrl+Z/Ctrl+Y deshacían y rehacían el documento sin que se viera y `?`
+apilaba la ayuda encima de otro diálogo.
+
+**Causa raíz.** El manejador global de `keydown` solo conocía una regla de exclusión, «el foco está en un campo
+editable». Un diálogo modal con el foco en un botón no es un campo editable, y los diálogos declaran `aria-modal` pero
+nada en la app lo respetaba al resolver atajos.
+
+**Arreglo.** `EventoAtajo.modalAbierto` (`resolverAtajo` y `resolverAtajoContextual` devuelven `null`) y
+`hayModalAbierto()` (`<dialog open>`); `App` sale del manejador global y del de Nota/Rectángulo cuando hay modal. Escape
+lo gestiona el propio `<dialog>`.
+
+**Cómo se detecta ahora.** `tests/unit/atajos.test.ts` (regla pura) y `tests/e2e/next/atajos-con-modal.spec.ts` (Ayuda
+abierta: Ctrl+Z, n, r, End, Ctrl+Y no tocan el documento ni `#status`; al cerrar, Ctrl+Z vuelve a funcionar). Fallaban
+antes. Sin regla guard: es una regla de comportamiento de teclado.

@@ -52,7 +52,7 @@ import { rgbaAPngDataUrl, pngDataUrlARgba } from './firmasImagen';
 import { MisFirmasPanel } from './MisFirmasPanel';
 import { formatoBytes } from './formatoBytes';
 import { registrarGesto } from './gesto';
-import { resolverAtajo, resolverAtajoContextual, esCampoEditable, type AccionAtajo } from './atajos';
+import { resolverAtajo, resolverAtajoContextual, esCampoEditable, hayModalAbierto, type AccionAtajo } from './atajos';
 import { resumirParaAnunciar } from './anuncio';
 import { AtajosPanel } from './AtajosPanel';
 import { parseRange } from './pageRange';
@@ -825,6 +825,8 @@ export class App {
     // foco editable viven en `atajos.ts` (testeadas en Node, sin DOM); aquí
     // solo se normaliza el `KeyboardEvent` y se ejecuta la acción resuelta.
     document.addEventListener('keydown', (e) => {
+      // E-075: con un diálogo modal abierto el manejador global no hace nada (Escape lo gestiona el propio diálogo).
+      if (hayModalAbierto()) return;
       // El cajón/menú móviles cierran con Escape ANTES que cualquier otro
       // atajo — si el cajón está abierto, Escape es "cerrar cajón", no
       // "salir de herramienta" ni ninguna otra cosa.
@@ -849,7 +851,7 @@ export class App {
     // E-073 (WCAG 2.1.1): Nota y Rectángulo por teclado. En FASE DE CAPTURA para adelantarse al Enter de una línea
     // enfocada (que empezaría a editarla) y a las flechas/Mayús+flechas de la selección de texto.
     document.addEventListener('keydown', (e) => {
-      if (e.defaultPrevented || (this.tool !== 'note' && this.tool !== 'rect') || !this.viewer) return;
+      if (e.defaultPrevented || hayModalAbierto() || (this.tool !== 'note' && this.tool !== 'rect') || !this.viewer) return;
       if (esCampoEditable(e.target) || !this.focoEnVisor(e.target)) return;
       const def = resolverAtajoContextual({ key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey, editable: false });
       if (!def) return;
