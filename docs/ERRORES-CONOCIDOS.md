@@ -2250,7 +2250,7 @@ bordes por lado, flotante), `ConversorDocxNavegador.test.ts` con el motor real
 Dos tests antiguos asumían "un lado = toda la tabla" y se corrigieron (no se
 borró cobertura). Regla determinista: no se añade (no hay firma sintáctica única).
 
-### E-055 · El marcado solo podía cubrir líneas enteras; la selección por arrastre exigió tres cuidados (T12)
+### E-057 · El marcado solo podía cubrir líneas enteras; la selección por arrastre exigió tres cuidados (T12)
 
 **Síntoma.** Resaltar/subrayar/tachar solo funcionaban sobre la línea seleccionada
 entera (T11): no había forma de marcar un tramo, ni de copiarlo (Ctrl+C), ni de
@@ -2283,3 +2283,10 @@ quads por línea, también con /Rotate 270; altura de línea frente a glifo),
 (caché) y `tests/e2e/next/seleccion-texto.spec.ts` (3 quads recortados, copiar, clic
 corto sigue editando, tirador, herramienta pluma, páginas /Rotate).
 Pendiente: ampliar la selección con Mayús+flechas desde una línea enfocada.
+
+**Regla determinista de registro (misma PR).** Esta entrada se escribió como E-055 y
+colisionó con la de T9 (ramas paralelas, tercera colisión de números). La regla
+`registro-sin-duplicados` (`scripts/guards/reglas.mjs`) exige que cada `### E-0NN`
+aparezca una vez y en orden creciente en este fichero; su test cubre duplicado, fuera
+de orden y el repo real. El orden se exige a toda entrada nueva; las 13 que ya estaban desordenadas
+(E-004, 005, 007, 008, 009, 012, 015-019, 029, 030) se toleran en una lista fija que no crece.

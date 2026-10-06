@@ -289,6 +289,49 @@ export const conEspejosSincronizados = {
   }
 };
 
+/* ── El registro de errores no repite ni desordena números (ramas paralelas) ── */
+/**
+ * Entradas que ya estaban fuera de orden cuando nació la regla (se escribieron por
+ * temas, no por número). Se toleran SOLO ellas; la lista no crece: toda entrada nueva
+ * va al final con el siguiente número libre.
+ */
+export const ERRORES_FUERA_DE_ORDEN_HISTORICOS = new Set([4, 5, 7, 8, 9, 12, 15, 16, 17, 18, 19, 29, 30]);
+
+/**
+ * Analiza el texto del registro: devuelve un problema por cada encabezado
+ * `### E-0NN` repetido o cuyo número no sea mayor que el del encabezado anterior.
+ * Pura (sin tocar el disco) para poder probarla con texto suelto.
+ */
+export function analizarRegistroErrores(texto, historicos = ERRORES_FUERA_DE_ORDEN_HISTORICOS) {
+  const problemas = [];
+  let anterior = null;
+  const vistos = new Set();
+  texto.split('\n').forEach((linea, i) => {
+    const m = /^### E-(\d+)\b/.exec(linea);
+    if (!m) return;
+    const n = Number(m[1]);
+    if (vistos.has(n)) problemas.push({ linea: i + 1, mensaje: `E-${m[1]} está duplicado` });
+    else if (anterior !== null && n < anterior && !historicos.has(n)) problemas.push({ linea: i + 1, mensaje: `E-${m[1]} está fuera de orden (viene después de E-${String(anterior).padStart(3, '0')})` });
+    vistos.add(n);
+    if (anterior === null || n > anterior) anterior = n;
+  });
+  return problemas;
+}
+
+export const conRegistroSinDuplicados = {
+  id: 'registro-sin-duplicados',
+  titulo: 'cada ### E-0NN de docs/ERRORES-CONOCIDOS.md aparece una vez y en orden creciente',
+  comoArreglar:
+    'Dos ramas paralelas tomaron el mismo número de error (pasó tres veces). Tras ' +
+    'fusionar o rebasar con main, renumera tu entrada al siguiente libre, déjala al ' +
+    'final del fichero y actualiza sus referencias en src/, tests/ y docs/ (sin tocar ' +
+    'las del otro defecto). El registro es la memoria del repo: un número ambiguo la corrompe.',
+  ejecutar() {
+    return analizarRegistroErrores(leer('docs/ERRORES-CONOCIDOS.md'))
+      .map((p) => hallazgo('docs/ERRORES-CONOCIDOS.md', p.linea, p.mensaje));
+  }
+};
+
 /* ── Cada regla tiene su entrada documentada ────────────────────────────── */
 export const conErroresDocumentados = {
   id: 'errores-documentados',
@@ -1110,5 +1153,6 @@ export const TODAS = [
   sinPlaywrightEnUnit,
   conDescompresionAcotada,
   conTextoPerezosoViaEditSession,
-  geometriaSoloConFabrica
+  geometriaSoloConFabrica,
+  conRegistroSinDuplicados
 ];
