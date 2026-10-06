@@ -2439,3 +2439,59 @@ mata el árbol, o a mano).
 `PUERTOS_E2E`, y ambos ficheros importan el módulo) con su test en `reglas.test.mjs`, y
 `scripts/procesos-e2e.test.mjs` (clasificación repo/ajeno/desconocido, ancestros protegidos y parsers, con
 datos falsos).
+
+### E-063 · En una página con `/Rotate` 90/270 las líneas editables se solapaban y un clic editaba OTRA línea
+
+**Síntoma.** Abrir un PDF normal, rotar una página 90° y hacer clic sobre el título: entraba en edición
+«Cuarta línea…» y al escribir se reescribía esa otra línea (el usuario no había tocado esa línea: AGENTS.md
+§2.3). Las cajas `.run` medían ~156×398, 312×395… en vez de ~16×400, el editor salía horizontal y desbordaba el
+visor. Con 180 las cajas no se pisaban, pero el texto de la capa seguía sin la rotación de la página.
+
+**Causa raíz.** E-053 arregló la fábrica de `PageGeometry`, pero `TextLayer` seguía colocando cada `.run` con la
+geometría VISUAL (`rectPtToCss` ya girada) y le daba `min-width`/`height`/`line-height` de esa caja visual.
+Con 90/270 la caja visual es vertical (estrecha y alta), pero el texto dentro seguía horizontal: la línea de
+texto (`white-space: pre`) crecía a lo ancho de su contenido, las cajas vecinas se pisaban y la última en el
+DOM ganaba el clic. Los tests de rotación de E-053 medían la caja del run, no el solape ni el clic, y su
+fixture contragira el texto (queda horizontal) así que el defecto no aparecía.
+
+**Arreglo.** La capa de texto se dibuja en coordenadas de la página SIN girar (`geom.sinGirar()`, px CSS de
+usuario) y UNA transformación CSS sobre el contenedor (`PageGeometry.transformCapaSinGirar`, derivada de
+`ptToCss`: 90 `matrix(0,1,-1,0,Hs,0)`, 180 `matrix(-1,0,0,-1,Ws,Hs)`, 270 `matrix(0,-1,1,0,0,Ws)`, origen 0 0)
+la lleva al espacio visual, igual que el canvas. Cada `.run` conserva su dirección de texto, su alto de línea
+y su editor sin cálculos por run. Lo que se mide en pantalla (arrastre con el tirador) pasa por
+`deltaVisualACapaSinGirar`, de la misma geometría. La selección de texto (T12), las anotaciones (T14) y los
+clics de fondo ya convertían de cliente a página con `getBoundingClientRect` del `.page` y la geometría
+visual, que no cambia, así que no dependen de la capa.
+
+**Cómo se detecta ahora.** `tests/e2e/next/capa-texto-rotada.spec.ts` (fixture `rotada-lineas.pdf`: /Rotate 90,
+270 y 180 con 4 líneas de texto normal; cajas sin solape, sobre los píxeles de su línea, clic al centro de la
+línea 3 edita la 3 y el PDF guardado conserva las demás), `tests/unit/PageGeometry.test.ts` (la matriz coincide
+con `ptToCss`) y la regla guard `capa-texto-sin-rotacion-por-run` (ni aritmética de rotación ni conversiones
+visuales por run dentro de `TextLayer.ts`).
+
+**Detalles que importan (E-063).** (1) Mover la rotación a la capa deja el texto girado EN EL ESPACIO DE USUARIO
+(p. ej. páginas /Rotate con el texto contragirado para leerse horizontal, o texto girado en una página sin
+rotar) con la caja de la línea vertical en la capa: por eso `TextRun.anguloDeg` (atan2(b, a) de la matriz del
+objeto de texto) permite editar la línea girada sobre su origen (`rotate(-ángulo)`), y en reposo la caja mide
+EXACTAMENTE la línea (`width` fijo + `overflow: clip`): con `min-width` el texto horizontal desbordaba la caja
+girada y volvía a taparse con sus vecinas (lo vio `anotaciones-seleccion.spec.ts`, caso /Rotate). (2) Solo se
+tratan múltiplos de 90°; otros ángulos se siguen editando como horizontales (limitación previa, E-030).
+
+### E-064 · La segunda línea que se edita en una misma sesión no recibía lo tecleado
+
+**Síntoma.** Editar una línea (clic, teclear, Enter) y a continuación otra: la segunda pasaba a `editing` y
+conservaba el foco, pero Ctrl+A seleccionaba la página entera y lo tecleado no llegaba a la línea (el texto
+nuevo se perdía sin aviso). Ocurría también en `main`, con Enter, con un clic fuera y con Tab; la primera
+edición de cada carga funcionaba, por eso ningún test lo vio.
+
+**Causa raíz.** `empezarEdicion` solo llamaba a `block.focus()`. En un `contenteditable`, `focus()` coloca el
+cursor dentro únicamente si el documento no tiene ya una selección; tras la primera edición quedaba una
+selección colapsada en otro nodo (`.run` de reposo, `user-select: none`), así que el elemento tenía el foco
+pero el cursor seguía fuera de él.
+
+**Arreglo.** Al entrar en edición se fija la selección explícitamente dentro del bloque (rango colapsado al
+inicio), después de `focus()`.
+
+**Cómo se detecta ahora.** `tests/e2e/next/edicion-consecutiva.spec.ts`: abre `nativo.pdf`, edita las líneas 2 y 4
+seguidas confirmando con Enter, con clic fuera y con Tab, y comprueba con el motor que ambas tienen el texto nuevo
+y el resto no cambia (falla en `main` sin el arreglo). Sin regla guard: no hay patrón estático fiable.

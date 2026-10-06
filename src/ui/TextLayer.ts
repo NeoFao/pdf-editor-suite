@@ -44,9 +44,21 @@ export class TextLayer {
   constructor(
     private readonly host: HTMLElement,
     private readonly page: PageModel,
-    private readonly geom: PageGeometry,
+    geomVisual: PageGeometry,
     private readonly cb: TextLayerCallbacks
   ) {
+    // E-063: la capa se dibuja en el espacio de la página SIN girar (`geom`: px CSS de usuario, rotación 0)
+    // y UNA transformación CSS sobre el contenedor (`geomVisual.transformCapaSinGirar`) la lleva al espacio
+    // visual, igual que la rotación del canvas. Así cada `.run` conserva su dirección de texto, su alto de
+    // línea y su editor sin cálculos por run; solo lo que mide en pantalla (arrastre) pasa por la geometría.
+    this.geomVisual = geomVisual;
+    this.geom = geomVisual.sinGirar();
+    const { width, height } = geomVisual.tamanoCapaSinGirarCss();
+    Object.assign(host.style, {
+      position: 'absolute', inset: 'auto', left: '0px', top: '0px',
+      width: `${width}px`, height: `${height}px`,
+      transformOrigin: '0 0', transform: geomVisual.transformCapaSinGirar() ?? ''
+    });
     this.build();
   }
 
@@ -57,6 +69,10 @@ export class TextLayer {
    * El foco NO pinta nada en reposo salvo el anillo de `:focus-visible` (E-029).
    */
   private readonly bloques: HTMLElement[] = [];
+  /** Geometría visual de la página (con /Rotate): para convertir lo que se mide en pantalla (arrastres). */
+  private readonly geomVisual: PageGeometry;
+  /** Geometría de la página sin girar: la de las coordenadas de cada `.run` dentro de la capa. */
+  private readonly geom: PageGeometry;
 
   private moverTabstop(destino: HTMLElement | undefined): void {
     if (!destino) return;
@@ -70,6 +86,11 @@ export class TextLayer {
       // Es la geometría a la que el bloque vuelve al salir de edición y la
       // que usa la máscara — nunca se recalcula desde el DOM (E-002).
       const r = this.geom.rectPtToCss(run.boxPt);
+      // Dirección del texto en el espacio de usuario (múltiplos de 90, E-063): con 90/270 el texto es
+      // vertical en la capa sin girar, así que su LARGO es el alto de la caja y no el ancho.
+      const anguloDeg = ((run.anguloDeg ?? 0) % 360 + 360) % 360;
+      const anguloCss = anguloDeg % 90 === 0 ? anguloDeg : 0; // otros ángulos: se tratan como horizontal
+      const largoCss = anguloCss % 180 !== 0 ? r.height : r.width; // px CSS de la capa
 
       // Máscara aparte, fija en `r` para siempre: aunque el bloque se mueva
       // al entrar en edición (E-030), esto sigue tapando el texto original.
@@ -100,7 +121,7 @@ export class TextLayer {
         position: 'absolute',
         left: `${r.left}px`,
         top: `${r.top}px`,
-        minWidth: `${r.width}px`,
+        width: `${r.width}px`,
         height: `${r.height}px`,
         lineHeight: `${r.height}px`
       });
@@ -135,11 +156,16 @@ export class TextLayer {
         const baselineCss = origin.y;
         const lineHeightCss = ascentCss + descentCss;
         block.dataset.baselineCss = String(baselineCss);
+        // El texto girado en el espacio de usuario (no es /Rotate de página) se edita girado sobre su origen.
         Object.assign(block.style, {
           left: `${origin.x}px`,
           top: `${baselineCss - ascentCss}px`,
+          width: '',
+          minWidth: `${largoCss}px`,
           height: `${lineHeightCss}px`,
-          lineHeight: `${lineHeightCss}px`
+          lineHeight: `${lineHeightCss}px`,
+          transformOrigin: `0px ${ascentCss}px`,
+          transform: anguloCss === 0 ? '' : `rotate(${-anguloCss}deg)`
         });
 
         mask.classList.add('active');
@@ -147,6 +173,17 @@ export class TextLayer {
         block.contentEditable = 'true';
         block.setAttribute('aria-readonly', 'false');
         block.focus();
+        // E-064: `focus()` solo coloca el cursor dentro si NO había ya una selección en el documento; tras la
+        // primera edición quedaba una selección colapsada en otro nodo y la segunda línea recibía el foco sin
+        // cursor (Ctrl+A seleccionaba la página y lo tecleado no llegaba). Se fija el cursor al inicio.
+        const sel = window.getSelection();
+        if (sel) {
+          const rango = document.createRange();
+          rango.selectNodeContents(block);
+          rango.collapse(true);
+          sel.removeAllRanges();
+          sel.addRange(rango);
+        }
       };
       block.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -167,8 +204,12 @@ export class TextLayer {
         Object.assign(block.style, {
           left: `${r.left}px`,
           top: `${r.top}px`,
+          width: `${r.width}px`,
+          minWidth: '',
           height: `${r.height}px`,
-          lineHeight: `${r.height}px`
+          lineHeight: `${r.height}px`,
+          transformOrigin: '',
+          transform: ''
         });
         const newText = block.textContent ?? '';
         if (newText !== oldText) {
@@ -228,8 +269,10 @@ export class TextLayer {
       const baseTop = parseFloat(block.style.top) || 0;
       registrarGesto({
         onMove: (ev) => {
-          block.style.left = `${baseLeft + (ev.clientX - startX)}px`;
-          block.style.top = `${baseTop + (ev.clientY - startY)}px`;
+          // El ratón mide en px CSS visuales; el bloque vive en la capa sin girar (E-063).
+          const d = this.geomVisual.deltaVisualACapaSinGirar(ev.clientX - startX, ev.clientY - startY);
+          block.style.left = `${baseLeft + d.dx}px`;
+          block.style.top = `${baseTop + d.dy}px`;
         },
         onUp: (ev) => {
           const dx = ev.clientX - startX, dy = ev.clientY - startY;

@@ -430,6 +430,13 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   cursor: text;
   white-space: pre;
 }
+/* E-063: en reposo la caja mide EXACTAMENTE la línea (texto transparente que no debe agrandar el hitbox:
+   con texto girado respecto a la página la línea horizontal desbordaría la caja y taparía a sus vecinas).
+   `overflow: clip` no crea contenedor de scroll; el margen deja ver el tirador (-9 px). */
+.run:not(.editing) {
+  overflow: clip;
+  overflow-clip-margin: 12px;
+}
 .run:hover,
 .run.selected {
   outline: 1px dashed var(--ed-accent);

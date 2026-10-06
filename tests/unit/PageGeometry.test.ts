@@ -52,3 +52,35 @@ test('rotación 180: el tamaño visual es el de usuario', () => {
   expect(g.ptToCss(200, 0)).toEqual({ x: 0, y: 0 });
   expect(g.ptToCss(0, 100)).toEqual({ x: 400, y: 200 });
 });
+
+// E-063: la capa de texto se dibuja sin girar y UNA matriz CSS la lleva al espacio visual. La matriz debe
+// coincidir con `ptToCss` para cualquier punto: (u,v) de la capa sin girar -> (x,y) visual.
+for (const rot of [90, 180, 270] as const) {
+  test(`E-063 rotación ${rot}: transformCapaSinGirar coincide con ptToCss en cada esquina y el centro`, () => {
+    const vis = rot === 180 ? [200, 100] as const : [100, 200] as const; // tamaño visual pt
+    const g = PageGeometry.desdeTamanoVisual(vis[0], vis[1], 2, rot);
+    const plana = g.sinGirar();
+    const m = /matrix\(([^)]*)\)/.exec(g.transformCapaSinGirar()!)![1]!.split(',').map(Number) as [number, number, number, number, number, number];
+    for (const [xPt, yPt] of [[0, 0], [200, 100], [30, 70], [100, 50]] as const) {
+      const uv = plana.ptToCss(xPt, yPt);        // px CSS en la capa sin girar
+      const esperado = g.ptToCss(xPt, yPt);      // px CSS visuales
+      expect(m[0] * uv.x + m[2] * uv.y + m[4]).toBeCloseTo(esperado.x, 6);
+      expect(m[1] * uv.x + m[3] * uv.y + m[5]).toBeCloseTo(esperado.y, 6);
+    }
+  });
+
+  test(`E-063 rotación ${rot}: deltaVisualACapaSinGirar es la inversa lineal de la matriz`, () => {
+    const vis = rot === 180 ? [200, 100] as const : [100, 200] as const;
+    const g = PageGeometry.desdeTamanoVisual(vis[0], vis[1], 2, rot);
+    const m = /matrix\(([^)]*)\)/.exec(g.transformCapaSinGirar()!)![1]!.split(',').map(Number) as [number, number, number, number, number, number];
+    const d = g.deltaVisualACapaSinGirar(10, 4); // arrastre visual de (10,4) px CSS
+    expect(m[0] * d.dx + m[2] * d.dy).toBeCloseTo(10, 6);
+    expect(m[1] * d.dx + m[3] * d.dy).toBeCloseTo(4, 6);
+  });
+}
+
+test('E-063: sin rotación no hay transformación y el tamaño de la capa es el de la página', () => {
+  expect(g0.transformCapaSinGirar()).toBeNull();
+  expect(g0.tamanoCapaSinGirarCss()).toEqual({ width: 400, height: 200 });
+  expect(g0.deltaVisualACapaSinGirar(7, 3)).toEqual({ dx: 7, dy: 3 });
+});

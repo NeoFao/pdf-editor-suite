@@ -906,6 +906,26 @@ async function pdfRotada() {
   return doc.save();
 }
 
+/**
+ * E-063: tres páginas A4 con /Rotate 90, 270 y 180 y CUATRO líneas "LINEA-k-ROTADA" de texto NORMAL (sin
+ * contragirar: el texto queda vertical en 90/270 y boca abajo en 180). Es el caso real de "rotar páginas" en
+ * un editor (`rotada.pdf`, en cambio, contragira el texto para que quede horizontal).
+ * Coordenadas en pt de usuario (origen abajo-izq, sin girar).
+ */
+async function pdfRotadaLineas() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const W = 595.28, H = 841.89;
+  for (const rot of [90, 270, 180]) {
+    const p = doc.addPage([W, H]);
+    p.setRotation(degrees(rot));
+    for (let k = 1; k <= 4; k++) {
+      p.drawText(`LINEA-${k}-ROTADA`, { x: 80, y: H - 100 - 32 * (k - 1), size: 24, font });
+    }
+  }
+  return doc.save();
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -913,6 +933,7 @@ async function main() {
     'hostil.pdf': await pdfHostil(),
     'apaisado.pdf': await pdfApaisado(),
     'rotada.pdf': await pdfRotada(),
+    'rotada-lineas.pdf': await pdfRotadaLineas(),
     'fuentes.pdf': await pdfFuentes(),
     'formulario.pdf': await pdfFormulario(),
     'subconjunto.pdf': await pdfSubconjunto(),

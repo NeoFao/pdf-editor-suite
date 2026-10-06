@@ -417,8 +417,10 @@ export class PdfiumEngine implements PdfEngine {
     const mat = m.malloc(24);
     this.p.FPDFPageObj_GetMatrix(obj, mat);
     const originPt = { xPt: m.getValue(mat + 16, 'float'), yPt: m.getValue(mat + 20, 'float') };
+    // Dirección del texto en el espacio de usuario: ángulo (grados, antihorario, 0..359) del vector (a, b).
+    const anguloDeg = (Math.round((Math.atan2(m.getValue(mat + 4, 'float'), m.getValue(mat, 'float')) * 180) / Math.PI) + 360) % 360;
     m.free(mat);
-    return { runId, text, sizePt, fontName, color, boxPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom }, originPt };
+    return { runId, text, sizePt, fontName, color, boxPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom }, originPt, anguloDeg };
   }
 
   /**

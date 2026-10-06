@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS, analizarRegistroErrores, analizarPuertosE2E } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -709,6 +709,32 @@ describe('pagegeometry-solo-con-fabrica', () => {
   });
 
   test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('capa-texto-sin-rotacion-por-run', () => {
+  const regla = detectarEn('capa-texto-sin-rotacion-por-run');
+
+  test('detecta aritmética de rotación en TextLayer', () => {
+    const p = analizarRotacionEnCapaTexto('if (geom.rotation === 90) { w = h; }\nswitch (r) { case 270: break; }');
+    assert.equal(p.length, 2);
+    assert.equal(p[0].linea, 1);
+  });
+
+  test('detecta conversión visual por run', () => {
+    const p = analizarRotacionEnCapaTexto('const r = this.geomVisual.rectPtToCss(run.boxPt);');
+    assert.equal(p.length, 1);
+  });
+
+  test('no señala comentarios ni la geometría sin girar; respeta el escape con razón', () => {
+    assert.deepEqual(analizarRotacionEnCapaTexto('// rotation === 90 en un comentario\nconst r = this.geom.rectPtToCss(b);'), []);
+    const conEscape = '// guard-disable-next-line capa-texto-sin-rotacion-por-run: caso excepcional documentado\nx = g.rotation;';
+    assert.deepEqual(analizarRotacionEnCapaTexto(conEscape), []);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.ok(regla.comoArreglar.includes('transformCapaSinGirar'));
     assert.deepEqual(regla.ejecutar(), []);
   });
 });

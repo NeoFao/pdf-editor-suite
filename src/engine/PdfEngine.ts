@@ -23,6 +23,12 @@ export interface TextRun {
    * (E-030). Asume texto horizontal sin rotación/sesgo (b≈0, c≈0 en la matriz).
    */
   originPt: { xPt: number; yPt: number };
+  /**
+   * Dirección de la línea en el espacio de USUARIO de la página (sin girar), grados antihorarios 0..359
+   * (atan2(b, a) de la matriz de texto). 0 = horizontal normal; 90 = el texto sube; 180 = boca abajo.
+   * Opcional: ausente equivale a 0. Es independiente de `/Rotate` (E-063).
+   */
+  anguloDeg?: number;
 }
 
 export type EditResult = { ok: true } | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' };
