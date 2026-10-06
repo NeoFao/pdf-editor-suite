@@ -1170,8 +1170,14 @@ export const capaTextoSinRotacionPorRun = {
  * Devuelve [{ mensaje }]. `clavesModulo` son las claves exportadas por
  * scripts/puertos-e2e.mjs (PUERTOS_E2E) y `puertosModulo` sus valores.
  */
-export function analizarPuertosE2E(config, liberar, clavesModulo, puertosModulo) {
+export function analizarPuertosE2E(config, liberar, clavesModulo, puertosModulo, paquete = '') {
   const problemas = [];
+  // Los `preview:*` de package.json no escriben el puerto a mano: pasan por scripts/servir-preview.mjs.
+  for (const m of paquete.matchAll(/"(preview:[\w-]+)"\s*:\s*"([^"]*)"/g)) {
+    if (/--port[ =]\s*\d+/.test(m[2])) {
+      problemas.push({ mensaje: `package.json "${m[1]}" escribe el puerto a mano; usa node scripts/servir-preview.mjs (lee PUERTOS_E2E)` });
+    }
+  }
   if (!/from\s+['"]\.\/scripts\/puertos-e2e\.mjs['"]/.test(config)) {
     problemas.push({ mensaje: 'playwright.config.js no importa scripts/puertos-e2e.mjs (fuente única de puertos)' });
   }
@@ -1220,7 +1226,7 @@ export const conPuertosE2eSincronizados = {
     const pares = bloque ? [...bloque[1].matchAll(/(\w+)\s*:\s*(\d+)/g)] : [];
     const claves = pares.map((m) => m[1]);
     const puertos = pares.map((m) => Number(m[2]));
-    return analizarPuertosE2E(leer(rutaConfig), leer(rutaLiberar), claves, puertos)
+    return analizarPuertosE2E(leer(rutaConfig), leer(rutaLiberar), claves, puertos, leer('package.json'))
       .map((p) => hallazgo(rutaConfig, null, p.mensaje));
   }
 };
