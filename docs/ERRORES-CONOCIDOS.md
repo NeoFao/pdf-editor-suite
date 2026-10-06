@@ -2693,3 +2693,23 @@ la herramienta activa y el foco en el visor, en fase de captura para adelantarse
 **Cómo se detecta ahora.** `tests/e2e/next/herramientas-teclado.spec.ts` (sin `page.mouse` ni clics: nota con y sin
 línea enfocada, rectángulo crear/mover/redimensionar/confirmar con el PDF guardado, Esc, Enter sigue editando sin
 herramienta, ayuda) y `tests/unit/atajos.test.ts`. Fallaban antes. Sin regla guard: es cobertura funcional.
+
+---
+
+### E-074 · Recargar, cerrar o abrir otro documento con cambios sin guardar perdía el trabajo sin aviso (N8)
+
+**Síntoma.** Tras editar una línea y resaltar, recargar la pestaña (o abrir otro PDF, o «Nuevo») descartaba todo sin
+preguntar. No había manejador `beforeunload` ni noción de «documento modificado».
+
+**Causa raíz.** El estado «sucio» no existía: el `CommandBus` solo guardaba pilas de deshacer/rehacer y la UI no sabía
+si lo hecho desde el último guardado estaba a salvo. Nadie revisó los caminos que destruyen la sesión (recarga, cierre,
+`openFile`, `openImage`, `newBlank`) desde el punto de vista de «qué se pierde».
+
+**Arreglo.** `CommandBus` acepta un `onCambio` que se llama tras ejecutar, registrar (`pushExecuted`), deshacer y rehacer.
+`App.marcarSucio()` lo refleja con un «• » en `.doc-name` (y `data-sucio`) y en `document.title`; guardar (`#btn-save`) o
+abrir un documento lo dejan limpio. `beforeunload` hace `preventDefault()` SOLO si está sucio. Abrir un fichero o imagen,
+o «Nuevo», con cambios pide `window.confirm` y, si se cancela, no toca nada.
+
+**Cómo se detecta ahora.** `tests/e2e/next/cambios-sin-guardar.spec.ts` (limpio al abrir, sucio tras ejecutar y tras
+deshacer, limpio al guardar, `beforeunload` solo cuando está sucio —con diálogo real—, confirmación de Nuevo/abrir y
+silencio con el documento limpio). Fallaban antes. Sin regla guard: es estado de interfaz, no un patrón estático.

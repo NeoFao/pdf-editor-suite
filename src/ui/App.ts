@@ -150,6 +150,9 @@ export class App {
   private session: EditSession | null = null;
   private bus: CommandBus | null = null;
   private docName = 'documento.pdf';
+  /** N8: hay cambios (ejecutar/deshacer/rehacer en el bus) posteriores al último guardado o apertura. */
+  private sucio = false;
+  private readonly tituloBase = document.title;
   /**
    * Herramienta activa: `'none' | 'insert' | 'pen' | 'note' | 'rect' |
    * 'eraser'`. Único punto de verdad — `setTool()` es la única función que lo
@@ -863,6 +866,13 @@ export class App {
       e.preventDefault();
     });
 
+    // N8: avisa al recargar o cerrar la pestaña SOLO si hay cambios sin guardar.
+    window.addEventListener('beforeunload', (e) => {
+      if (!this.sucio) return;
+      e.preventDefault();
+      e.returnValue = '';
+    });
+
     // Arrastrar y soltar un fichero (PDF o imagen) sobre la ventana entera.
     // `dragover` necesita `preventDefault()` para que el navegador permita el
     // `drop` (si no, su acción por defecto es navegar al fichero); la clase
@@ -892,11 +902,25 @@ export class App {
     this.setStatus('Tipo de archivo no admitido para soltar aquí (usa un PDF o una imagen).');
   }
 
+  /** N8: refleja "documento modificado" en el nombre del documento y en `document.title` (prefijo "• "). */
+  private marcarSucio(valor: boolean): void {
+    this.sucio = valor;
+    const base = this.session ? this.docName : 'Sin documento';
+    this.docNameEl.textContent = valor ? `• ${base}` : base;
+    this.docNameEl.toggleAttribute('data-sucio', valor);
+    document.title = valor ? `• ${this.tituloBase}` : this.tituloBase;
+  }
+
+  /** N8: antes de reemplazar el documento abierto, pide confirmación si tiene cambios sin guardar. `false` = el usuario canceló. */
+  private confirmarDescarte(): boolean {
+    if (!this.sucio) return true;
+    return window.confirm('Hay cambios sin guardar. Si continúas se perderán. ¿Continuar?');
+  }
+
   /** `#btn-new`: documento de 1 página A4 (595×842 pt) en blanco, abierto como cualquier otro. */
   private async newBlank(): Promise<void> {
+    if (!this.confirmarDescarte()) return;
     const engine = await this.ensureEngine();
-    // Posible mejora futura: avisar si el documento actual tiene cambios sin
-    // guardar antes de reemplazarlo (fuera de alcance de este PR).
     const bytes = engine.createBlank(595, 842);
     await this.openBytes(bytes, 'documento.pdf');
     this.setStatus('Documento en blanco creado.');
@@ -1062,6 +1086,7 @@ export class App {
    * documento actual no se toca.
    */
   async openFile(file: File): Promise<void> {
+    if (!this.confirmarDescarte()) return;
     const engine = await this.ensureEngine();
     const ext = (file.name.split('.').pop() ?? '').toLowerCase();
     if (ext === 'doc') {
@@ -1119,6 +1144,7 @@ export class App {
 
   /** Abre una imagen convirtiéndola en un PDF de una página. */
   private async openImage(file: File): Promise<void> {
+    if (!this.confirmarDescarte()) return;
     const engine = await this.ensureEngine();
     const { rgba, width, height } = await this.decodeImage(file);
     const bytes = engine.imageToPdf(rgba, width, height);
@@ -1136,9 +1162,9 @@ export class App {
     const engine = await this.ensureEngine();
     if (this.session) engine.close(this.session.doc);
     this.docName = name;
-    this.docNameEl.textContent = name;
     this.session = await EditSession.open(engine, bytes);
-    this.bus = new CommandBus(this.session);
+    this.bus = new CommandBus(this.session, () => this.marcarSucio(true));
+    this.marcarSucio(false);
     this.selection = null;
     this.selectedImage = null;
     this.reflectPropsPanel();
@@ -2899,6 +2925,7 @@ export class App {
     // saveCompact (E-038): guardado de cara al usuario, descarta huérfanos.
     const bytes = await s.engine.saveCompact(s.doc);
     this.download(bytes, this.docName.replace(/\.pdf$/i, '') + '_editado.pdf');
+    this.marcarSucio(false);
     this.setStatus('Guardado.');
   }
 
