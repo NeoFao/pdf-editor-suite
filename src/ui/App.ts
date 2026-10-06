@@ -776,6 +776,8 @@ export class App {
       // "salir de herramienta" ni ninguna otra cosa.
       if (e.key === 'Escape' && this.drawerOpen) { e.preventDefault(); this.closeDrawer(); return; }
       if (e.key === 'Escape' && this.moreOpen) { e.preventDefault(); this.closeMore(); return; }
+      // Escape descarta la selección de texto por arrastre (T12) si no se está editando un campo.
+      if (e.key === 'Escape' && !esCampoEditable(e.target) && this.viewer?.seleccionTexto()) { this.viewer.limpiarSeleccionTexto(); return; }
 
       const def = resolverAtajo({
         key: e.key,
@@ -786,6 +788,16 @@ export class App {
         editable: esCampoEditable(e.target)
       });
       if (def) this.ejecutarAtajo(def.accion, e);
+    });
+
+    // Ctrl/Cmd+C con una selección de texto por arrastre (T12): copia exactamente ese tramo.
+    // Con el foco en un campo editable (una línea en edición, un input) manda el copiar nativo.
+    document.addEventListener('copy', (e) => {
+      if (esCampoEditable(e.target)) return;
+      const ts = this.viewer?.seleccionTexto();
+      if (!ts || !ts.texto || !e.clipboardData) return;
+      e.clipboardData.setData('text/plain', ts.texto);
+      e.preventDefault();
     });
 
     // Arrastrar y soltar un fichero (PDF o imagen) sobre la ventana entera.
@@ -1072,6 +1084,12 @@ export class App {
         this.reflectPropsPanel();
       },
       onBackgroundClick: (pageIndex, at) => { this.selectedImage = null; this.handleBackgroundClick(pageIndex, at); },
+      onTextSelectionStart: () => {
+        this.selection = null; // la selección de texto sustituye a la de una línea o imagen
+        this.selectedImage = null;
+        this.viewer?.deselectImage();
+        this.reflectPropsPanel();
+      },
       onImageSelect: (pageIndex, objIndex) => {
         this.selectedImage = { pageIndex, objIndex };
         this.selection = null; // selección mutuamente excluyente con una línea de texto
@@ -1630,6 +1648,15 @@ export class App {
    * versiones previas) se quedan como están: son contenido de la página.
    */
   private marcarSeleccion(tipo: MarkupKind, color: [number, number, number], verbo: string, hecho: string): void {
+    // Selección de texto por arrastre (T12): UNA anotación con un quad por línea visual,
+    // recortado al tramo exacto. Tiene prioridad sobre la línea entera seleccionada.
+    const ts = this.viewer?.seleccionTexto();
+    if (ts && ts.quads.length > 0 && this.bus) {
+      void this.bus.execute(new AddMarkupCmd(ts.pageIndex, tipo, ts.quads, color));
+      this.viewer?.limpiarSeleccionTexto();
+      this.setStatus(hecho);
+      return;
+    }
     const run = this.selectedRun();
     if (!run || !this.bus || !this.selection || !this.session) { this.setStatus(`Selecciona una línea para ${verbo}.`); return; }
     const page = this.session.model.pages[this.selection.pageIndex]!;

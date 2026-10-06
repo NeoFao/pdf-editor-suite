@@ -1,4 +1,4 @@
-import type { PdfEngine, DocHandle, TextRun } from '../engine/PdfEngine';
+import type { PdfEngine, DocHandle, TextRun, CharBox } from '../engine/PdfEngine';
 import { DocumentModel } from './DocumentModel';
 import type { PageModel } from './types';
 import { contarGetPageText } from '../diagnostico';
@@ -25,6 +25,8 @@ import { contarGetPageText } from '../diagnostico';
 export class EditSession {
   /** Páginas cuyo texto YA se cargó del motor (cacheado en `model.pages[i].runs`). */
   private loadedText = new Set<number>();
+  /** Caracteres con caja por página (T12), perezosos y cacheados igual que el texto. */
+  private chars = new Map<number, CharBox[]>();
 
   private constructor(
     readonly engine: PdfEngine,
@@ -79,6 +81,14 @@ export class EditSession {
     return page.runs;
   }
 
+  /** Caracteres de la página con su caja (selección de texto), cargados del motor la primera vez y cacheados. */
+  ensureChars(pageIndex: number): CharBox[] {
+    if (!this.model.pages[pageIndex]) return [];
+    let c = this.chars.get(pageIndex);
+    if (!c) { c = this.engine.getCharBoxes(this.doc, pageIndex); this.chars.set(pageIndex, c); }
+    return c;
+  }
+
   /** ¿Ya se cargó (y no se invalidó desde entonces) el texto de esta página? Solo para tests/diagnóstico. */
   hasLoadedText(pageIndex: number): boolean {
     return this.loadedText.has(pageIndex);
@@ -87,6 +97,7 @@ export class EditSession {
   /** Olvida el texto cacheado de una página: la próxima `ensureText()` lo vuelve a pedir al motor. */
   invalidateText(pageIndex: number): void {
     this.loadedText.delete(pageIndex);
+    this.chars.delete(pageIndex);
   }
 
   /**
@@ -109,6 +120,7 @@ export class EditSession {
       runs: this.engine.getPageText(this.doc, pageIndex)
     };
     this.loadedText.add(pageIndex);
+    this.chars.delete(pageIndex);
     contarGetPageText();
     this.model.refreshPage(pageIndex, page);
   }
@@ -123,6 +135,7 @@ export class EditSession {
    */
   refresh(): void {
     this.loadedText.clear();
+    this.chars.clear();
     this.model.reset(EditSession.buildPages(this.engine, this.doc));
   }
 

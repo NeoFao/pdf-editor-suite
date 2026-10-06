@@ -4,7 +4,7 @@ import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
 import { validarUrlEnlace } from '../validarUrlEnlace';
 import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
 import type { QuadPt } from '../../coords/quads';
-import type { PdfEngine, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
+import type { PdfEngine, CharBox, DocHandle, SizePt, TextRun, EditResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_PAGEOBJ_PATH = 2;
@@ -351,6 +351,34 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDF_ClosePage(page);
     }
     return runs;
+  }
+
+  getCharBoxes(doc: DocHandle, pageIndex: number): CharBox[] {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const textPage = this.p.FPDFText_LoadPage(page);
+    const out: CharBox[] = [];
+    // Cuatro doubles reutilizados para todos los caracteres (left, right, bottom, top).
+    const l = this.mem.malloc(8), r = this.mem.malloc(8), b = this.mem.malloc(8), t = this.mem.malloc(8);
+    try {
+      const n = this.p.FPDFText_CountChars(textPage);
+      for (let i = 0; i < n; i++) {
+        const u = this.p.FPDFText_GetUnicode(textPage, i);
+        let ch = '';
+        try { ch = u > 0 && u <= 0x10ffff ? String.fromCodePoint(u) : ''; } catch { ch = ''; }
+        this.p.FPDFText_GetCharBox(textPage, i, l, r, b, t);
+        const L = this.mem.getValue(l, 'double'), R = this.mem.getValue(r, 'double');
+        const B = this.mem.getValue(b, 'double'), T = this.mem.getValue(t, 'double');
+        out.push(R > L && T > B
+          ? { ch, boxPt: { xPt: L, yPt: B, wPt: R - L, hPt: T - B } }
+          : { ch, boxPt: { xPt: 0, yPt: 0, wPt: 0, hPt: 0 } });
+      }
+    } finally {
+      [l, r, b, t].forEach((ptr) => this.mem.free(ptr));
+      this.p.FPDFText_ClosePage(textPage);
+      this.p.FPDF_ClosePage(page);
+    }
+    return out;
   }
 
   /** Lee las propiedades de un objeto de texto (obj) usando la text page para el string. */
