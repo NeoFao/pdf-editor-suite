@@ -3035,3 +3035,24 @@ tocan. Se libera siempre en `finally` (terminar, cancelar o fallar).
 zoom libre, y tras terminar Guardar descarga el resultado completo) y `tests/unit/CandadoOperacion.test.ts`.
 
 **Límite.** La búsqueda sigue siendo libre durante una operación (solo lee y se invalida sola, y «Reemplazar» la repite al terminar).
+
+### E-088 · Al editar una palabra seguida de una ligadura (fi, ffi de Calibri/Chrome) la palabra de al lado salía deformada
+
+**Síntoma.** En un PDF de Chrome con Calibri («Una oficina eficiente: official fine find…») cambiar «fine» por «enif» dejaba «enif ƒind»:
+la «fi» de «find», que el usuario no había tocado, pasaba a la fuente de reserva con la «f» y la «i» sueltas (el subconjunto no tiene una
+«f» suelta), y el sufijo se movía con un avance equivocado (la ligadura mide 5,4 pt de caja y 8,8 pt de avance natural por caracteres).
+
+**Causa raíz.** Un objeto de texto que acaba en espacio («ne ») pierde ese espacio al releerlo (PDFium lo recorta), así que `editarLineaCompuesta`
+alargaba el tramo escrito con el objeto SIGUIENTE. En Chrome el siguiente objeto es el comienzo de la palabra de al lado, y con Calibri es
+una ligadura («fi»): se reescribía fuera de su fuente y el final «viejo» se medía con su avance natural (que sobrestima una ligadura).
+El solape de glifos del informe (F5) lo corrigió ya E-085 (final real medido con la caja); quedaba esta arrastrada.
+
+**Arreglo.** El espacio final del tramo escrito ya no se escribe ni arrastra al objeto siguiente: se escribe sin él y su avance natural se suma
+al final nuevo (`espacioFinal`), de modo que el sufijo conserva su hueco y los objetos vecinos no se tocan.
+
+**Cómo se detecta ahora.** Fixture `ligaduras.pdf` (TrueType sintética CID con «fi» como UN glifo de ToUnicode «fi», avance 15,84 pt por
+caracteres y caja 7,92 pt) y `tests/unit/Ligaduras.test.ts`: las ligaduras vecinas siguen siendo un objeto «fi» con la misma caja, sin
+solapes y con el hueco conservado.
+
+**Límite.** Una palabra con «f» o «i» que el subconjunto no trae sueltas (ligadura sin glifos separados) sigue usando la fuente de reserva
+con aviso (E-047) solo en el tramo editado.

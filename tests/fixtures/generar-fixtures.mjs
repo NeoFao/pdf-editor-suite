@@ -1120,13 +1120,14 @@ const GLIFOS_CID = [
  * Una TrueType mínima construida a mano tabla a tabla (rectángulos): no se versiona ningún binario ni hay licencia de
  * fuente. Tablas: OS/2, cmap (formato 4), glyf, head, hhea, hmtx, loca (largo), maxp, name, post (v3).
  */
-function ttfSintetica() {
+function ttfSintetica(GLIFOS = GLIFOS_CID) {
+  const codigoDe = (g) => g.cp ?? g.ch.charCodeAt(0);
   const u16 = (v) => { const b = Buffer.alloc(2); b.writeUInt16BE(v & 0xffff); return b; };
   const i16 = (v) => { const b = Buffer.alloc(2); b.writeInt16BE(v); return b; };
   const u32 = (v) => { const b = Buffer.alloc(4); b.writeUInt32BE(v >>> 0); return b; };
   const pad4 = (b) => (b.length % 4 === 0 ? b : Buffer.concat([b, Buffer.alloc(4 - (b.length % 4))]));
   // glyf: un contorno de 4 puntos en curva (rectángulo x 50…adv-50, y 0…700); el espacio no tiene contornos.
-  const glifos = GLIFOS_CID.map((g) => {
+  const glifos = GLIFOS.map((g) => {
     if (g.gid === 1) return Buffer.alloc(0);
     const x0 = 50, x1 = g.adv - 50, y0 = 0, y1 = 700;
     return pad4(Buffer.concat([
@@ -1139,7 +1140,7 @@ function ttfSintetica() {
   });
   const offs = [0];
   for (const g of glifos) offs.push(offs[offs.length - 1] + g.length);
-  const n = GLIFOS_CID.length;
+  const n = GLIFOS.length;
   const head = Buffer.concat([
     u32(0x00010000), u32(0x00010000), u32(0), u32(0x5f0f3cf5), u16(0), u16(1000),
     Buffer.alloc(16), // created + modified
@@ -1150,16 +1151,16 @@ function ttfSintetica() {
     i16(1), i16(0), i16(0), Buffer.alloc(8), i16(0), u16(n)
   ]);
   const maxp = Buffer.concat([u32(0x00010000), u16(n), u16(4), u16(1), u16(0), u16(0), u16(2), ...Array(8).fill(u16(0))]);
-  const hmtx = Buffer.concat(GLIFOS_CID.flatMap((g) => [u16(g.adv), i16(g.gid === 1 ? 0 : 50)]));
+  const hmtx = Buffer.concat(GLIFOS.flatMap((g) => [u16(g.adv), i16(g.gid === 1 ? 0 : 50)]));
   const loca = Buffer.concat(offs.map((o) => u32(o)));
   // cmap formato 4: un segmento por carácter + el terminador 0xFFFF.
-  const mapeados = GLIFOS_CID.filter((g) => g.ch).sort((a, b) => a.ch.charCodeAt(0) - b.ch.charCodeAt(0));
+  const mapeados = GLIFOS.filter((g) => g.ch).sort((a, b) => codigoDe(a) - codigoDe(b));
   const segs = mapeados.length + 1;
-  const codigos = [...mapeados.map((g) => g.ch.charCodeAt(0)), 0xffff];
+  const codigos = [...mapeados.map((g) => codigoDe(g)), 0xffff];
   const fmt4 = Buffer.concat([
     u16(4), u16(16 + segs * 8), u16(0), u16(segs * 2), u16(0), u16(0), u16(0),
     Buffer.concat(codigos.map((c) => u16(c))), u16(0), Buffer.concat(codigos.map((c) => u16(c))),
-    Buffer.concat([...mapeados.map((g) => i16(g.gid - g.ch.charCodeAt(0))), i16(1)]),
+    Buffer.concat([...mapeados.map((g) => u16(g.gid - codigoDe(g))), i16(1)]),
     Buffer.alloc(segs * 2)
   ]);
   const cmap = Buffer.concat([u16(0), u16(1), u16(3), u16(1), u32(12), fmt4]);
@@ -1401,6 +1402,73 @@ async function pdfCropboxDesplazado() {
   return doc.save();
 }
 
+/**
+ * Glifos de `ligaduras.pdf` (1000 unidades por em): la ligadura «fi» es UN glifo (gid 8, ToUnicode «fi») bastante más
+ * estrecho que f + i (430 frente a 660), como en Calibri/Chrome: el avance natural de «fi» por caracteres sobrestima lo
+ * que ocupa de verdad. `cp` es el punto de código del cmap (U+FB01).
+ */
+const GLIFOS_LIGADURAS = [
+  { gid: 0, ch: null, adv: 500 }, { gid: 1, ch: ' ', adv: 300 },
+  { gid: 2, ch: 'u', adv: 520 }, { gid: 3, ch: 'n', adv: 520 }, { gid: 4, ch: 'a', adv: 480 },
+  { gid: 5, ch: 'f', adv: 380 }, { gid: 6, ch: 'i', adv: 280 }, { gid: 7, ch: 'o', adv: 520 },
+  { gid: 8, ch: 'ﬁ', cp: 0xfb01, adv: 430, unicode: 'fi' }
+];
+/** Objetos de texto de `ligaduras.pdf`, como los parte Chrome: la ligadura es SU propio objeto; los espacios van dentro. */
+export const OBJETOS_LIGADURAS = [
+  { y: 200, objetos: ['una ', 'fi', 'no ', 'fi', 'n'] },
+  { y: 150, objetos: ['nu ', 'fi', 'a'] }
+];
+
+/**
+ * `ligaduras.pdf` (E-088): TrueType sintética incrustada como subconjunto CID (como Chrome) con la ligadura «fi» como UN
+ * glifo, partida en objetos de texto: «una |fi|no |fi|n» (`una fino fin`) y «nu |fi|a» (`nu fia`). Cada objeto es un `Tj`
+ * en hexadecimal; el objeto «fi» usa el glifo de ligadura. Fuente de 24 pt.
+ */
+async function pdfLigaduras() {
+  const doc = await PDFDocument.create();
+  const ctx = doc.context;
+  const ttf = ttfSintetica(GLIFOS_LIGADURAS);
+  const fontFile = ctx.register(ctx.flateStream(ttf, { Length1: ttf.length }));
+  const nombre = 'AAAAAA+LigadurasSub';
+  const descriptor = ctx.register(ctx.obj({
+    Type: 'FontDescriptor', FontName: nombre, Flags: 4, FontBBox: [0, 0, 900, 700], ItalicAngle: 0,
+    Ascent: 800, Descent: -200, CapHeight: 700, StemV: 80, FontFile2: fontFile
+  }));
+  const cid = ctx.register(ctx.obj({
+    Type: 'Font', Subtype: 'CIDFontType2', BaseFont: nombre,
+    CIDSystemInfo: { Registry: PDFString.of('Adobe'), Ordering: PDFString.of('Identity'), Supplement: 0 },
+    FontDescriptor: descriptor, DW: 1000, W: [0, GLIFOS_LIGADURAS.map((g) => g.adv)], CIDToGIDMap: 'Identity'
+  }));
+  const hex4 = (v) => v.toString(16).toUpperCase().padStart(4, '0');
+  const bf = GLIFOS_LIGADURAS.filter((g) => g.ch).map((g) => `<${hex4(g.gid)}> <${[...(g.unicode ?? g.ch)].map((c) => hex4(c.charCodeAt(0))).join('')}>`);
+  const cmapUni = [
+    '/CIDInit /ProcSet findresource begin 12 dict begin begincmap',
+    '/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def',
+    '/CMapName /Adobe-Identity-UCS def /CMapType 2 def',
+    '1 begincodespacerange <0000> <FFFF> endcodespacerange',
+    `${bf.length} beginbfchar`, ...bf, 'endbfchar', 'endcmap CMapName currentdict /CMap defineresource pop end end'
+  ].join('\n');
+  const toUni = ctx.register(ctx.flateStream(Buffer.from(cmapUni, 'latin1')));
+  const font = ctx.register(ctx.obj({
+    Type: 'Font', Subtype: 'Type0', BaseFont: nombre, Encoding: 'Identity-H', DescendantFonts: [cid], ToUnicode: toUni
+  }));
+  const gidDe = (c) => GLIFOS_LIGADURAS.find((g) => g.ch === c).gid;
+  const TF = 24;
+  const cuerpo = [];
+  for (const { y, objetos } of OBJETOS_LIGADURAS) {
+    let x = 40;
+    for (const o of objetos) {
+      const gids = o === 'fi' ? [gidDe('ﬁ')] : [...o].map(gidDe);
+      cuerpo.push(`BT /F1 ${TF} Tf 1 0 0 1 ${x.toFixed(3)} ${y} Tm <${gids.map(hex4).join('')}> Tj ET`);
+      x += gids.reduce((a, g) => a + GLIFOS_LIGADURAS[g].adv, 0) / 1000 * TF;
+    }
+  }
+  const page = doc.addPage([320, 260]);
+  page.node.setFontDictionary(PDFName.of('F1'), font);
+  page.node.set(PDFName.of('Contents'), ctx.register(ctx.stream(cuerpo.join('\n'))));
+  return doc.save({ useObjectStreams: false });
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -1417,6 +1485,7 @@ async function main() {
     'cid-subconjunto.pdf': await pdfCidSubconjunto(),
     'justificado-tw.pdf': await pdfJustificadoTw(),
     'sin-espacio-tex.pdf': await pdfSinEspacioTex(),
+    'ligaduras.pdf': await pdfLigaduras(),
     'marcadores.pdf': await pdfMarcadores(),
     'outline-ciclo.pdf': await pdfOutlineCiclo(),
     'marcadores-uri.pdf': await pdfMarcadoresConAccion({ S: 'URI', URI: PDFString.of('https://example.com/') }),

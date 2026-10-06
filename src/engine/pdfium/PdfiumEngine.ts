@@ -867,10 +867,18 @@ export class PdfiumEngine implements PdfEngine {
     while (i0 > 0 && tr[i0]!.inicio > P) i0--;
     while (i1 < tr.length - 1 && tr[i1]!.fin < E) i1++;
     // Un objeto que acabara en espacio pierde ese espacio al releer el texto de la página (PDFium lo recorta y además
-    // genera un hueco falso más adelante): si el medio nuevo acaba en blanco, el objeto escrito se alarga con el siguiente.
+    // genera un hueco falso más adelante). E-088: antes el objeto escrito se alargaba con el SIGUIENTE para no escribir ese
+    // espacio, y arrastraba a la fuente de reserva el comienzo de una palabra que el usuario no tocó (la «fi» de «find»).
+    // Ahora el espacio final no se escribe: el objeto se escribe sin él y su avance se suma al final (`espacioFinal`),
+    // de modo que el sufijo conserva su hueco y los objetos vecinos no se tocan.
     const medioDe = (): string => nuevo.slice(tr[i0]!.inicio, nuevo.length - (viejo.length - tr[i1]!.fin));
-    while (i1 < tr.length - 1 && /\s$/.test(medioDe())) i1++;
-    const medioNuevo = medioDe();
+    let medioNuevo = medioDe();
+    let espacioFinal = '';
+    if (i1 < tr.length - 1) {
+      const m = /\s+$/.exec(medioNuevo);
+      if (m && m.index > 0) { espacioFinal = m[0]; medioNuevo = medioNuevo.slice(0, m.index); }
+      else if (m) { while (i1 < tr.length - 1 && /^\s*$/.test(medioDe())) i1++; medioNuevo = medioDe(); } // solo blancos: se une al siguiente
+    }
 
     const afectados = tr.slice(i0, i1 + 1).map((t) => ({ runId: t.runId, obj: objDe(t.runId) }));
     const sufijo = tr.slice(i1 + 1).map((t) => objDe(t.runId));
@@ -941,7 +949,7 @@ export class PdfiumEngine implements PdfEngine {
       const tfN = m.malloc(4); this.p.FPDFTextObj_GetFontSize(objEscrito, tfN);
       const sizeN = m.getValue(tfN, 'float'); m.free(tfN);
       const matN = this.matrizDe(objEscrito);
-      finNuevoU = uDe(matN) + this.avanceNatural(fontN, sizeN, Math.hypot(matN[0], matN[1]), medioNuevo);
+      finNuevoU = uDe(matN) + this.avanceNatural(fontN, sizeN, Math.hypot(matN[0], matN[1]), medioNuevo + espacioFinal);
       // Con un final viejo medido por la caja, el nuevo se mide igual: así el hueco con el sufijo se conserva aunque el
       // objeto reescrito conserve `Tw` o `Tc` (que el avance natural no incluye).
       if (viejoDesplazado) finNuevoU = this.finRealU(objEscrito, cos, sin, theta) ?? finNuevoU;
