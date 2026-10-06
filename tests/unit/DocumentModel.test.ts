@@ -1,11 +1,12 @@
 import { test, expect } from 'vitest';
 import { DocumentModel } from '../../src/model/DocumentModel';
 import type { PageModel } from '../../src/model/types';
+import { crearTextRun } from './_util/textRun';
 
 function modeloDe(): DocumentModel {
   const pages: PageModel[] = [
     { index: 0, sizePt: { widthPt: 320, heightPt: 200 }, rotation: 0, runs: [
-      { runId: 0, text: 'hola', boxPt: { xPt: 40, yPt: 150, wPt: 30, hPt: 12 }, fontName: 'Times-Roman', sizePt: 18, color: [0,0,0,255], originPt: { xPt: 40, yPt: 150 } }
+      crearTextRun({ text: 'hola', xPt: 40, yPt: 150, sizePt: 18, wPt: 30, fontName: 'Times-Roman' })
     ] }
   ];
   return new DocumentModel(pages);

@@ -72,6 +72,7 @@ export class DocumentModel {
     const run = page.runs.find((r) => r.runId === runId);
     if (!run) return;
     run.text = text;
+    run.textoReal = text; // el texto editado es real (lo escribió el usuario), no generado
     this.emitChange(pageIndex);
   }
 

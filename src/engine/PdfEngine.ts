@@ -9,10 +9,30 @@ export interface CharBox { ch: string; boxPt: RectPt }
 
 export interface TextRun {
   runId: number;               // índice del objeto de texto en la página
+  /** Texto del objeto tal como lo da PDFium: puede incluir espacios que PDFium GENERA (huecos de `TJ`), no escritos en el PDF. */
   text: string;
   boxPt: RectPt;
   fontName: string;
+  /**
+   * Tamaño de fuente NOMINAL: el `Tf` del objeto, SIN la escala de su matriz. Con la CTM `0.75` de Chrome un cuerpo de
+   * 11 pt sale como 14,66. Es lo que hay que pasar a `FPDFPageObj_NewTextObj`/`CreateTextObj`; para mostrar o comparar
+   * con lo que ve el usuario se usa `sizeEfectivoPt` (E-080).
+   */
   sizePt: number;
+  /** Tamaño EFECTIVO en pt de página: `sizePt × hypot(a, b)` de la matriz del objeto (E-080). Lo que ve el usuario. */
+  sizeEfectivoPt: number;
+  /** Matriz del objeto `[a, b, c, d, e, f]` en puntos PDF de usuario (e, f = origen de la línea base). */
+  matriz: [number, number, number, number, number, number];
+  /** Texto REAL del objeto: sin los caracteres que PDFium genera (N6: espacios dobles al unir objetos). */
+  textoReal: string;
+  /** PDFium generó un espacio entre el objeto anterior y este (no está escrito en el PDF). */
+  espacioVirtualAntes: boolean;
+  /** Avance natural del texto real a lo largo de la línea base, en pt de página (anchos de glifo × escala de la matriz). */
+  avancePt: number;
+  /** Modo de render de texto (0 relleno … 3 invisible, la capa OCR). −1 si el motor no lo da. */
+  renderMode: number;
+  /** La fuente es un subconjunto incrustado (nombre `ABCDEF+Nombre`): sus glifos son solo los usados en el documento. */
+  fuenteSubconjunto: boolean;
   color: [number, number, number, number]; // RGBA 0-255
   /**
    * Origen de la línea base del objeto de texto, en puntos PDF (origen
@@ -31,7 +51,11 @@ export interface TextRun {
   anguloDeg?: number;
 }
 
-export type EditResult = { ok: true } | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' };
+/**
+ * `empty-text`: una línea no puede quedar con la cadena vacía (`FPDFText_SetText("")` bloquea el WASM, E-081): para
+ * quitarla se elimina el objeto (`deleteRun`).
+ */
+export type EditResult = { ok: true } | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' | 'empty-text' };
 
 /**
  * Resultado de `replaceRunWithStandardFont`. `fontName` es la fuente estándar
@@ -284,8 +308,10 @@ export interface PdfEngine {
    * el objeto de texto porque PDFium no expone un setter de tamaño en sitio;
    * conserva texto, color, matriz de posición (solo cambia el tamaño en la
    * matriz de fuente) y modo de render. `runId` en el resultado `ok` es el
-   * del objeto NUEVO. Rango válido de `sizePt`: 1 a 400; fuera de rango
-   * devuelve `invalid-size` sin modificar nada.
+   * del objeto NUEVO. `sizePt` es el tamaño EFECTIVO que ve el usuario
+   * (`TextRun.sizeEfectivoPt`, E-080): el motor lo convierte al `Tf` nominal
+   * dividiendo por la escala de la matriz. Rango válido: 1 a 400; fuera de
+   * rango devuelve `invalid-size` sin modificar nada.
    */
   setRunFontSize(doc: DocHandle, pageIndex: number, runId: number, sizePt: number): SetSizeResult;
   /**

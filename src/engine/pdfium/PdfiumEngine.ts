@@ -341,16 +341,104 @@ export class PdfiumEngine implements PdfEngine {
     const runs: TextRun[] = [];
     try {
       const n = this.p.FPDFPage_CountObjects(page);
+      // handle del objeto → índice de objeto (runId), para atribuir cada carácter de la text page a su objeto.
+      const indiceDe = new Map<number, number>();
+      for (let i = 0; i < n; i++) indiceDe.set(this.p.FPDFPage_GetObject(page, i), i);
+      const reales = this.textoRealPorObjeto(textPage, indiceDe);
       for (let i = 0; i < n; i++) {
         const obj = this.p.FPDFPage_GetObject(page, i);
         if (this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) continue;
-        runs.push(this.readTextRun(obj, textPage, i));
+        runs.push(this.readTextRun(obj, textPage, i, reales.get(i)));
       }
     } finally {
       this.p.FPDFText_ClosePage(textPage);
       this.p.FPDF_ClosePage(page);
     }
     return runs;
+  }
+
+  /**
+   * Texto REAL de cada objeto de texto de la página (sin los caracteres que PDFium genera: huecos de `TJ`, saltos de
+   * línea) y si PDFium generó un espacio justo antes de su primer carácter. Un único recorrido de la text page
+   * (`FPDFText_GetTextObject` + `FPDFText_IsGenerated`). Clave: índice del objeto en la página.
+   */
+  private textoRealPorObjeto(textPage: number, indiceDe: Map<number, number>): Map<number, { texto: string; espacioAntes: boolean }> {
+    const out = new Map<number, { texto: string; espacioAntes: boolean }>();
+    const total = this.p.FPDFText_CountChars(textPage);
+    let espacioPendiente = false;
+    for (let k = 0; k < total; k++) {
+      const u = this.p.FPDFText_GetUnicode(textPage, k);
+      if (this.p.FPDFText_IsGenerated(textPage, k) === 1) {
+        if (u === 32) espacioPendiente = true;
+        else if (u === 10 || u === 13) espacioPendiente = false;
+        continue;
+      }
+      const idx = indiceDe.get(this.p.FPDFText_GetTextObject(textPage, k));
+      if (idx === undefined || u === 10 || u === 13) continue;
+      let ch = '';
+      try { ch = u > 0 && u <= 0x10ffff ? String.fromCodePoint(u) : ''; } catch { ch = ''; }
+      let e = out.get(idx);
+      if (!e) { e = { texto: '', espacioAntes: espacioPendiente }; out.set(idx, e); }
+      e.texto += ch;
+      espacioPendiente = false;
+    }
+    return out;
+  }
+
+  /** Texto real (sin caracteres generados) de UN objeto, leyendo solo los caracteres de la text page que le pertenecen. */
+  private textoRealDeObjeto(textPage: number, obj: number): string {
+    let texto = '';
+    const total = this.p.FPDFText_CountChars(textPage);
+    for (let k = 0; k < total; k++) {
+      if (this.p.FPDFText_GetTextObject(textPage, k) !== obj || this.p.FPDFText_IsGenerated(textPage, k) === 1) continue;
+      const u = this.p.FPDFText_GetUnicode(textPage, k);
+      if (u === 10 || u === 13) continue;
+      try { if (u > 0 && u <= 0x10ffff) texto += String.fromCodePoint(u); } catch { /* unidad suelta: se omite */ }
+    }
+    return texto;
+  }
+
+  /** Texto actual de un run para reescribirlo: el REAL (sin espacios generados por PDFium); si no hay, el de `GetText`. */
+  private textoActualDelRun(obj: number, textPage: number): string {
+    const real = this.textoRealDeObjeto(textPage, obj);
+    if (real !== '') return real;
+    return leerCadenaPdfium(
+      this.mem,
+      (buf, len) => this.p.FPDFTextObj_GetText(obj, textPage, buf, len),
+      (ptr) => this.mem.readU16(ptr)
+    );
+  }
+
+  /**
+   * Única vía de escritura de texto en un objeto (`FPDFText_SetText`). PROHIBE la cadena vacía: con ella PDFium
+   * provoca `RuntimeError: unreachable` y mata el WASM de todas las páginas abiertas (E-081). Un borrado elimina el
+   * objeto (`deleteRun`), nunca lo deja vacío.
+   */
+  private escribirTexto(obj: number, texto: string): void {
+    if (texto === '') throw new Error('Texto vacío: FPDFText_SetText("") bloquea el motor; para borrar se elimina el objeto.');
+    const wptr = this.mem.wide(texto);
+    try { this.p.FPDFText_SetText(obj, wptr); } finally { this.mem.free(wptr); }
+  }
+
+  /**
+   * Relee, en la text page de la MISMA página y antes de generar contenido, lo que quedó escrito en `obj`; `true` si
+   * coincide con `esperado`. En un subconjunto CID `FPDFFont_GetGlyphPath` da falsos positivos (dice «sí» a glifos que no
+   * están y se guardan como `.notdef`, E-079), así que la cobertura de glifos NO se consulta antes: se verifica el
+   * resultado. Cuando no coincide, el llamante cierra la página SIN `FPDFPage_GenerateContent` y el cambio se descarta
+   * solo (cada llamada del motor reparsea la página desde el content stream).
+   */
+  private textoEscritoCoincide(page: number, obj: number, esperado: string): boolean {
+    const textPage = this.p.FPDFText_LoadPage(page);
+    try {
+      const leido = leerCadenaPdfium(
+        this.mem,
+        (buf, len) => this.p.FPDFTextObj_GetText(obj, textPage, buf, len),
+        (ptr) => this.mem.readU16(ptr)
+      );
+      return leido === esperado || this.textoRealDeObjeto(textPage, obj) === esperado;
+    } finally {
+      this.p.FPDFText_ClosePage(textPage);
+    }
   }
 
   getCharBoxes(doc: DocHandle, pageIndex: number): CharBox[] {
@@ -382,7 +470,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   /** Lee las propiedades de un objeto de texto (obj) usando la text page para el string. */
-  private readTextRun(obj: number, textPage: number, runId: number): TextRun {
+  private readTextRun(obj: number, textPage: number, runId: number, real?: { texto: string; espacioAntes: boolean }): TextRun {
     const m = this.mem;
     // Texto (UTF-16). Patrón de dos llamadas: ver leerCadenaPdfium (E-028).
     const text = leerCadenaPdfium(
@@ -416,11 +504,29 @@ export class PdfiumEngine implements PdfEngine {
     // la alineación de edición no corrige esos casos.
     const mat = m.malloc(24);
     this.p.FPDFPageObj_GetMatrix(obj, mat);
-    const originPt = { xPt: m.getValue(mat + 16, 'float'), yPt: m.getValue(mat + 20, 'float') };
-    // Dirección del texto en el espacio de usuario: ángulo (grados, antihorario, 0..359) del vector (a, b).
-    const anguloDeg = (Math.round((Math.atan2(m.getValue(mat + 4, 'float'), m.getValue(mat, 'float')) * 180) / Math.PI) + 360) % 360;
+    const matriz = [0, 4, 8, 12, 16, 20].map((off) => m.getValue(mat + off, 'float')) as TextRun['matriz'];
     m.free(mat);
-    return { runId, text, sizePt, fontName, color, boxPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom }, originPt, anguloDeg };
+    const originPt = { xPt: matriz[4], yPt: matriz[5] };
+    // Dirección del texto en el espacio de usuario: ángulo (grados, antihorario, 0..359) del vector (a, b).
+    const anguloDeg = (Math.round((Math.atan2(matriz[1], matriz[0]) * 180) / Math.PI) + 360) % 360;
+    // E-080: el `Tf` es NOMINAL; lo que ve el usuario es Tf × la escala de la matriz (0,75 en los PDF de Chrome).
+    const escala = Math.hypot(matriz[0], matriz[1]);
+    const sizeEfectivoPt = escala > 0 ? sizePt * escala : sizePt;
+    const textoReal = real?.texto ?? text;
+    // Avance natural del texto real a lo largo de la línea base (pt de página): anchos de glifo al `Tf` × escala.
+    let avancePt = 0;
+    const w = m.malloc(4);
+    for (const ch of textoReal) {
+      m.setValue(w, 0, 'float');
+      if (this.p.FPDFFont_GetGlyphWidth(font, ch.codePointAt(0)!, sizePt, w)) avancePt += m.getValue(w, 'float');
+    }
+    m.free(w);
+    avancePt *= escala > 0 ? escala : 1;
+    return {
+      runId, text, sizePt, sizeEfectivoPt, matriz, textoReal, espacioVirtualAntes: real?.espacioAntes ?? false, avancePt,
+      renderMode: this.p.FPDFTextObj_GetTextRenderMode(obj), fuenteSubconjunto: /^[A-Z]{6}\+/.test(fontName),
+      fontName, color, boxPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom }, originPt, anguloDeg
+    };
   }
 
   /**
@@ -580,6 +686,8 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult {
+    // E-081: nunca se escribe la cadena vacía (bloquea el WASM); quitar una línea es eliminar el objeto.
+    if (newText === '') return { ok: false, reason: 'empty-text' };
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
@@ -587,22 +695,10 @@ export class PdfiumEngine implements PdfEngine {
       if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
         return { ok: false, reason: 'not-a-text-run' };
       }
-      // La fuente del propio run: garantiza que el texto nuevo se dibuja con ella.
-      const font = this.p.FPDFTextObj_GetFont(obj);
-      const fs = this.mem.malloc(4); this.p.FPDFTextObj_GetFontSize(obj, fs);
-      const size = this.mem.getValue(fs, 'float'); this.mem.free(fs);
-      // Si la fuente no tiene el glifo de algún carácter (no blanco), no editamos.
-      for (const ch of newText) {
-        if (/\s/.test(ch)) continue;
-        const cp = ch.codePointAt(0)!;
-        if (this.p.FPDFFont_GetGlyphPath(font, cp, size) === 0) {
-          return { ok: false, reason: 'glyph-missing' };
-        }
-      }
-      // Edición EN SITIO: mismo objeto → conserva fuente, tamaño, color y matriz.
-      const wptr = this.mem.wide(newText);
-      this.p.FPDFText_SetText(obj, wptr);
-      this.mem.free(wptr);
+      // Edición EN SITIO: mismo objeto → conserva fuente, tamaño, color y matriz. Se escribe y se RELEE (E-079): si la
+      // fuente no tiene algún glifo se cierra la página sin generar contenido y no queda nada escrito.
+      this.escribirTexto(obj, newText);
+      if (!this.textoEscritoCoincide(page, obj, newText)) return { ok: false, reason: 'glyph-missing' };
       this.p.FPDFPage_GenerateContent(page);
       return { ok: true };
     } finally {
@@ -642,7 +738,7 @@ export class PdfiumEngine implements PdfEngine {
       );
 
       const target = standardFontFor(fontName);
-      const res = this.swapTextObject(doc, page, obj, runId, newText, size, () => this.p.FPDFPageObj_NewTextObj(doc, target, size));
+      const res = this.swapTextObject(doc, page, obj, runId, newText, () => this.p.FPDFPageObj_NewTextObj(doc, target, size));
       if (!res.ok) return res;
       return { ok: true, fontName: target, runId: res.runId };
     } finally {
@@ -673,15 +769,18 @@ export class PdfiumEngine implements PdfEngine {
       if (!obj || this.p.FPDFPageObj_GetType(obj) !== FPDF_PAGEOBJ_TEXT) {
         return { ok: false, reason: 'not-a-text-run' };
       }
-      // Texto actual del run (patrón de dos llamadas, E-028): se conserva tal cual.
-      const text = leerCadenaPdfium(
-        m,
-        (buf, len) => this.p.FPDFTextObj_GetText(obj, textPage, buf, len),
-        (ptr) => m.readU16(ptr)
-      );
+      // Texto actual del run: el REAL, sin los espacios que PDFium genera (si no, se escribirían como espacios reales).
+      const text = this.textoActualDelRun(obj, textPage);
+      // E-080: `sizePt` es el tamaño EFECTIVO que pidió el usuario; la matriz del objeto (que `swapTextObject` copia)
+      // ya escala el `Tf` (0,75 en los PDF de Chrome), así que el `Tf` nominal del objeto nuevo es pedido / escala.
+      const mt = m.malloc(16);
+      this.p.FPDFPageObj_GetMatrix(obj, mt);
+      const escala = Math.hypot(m.getValue(mt, 'float'), m.getValue(mt + 4, 'float'));
+      m.free(mt);
+      const tfNominal = escala > 0 ? sizePt / escala : sizePt;
       // Fuente incrustada ORIGINAL (referencia prestada, ver comentario de arriba).
       const font = this.p.FPDFTextObj_GetFont(obj);
-      const res = this.swapTextObject(doc, page, obj, runId, text, sizePt, () => this.p.FPDFPageObj_CreateTextObj(doc, font, sizePt));
+      const res = this.swapTextObject(doc, page, obj, runId, text, () => this.p.FPDFPageObj_CreateTextObj(doc, font, tfNominal));
       // Mismo texto y misma fuente que ya tenían el glifo a otro tamaño: la
       // comprobación de glifos de `swapTextObject` no debería fallar nunca
       // aquí (la existencia de un glifo no depende del tamaño), pero el
@@ -717,12 +816,8 @@ export class PdfiumEngine implements PdfEngine {
       }
       const fsPtr = m.malloc(4); this.p.FPDFTextObj_GetFontSize(obj, fsPtr);
       const size = m.getValue(fsPtr, 'float'); m.free(fsPtr);
-      const text = leerCadenaPdfium(
-        m,
-        (buf, len) => this.p.FPDFTextObj_GetText(obj, textPage, buf, len),
-        (ptr) => m.readU16(ptr)
-      );
-      const res = this.swapTextObject(doc, page, obj, runId, text, size, () => this.p.FPDFPageObj_NewTextObj(doc, standardFontName, size));
+      const text = this.textoActualDelRun(obj, textPage);
+      const res = this.swapTextObject(doc, page, obj, runId, text, () => this.p.FPDFPageObj_NewTextObj(doc, standardFontName, size));
       if (!res.ok) return res;
       return { ok: true, fontName: standardFontName, runId: res.runId };
     } finally {
@@ -740,14 +835,15 @@ export class PdfiumEngine implements PdfEngine {
    *
    * `newObjFactory` decide cómo se crea el objeto nuevo (por nombre de fuente
    * estándar, o por el handle de una fuente incrustada existente) — es lo
-   * único que difiere entre los tres métodos. `checkSizePt` es el tamaño con
-   * el que se comprueba que la fuente nueva cubre `newText` (mismo criterio
-   * que `editTextRun`).
+   * único que difiere entre los tres métodos. El `Tf` nominal del objeto nuevo
+   * lo fija quien llama (E-080: la matriz del original, que se copia, ya lo
+   * escala).
    *
-   * Comprueba los glifos ANTES de tocar el original: si falta alguno, destruye
-   * el objeto nuevo sin insertarlo y no modifica nada. Inserta el objeto
-   * nuevo en el mismo índice de `runId` para conservar el z-order (ver el
-   * comentario original en `replaceRunWithStandardFont`, mismo mecanismo).
+   * Inserta el objeto nuevo en el mismo índice de `runId` para conservar el
+   * z-order y RELEE lo escrito (E-079): si la fuente nueva no cubre `newText`
+   * devuelve `glyph-missing` SIN generar contenido, y al cerrar la página el
+   * documento queda como estaba (la fuente estándar tampoco cubre CJK, y un
+   * subconjunto no tiene los glifos que no usó).
    *
    * Nunca llama a `FPDFFont_Close`: en los tres casos la fuente del objeto
    * NUEVO sale de `FPDFTextObj_GetFont(newObj)` — una referencia PRESTADA
@@ -764,10 +860,11 @@ export class PdfiumEngine implements PdfEngine {
     obj: number,
     runId: number,
     newText: string,
-    checkSizePt: number,
     newObjFactory: () => number
   ): { ok: true; runId: number } | { ok: false; reason: 'glyph-missing' } {
     const m = this.mem;
+    // E-081: una línea vacía no se escribe (bloquea el WASM).
+    if (newText === '') return { ok: false, reason: 'glyph-missing' };
 
     // Color de relleno original (RGBA 0-255, out uints).
     const r = m.malloc(4), g = m.malloc(4), b = m.malloc(4), a = m.malloc(4);
@@ -800,23 +897,7 @@ export class PdfiumEngine implements PdfEngine {
 
     const newObj = newObjFactory();
 
-    // Comprueba que la fuente nueva sí tiene todos los glifos del texto
-    // (misma técnica que editTextRun) ANTES de tocar el original: si falta
-    // alguno (p. ej. CJK), se destruye el objeto nuevo sin insertarlo y no
-    // se modifica nada.
-    const newFont = this.p.FPDFTextObj_GetFont(newObj);
-    for (const ch of newText) {
-      if (/\s/.test(ch)) continue;
-      const cp = ch.codePointAt(0)!;
-      if (this.p.FPDFFont_GetGlyphPath(newFont, cp, checkSizePt) === 0) {
-        this.p.FPDFPageObj_Destroy(newObj);
-        return { ok: false, reason: 'glyph-missing' };
-      }
-    }
-
-    const wptr = m.wide(newText);
-    this.p.FPDFText_SetText(newObj, wptr);
-    m.free(wptr);
+    this.escribirTexto(newObj, newText);
     this.p.FPDFPageObj_SetFillColor(newObj, fillColor[0], fillColor[1], fillColor[2], fillColor[3]);
     if (strokeColor) this.p.FPDFPageObj_SetStrokeColor(newObj, strokeColor[0], strokeColor[1], strokeColor[2], strokeColor[3]);
     if (renderMode >= 0) this.p.FPDFTextObj_SetTextRenderMode(newObj, renderMode);
@@ -844,6 +925,10 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDFPage_InsertObject(page, newObj);
       newRunId = this.p.FPDFPage_CountObjects(page) - 1;
     }
+
+    // E-079: se relee lo escrito; si no coincide, no se genera contenido (el llamante cierra la página y el cambio,
+    // incluido el borrado del original, se descarta).
+    if (!this.textoEscritoCoincide(page, newObj, newText)) return { ok: false, reason: 'glyph-missing' };
 
     this.p.FPDFPage_GenerateContent(page);
     return { ok: true, runId: newRunId };
@@ -1796,10 +1881,9 @@ export class PdfiumEngine implements PdfEngine {
         switch (op.type) {
           case 'insertText': {
             const spec = op.spec;
+            if (spec.text === '') throw new Error('insertText: el texto está vacío (SetText vacío bloquea el motor, E-081).');
             const obj = this.p.FPDFPageObj_NewTextObj(doc, spec.fontName ?? 'Helvetica', spec.sizePt);
-            const wptr = this.mem.wide(spec.text);
-            this.p.FPDFText_SetText(obj, wptr);
-            this.mem.free(wptr);
+            this.escribirTexto(obj, spec.text);
             const [r, g, b] = spec.color ?? [0, 0, 0];
             const alfa = Math.round(255 * Math.min(1, Math.max(0, spec.opacidad ?? 1)));
             this.p.FPDFPageObj_SetFillColor(obj, r, g, b, alfa);

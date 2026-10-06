@@ -574,6 +574,88 @@ export const conPdfiumBufferFijo = {
   }
 };
 
+/* ── E-079 / E-081 · escritura de texto en el motor ────────────────────── */
+/** Recorre `src/**\/*.ts` y junta los hallazgos de `analizar(rel, contenido)` por fichero. */
+function recorrerFuentesTs(analizar) {
+  const raizSrc = path.join(RAIZ, 'src');
+  if (!fs.existsSync(raizSrc)) return [];
+  const hallazgos = [];
+  const recorrer = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { recorrer(full); continue; }
+      if (!e.name.endsWith('.ts')) continue;
+      const rel = path.relative(RAIZ, full).replace(/\\/g, '/');
+      hallazgos.push(...analizar(rel, leer(rel)));
+    }
+  };
+  recorrer(raizSrc);
+  return hallazgos;
+}
+
+/** ¿La línea es solo un comentario (`//`, `/*`, ` *`)? Los comentarios pueden nombrar las funciones prohibidas. */
+function esComentario(linea) {
+  return /^\s*(\/\/|\/\*|\*)/.test(linea);
+}
+
+/**
+ * Pura: hallazgos de `FPDFText_SetText(` en el texto de un fichero. Solo se permite DENTRO de `escribirTexto` de
+ * `src/engine/pdfium/PdfiumEngine.ts` (el método que prohíbe la cadena vacía); en cualquier otro sitio, es un hallazgo.
+ */
+export function analizarSetText(rel, contenido) {
+  const hallazgos = [];
+  const exentas = lineasExentas(contenido, 'settext-solo-via-escribirtexto');
+  let dentro = false;
+  contenido.split('\n').forEach((linea, i) => {
+    if (/\bprivate\s+escribirTexto\s*\(/.test(linea)) dentro = rel === 'src/engine/pdfium/PdfiumEngine.ts';
+    else if (/^  \}\s*$/.test(linea)) dentro = false; // cierre de método a nivel de clase
+    if (esComentario(linea) || exentas.has(i + 1)) return;
+    if (/\bFPDFText_SetText\s*\(/.test(linea) && !dentro) {
+      hallazgos.push(hallazgo(rel, i + 1, 'FPDFText_SetText fuera de PdfiumEngine.escribirTexto'));
+    }
+  });
+  return hallazgos;
+}
+
+export const conSetTextSoloViaEscribirTexto = {
+  id: 'settext-solo-via-escribirtexto',
+  titulo: 'FPDFText_SetText solo se llama desde PdfiumEngine.escribirTexto',
+  comoArreglar:
+    'FPDFText_SetText con una cadena vacía provoca "RuntimeError: unreachable" y mata el WASM ' +
+    'del motor (todas las páginas abiertas quedan inservibles, E-081). Escribe el texto con ' +
+    'this.escribirTexto(obj, texto), que prohíbe la cadena vacía; para quitar una línea se ' +
+    'elimina el objeto (deleteRun), nunca se deja vacío.',
+  ejecutar() {
+    return recorrerFuentesTs((rel, contenido) => analizarSetText(rel, contenido));
+  }
+};
+
+/** Pura: hallazgos de `FPDFFont_GetGlyphPath(` (fuera de comentarios) en el texto de un fichero. */
+export function analizarGlyphPath(rel, contenido) {
+  const exentas = lineasExentas(contenido, 'no-glyphpath-como-cobertura');
+  const hallazgos = [];
+  contenido.split('\n').forEach((linea, i) => {
+    if (esComentario(linea) || exentas.has(i + 1)) return;
+    if (/\bFPDFFont_GetGlyphPath\s*\(/.test(linea)) {
+      hallazgos.push(hallazgo(rel, i + 1, 'FPDFFont_GetGlyphPath como comprobación de cobertura de glifos'));
+    }
+  });
+  return hallazgos;
+}
+
+export const sinGlyphPathComoCobertura = {
+  id: 'no-glyphpath-como-cobertura',
+  titulo: 'FPDFFont_GetGlyphPath no se usa para saber si una fuente tiene un glifo',
+  comoArreglar:
+    'En un subconjunto CID FPDFFont_GetGlyphPath da falsos positivos: dice "sí" a glifos que no ' +
+    'están y el texto se guarda como .notdef y se pierde (E-079). Escribe el texto y RELEE lo ' +
+    'escrito en la text page de la misma página (textoEscritoCoincide); si no coincide, cierra ' +
+    'la página sin FPDFPage_GenerateContent y devuelve glyph-missing.',
+  ejecutar() {
+    return recorrerFuentesTs((rel, contenido) => analizarGlyphPath(rel, contenido));
+  }
+};
+
 /* ── E-032 · toda navegación de página pasa por App.goToPage() ─────────── */
 export const conNavegacionPorGoToPage = {
   id: 'navegacion-por-gotopage',
@@ -1248,6 +1330,8 @@ export const TODAS = [
   conCspCoherente,
   conMotorEncapsulado,
   conPdfiumBufferFijo,
+  conSetTextSoloViaEscribirTexto,
+  sinGlyphPathComoCobertura,
   conNavegacionPorGoToPage,
   conWebServerNextSinReusar,
   conGestoConCancelacion,

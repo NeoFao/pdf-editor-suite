@@ -1359,9 +1359,12 @@ export class App {
       }
     }
     req.el.textContent = req.oldText;
+    // E-081: una línea no puede quedar vacía (el motor lo prohíbe); para quitarla existe «Borrar».
     this.setStatus(res.reason === 'glyph-missing'
       ? 'La fuente de esa línea no tiene alguno de esos caracteres; edición no aplicada.'
-      : 'No se puede editar ese elemento.');
+      : res.reason === 'empty-text'
+        ? 'Una línea no puede quedar vacía; selecciónala y usa Borrar para quitarla.'
+        : 'No se puede editar ese elemento.');
   }
 
   private async handleInsert(pageIndex: number, at: PtPoint): Promise<void> {
@@ -1722,7 +1725,7 @@ export class App {
     // comentario del campo).
     this.propFont.value = this.appliedFontLabel ?? '__original__';
 
-    this.propSize.value = String(Math.round(run.sizePt * 2) / 2);
+    this.propSize.value = String(Math.round(run.sizeEfectivoPt * 2) / 2); // E-080: el efectivo, el que ve el usuario
     this.colorInput.value = rgbToHex(run.color[0], run.color[1], run.color[2]);
   }
 
@@ -1756,7 +1759,7 @@ export class App {
       this.reflectPropsPanel(); // repone el valor válido anterior en el input
       return;
     }
-    if (Math.abs(value - run.sizePt) < 0.01) return;
+    if (Math.abs(value - run.sizeEfectivoPt) < 0.01) return;
     const { pageIndex, runId } = this.selection;
     const cmd = new SetRunFontSizeCmd(pageIndex, runId, value);
     await this.bus.execute(cmd);
@@ -1896,7 +1899,7 @@ export class App {
     const page = this.session.model.pages[this.selection.pageIndex]!;
     // Escala 1: px CSS == pt visuales; las cajas del run están en pt de usuario.
     const geo = PageGeometry.desdeTamanoVisual(page.sizePt.widthPt, page.sizePt.heightPt, 1, page.rotation);
-    const quads = quadsPorLinea([{ boxPt: run.boxPt, sizePt: run.sizePt }], geo);
+    const quads = quadsPorLinea([{ boxPt: run.boxPt, sizePt: run.sizeEfectivoPt }], geo);
     // Autor: no hay nombre de usuario configurable todavía; /T queda vacío.
     void this.bus.execute(new AddMarkupCmd(this.selection.pageIndex, tipo, quads, color));
     this.setStatus(hecho);
