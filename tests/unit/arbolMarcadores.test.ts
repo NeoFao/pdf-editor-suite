@@ -1,7 +1,7 @@
 import { test, expect } from 'vitest';
 import type { OutlineItem } from '../../src/engine/PdfEngine';
 import { OUTLINE_MAX_DEPTH } from '../../src/engine/cotasOutline';
-import { borrar, cambiarDestino, desangrar, insertarHermano, insertarHijo, mover, renombrar, sangrar } from '../../src/outline/arbol';
+import { borrar, cambiarDestino, desangrar, insertarHermano, insertarHijo, mover, renombrar, sangrar, sinPaginaBorrada } from '../../src/outline/arbol';
 
 const n = (title: string, children: OutlineItem[] = [], pageIndex: number | null = 0): OutlineItem => ({ title, pageIndex, children });
 const titulos = (items: OutlineItem[]): unknown => items.map((i) => (i.children.length ? [i.title, titulos(i.children)] : i.title));
@@ -80,4 +80,22 @@ test('clonar conserva la acción URI y renombrar no la toca; cambiarDestino la s
   const r = cambiarDestino(arbol, [0], 2)![0]!;
   expect(r.pageIndex).toBe(2);
   expect(r.accion).toBeUndefined();
+});
+
+// E-071: marcadores tras borrar una página (índice previo al borrado).
+test('sinPaginaBorrada: quita los de la página, sube sus hijos y reindexa los posteriores', () => {
+  const arbol = [n('A', [n('A1', [], 1), n('A2', [], 2)], 1), n('B', [], 0), n('C', [], 3)];
+  const r = sinPaginaBorrada(arbol, 1)!;
+  expect(r).toEqual([
+    { title: 'A2', pageIndex: 1, children: [] },
+    { title: 'B', pageIndex: 0, children: [] },
+    { title: 'C', pageIndex: 2, children: [] }
+  ]);
+  expect(arbol[0]!.pageIndex).toBe(1); // no muta la entrada
+});
+
+test('sinPaginaBorrada: null si nada apunta a la página o hay acciones no soportadas', () => {
+  expect(sinPaginaBorrada([n('A', [], 0), n('B', [], 2)], 1)).toBeNull();
+  const conAccion: OutlineItem[] = [n('A', [], 1), { title: 'JS', pageIndex: null, children: [], accion: { tipo: 'no-soportada', descripcion: 'JavaScript' } }];
+  expect(sinPaginaBorrada(conAccion, 1)).toBeNull();
 });

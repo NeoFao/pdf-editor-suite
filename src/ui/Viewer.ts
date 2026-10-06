@@ -647,6 +647,26 @@ export class Viewer {
     };
   }
 
+  /**
+   * Centro, en puntos PDF de la página `pageIndex`, de la parte de esa página que el visor
+   * muestra ahora (intersección de la página con el área visible de `root`, medida en px CSS
+   * de viewport y pasada a pt con la geometría de la página). `null` si ninguna parte de la
+   * página está a la vista. Sirve para colocar lo recién insertado donde el usuario mira (E-070).
+   */
+  centroVisiblePt(pageIndex: number): { xPt: number; yPt: number } | null {
+    const wrapper = this.wrappers[pageIndex];
+    const geom = this.geoms[pageIndex];
+    if (!wrapper || !geom) return null;
+    const w = wrapper.getBoundingClientRect();
+    const r = this.root.getBoundingClientRect();
+    const izq = Math.max(w.left, r.left), der = Math.min(w.right, r.right);
+    const arr = Math.max(w.top, r.top), aba = Math.min(w.bottom, r.bottom);
+    if (der <= izq || aba <= arr) return null;
+    // px CSS dentro de la página (origen arriba-izquierda de la página).
+    const p = geom.cssToPt((izq + der) / 2 - w.left, (arr + aba) / 2 - w.top);
+    return { xPt: p.xPt, yPt: p.yPt };
+  }
+
   /** true si la caja del rect (puntos PDF) está entera dentro de lo que el visor muestra ahora. */
   rectVisible(pageIndex: number, rect: RectPt): boolean {
     const b = this.cajaEnScroll(pageIndex, rect);

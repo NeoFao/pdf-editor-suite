@@ -2578,3 +2578,73 @@ el pin; uno que lo deja en otro sitio sí (usuario real). Decisión por posició
 **Cómo se detecta ahora.** `tests/e2e/next/pagina-actual-mover.spec.ts`, bloque «E-068», corre «Duplicar»,
 «Subir» y «Bajar» con la CPU ralentizada x6 por CDP (siempre, sin variable de entorno); sin el arreglo falla.
 Sin regla guard: no hay patrón estático fiable (un `setTimeout` es legítimo en general).
+
+---
+
+### E-069 · El panel «Más» del móvil (390 px) amontonaba ~45 controles solapados y «Comprimir» salía cortado
+
+**Síntoma.** Con `#btn-more` abierto en 390×844 los botones de las cinco barras contextuales se pisaban
+(«Borrador» sobre «Encabezado y marca», «Bajar»/«Insertar PDF»/«Extraer»/«Firmar» apilados, el campo de la firma
+sobre el rango de Dividir) y el último, «Comprimir», quedaba cortado por el borde del panel.
+
+**Causa raíz.** El panel móvil reutilizaba las `.context-bar` de escritorio. `.context-bar .icon-btn` lleva
+`height: 100%` (para llenar una barra de una sola fila); en la hoja apilada, con `flex-wrap`, ese porcentaje se
+resolvía contra la barra entera y los botones de filas distintas medían lo mismo que el grupo, así que se
+pisaban. Además no había encabezado por grupo ni alto mínimo táctil para los campos de texto.
+
+**Arreglo.** Cada barra lleva un `.context-titulo` (solo visible en el panel móvil), los botones usan
+`height: auto; min-height: 44px` y etiqueta que puede partirse (`overflow-wrap: anywhere`, sin anchos fijos en px,
+lección de E-051), los campos `min-height: 40px`, y el panel es una hoja con `max-height: min(70vh, 100dvh - 120px)`,
+`overflow-y: auto` y `overflow-x: hidden`.
+
+**Cómo se detecta ahora.** `tests/e2e/next/movil-mas.spec.ts` (390×844, fuente ancha forzada): encabezados en
+orden, cajas dos a dos sin solape, `scrollWidth <= clientWidth` en cada control, altos >= 40 px, sin scroll
+horizontal, scroll vertical propio, todos los botones alcanzables con scroll y «Comprimir» abre su diálogo. Falla
+sin el arreglo (solapaba `btn-rect` con `btn-encabezado`). Sin regla guard: es maquetación, no un patrón de código.
+
+---
+
+### E-070 · La firma recién insertada aparecía fuera de pantalla y (dibujada) sin seleccionar
+
+**Síntoma.** Tras «Insertar firma» el estado decía «Firma insertada.» pero no se veía nada: con zoom alto o en
+una página alta la caja caía en y=1460 con el visor de 900 px y scroll 0. La firma dibujada ni siquiera quedaba
+seleccionada (solo la de imagen y la guardada), así que no se podía mover sin hacer scroll a mano.
+
+**Causa raíz.** La firma se centraba en la PÁGINA entera (`(ancho - w)/2`, 15 % desde abajo), no en lo que el
+usuario está mirando, y la ruta del pad (`openSignature`) tenía su propia copia de la colocación sin el paso de
+selección que sí tenía `colocarFirmaSeleccionada`. Dos rutas para lo mismo: una se arregló, otra no.
+
+**Arreglo.** Las tres rutas (dibujada, desde imagen, guardada) pasan por `colocarFirmaSeleccionada`, que centra
+la firma en el centro de la parte visible de la página (`Viewer.centroVisiblePt`: intersección página-visor en
+px CSS de viewport pasada a pt con la geometría de la página, acotada a la página), la selecciona y, si aun así
+queda fuera, desplaza el visor (`revelarRect`).
+
+**Cómo se detecta ahora.** `tests/e2e/next/firma-visible.spec.ts`: con zoom alto sobre `nativo.pdf` (dibujada,
+desde imagen y guardada) y a media página de `grande.pdf`, la caja `.image-box.selected` está entera dentro del
+visor. Fallaba antes (la dibujada no se seleccionaba; las otras desbordaban el visor). Sin regla guard: es
+colocación en pantalla, no un patrón de código.
+
+---
+
+### E-071 · Borrar una página con marcadores dejaba un marcador colgante y bloqueaba la edición de marcadores con un mensaje engañoso
+
+**Síntoma.** `paginas-pequenas-marcadores.pdf` → borrar la página 2: «Marcador 2» seguía en el panel (y navegaba a
+otra página) y aparecía «Este documento tiene marcadores con acciones que este editor aún no puede conservar;
+la edición está desactivada». El documento no tiene ninguna acción: solo un destino huérfano.
+
+**Causa raíz.** `DeletePageCmd` solo llamaba a `FPDFPage_Delete`. El destino del marcador apunta al OBJETO de la
+página borrada; al releer, `FPDFDest_GetDestPageIndex` devuelve -1 y `bookmarkTarget` lo clasifica como acción
+`no-soportada` («Destino sin página resoluble»), lo que bloquea la edición (E-031/T4b).
+
+**Arreglo.** El mismo comando lee el outline ANTES de borrar y, si algún marcador apuntaba a esa página, lo
+reescribe después con `sinPaginaBorrada` (`src/outline/arbol.ts`) y avisa al panel. Decisión sobre los hijos:
+SUBEN un nivel, ocupando el lugar del padre en orden; un hijo que apunta a una página viva no debe perderse
+porque su encabezado desaparezca (los que apuntaban a la misma página borrada se quitan también). Los destinos de
+páginas posteriores se reindexan (-1). Un outline con acciones `no-soportada` no se toca (no se puede reescribir
+sin perderlas); si ningún marcador apuntaba a la página, tampoco se reescribe (PDFium ya mantiene el resto por
+referencia). Deshacer sigue siendo por snapshot, así que devuelve el árbol exacto.
+
+**Cómo se detecta ahora.** `tests/e2e/next/marcadores-borrar-pagina.spec.ts` (outline releído con el motor del
+PDF guardado: borrar p.2, borrar p.1 con hijo que sube, JavaScript sin tocar, URI conservado, deshacer exacto,
+edición habilitada) y `tests/unit/arbolMarcadores.test.ts`. Fallaba antes. Sin regla guard: es lógica de
+dominio, no un patrón estático.

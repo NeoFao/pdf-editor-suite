@@ -144,3 +144,35 @@ export function desangrar(items: OutlineItem[], ruta: Ruta): Resultado | null {
   hp.lista.splice(hp.indice + 1, 0, n);
   return { items: copia, ruta: [...rutaPadre.slice(0, -1), hp.indice + 1] };
 }
+
+/**
+ * Árbol de marcadores tras BORRAR la página `pageIndex` (índice 0 del documento ANTES del
+ * borrado). Los marcadores que apuntaban a ella se quitan (como Acrobat); sus hijos suben un
+ * nivel, ocupando su lugar en orden (no se pierden entradas que sí apuntan a páginas vivas), y
+ * los destinos de páginas posteriores se reindexan (-1) al sistema del documento YA sin la página.
+ * Devuelve `null` si ningún marcador apuntaba a esa página (nada que reescribir: el resto de
+ * destinos van por referencia al objeto de página y PDFium ya los mantiene), o si el árbol
+ * lleva acciones no soportadas (no se puede reescribir sin perderlas: no se toca, E-031/T4b).
+ */
+export function sinPaginaBorrada(items: OutlineItem[], pageIndex: number): OutlineItem[] | null {
+  if (items.some(function conAccionNoSoportada(i: OutlineItem): boolean {
+    return i.accion?.tipo === 'no-soportada' || i.children.some(conAccionNoSoportada);
+  })) return null;
+  let cambio = false;
+  const recorrer = (nivel: OutlineItem[]): OutlineItem[] => {
+    const salida: OutlineItem[] = [];
+    for (const i of nivel) {
+      const hijos = recorrer(i.children);
+      if (i.pageIndex === pageIndex && !i.accion) {
+        cambio = true;
+        salida.push(...hijos);
+        continue;
+      }
+      const destino = i.pageIndex !== null && i.pageIndex > pageIndex ? i.pageIndex - 1 : i.pageIndex;
+      salida.push({ title: i.title, pageIndex: destino, children: hijos, ...(i.accion ? { accion: { ...i.accion } } : {}) });
+    }
+    return salida;
+  };
+  const nuevo = recorrer(items);
+  return cambio ? nuevo : null;
+}

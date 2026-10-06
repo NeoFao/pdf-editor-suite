@@ -307,6 +307,8 @@ button:focus-visible {
   flex-wrap: wrap;
 }
 .context-bar.activa { display: flex; }
+/* Encabezado de grupo del panel «Más» móvil (E-069): oculto en escritorio, donde la pestaña ya nombra el grupo. */
+.context-titulo { display: none; }
 .context-sep { width: 1px; margin: var(--ed-sp-1) var(--ed-sp-2); background: var(--ed-border); flex: 0 0 auto; }
 
 #props-panel { display: none; align-items: center; gap: var(--ed-sp-2); padding: 0 var(--ed-sp-2); }
@@ -596,31 +598,69 @@ select, input[type="text"], input[type="search"], input[type="number"] {
     display: flex;
     flex-direction: column;
     width: 100%;
-    max-height: 60vh;
+    /* Hoja desplegable con scroll vertical propio (E-069): nunca más alta que la
+       ventana menos la cabecera; dvh sigue a la barra de URL del móvil. */
+    max-height: min(70vh, calc(100dvh - 120px));
     overflow-y: auto;
+    overflow-x: hidden;
+    overscroll-behavior: contain;
     border-top: 1px solid var(--ed-border);
     box-sizing: border-box;
   }
   .context-bar.activa { display: none; }
   #toolbar-more.open .context-bar {
     display: flex;
-    align-items: flex-start;
+    align-items: stretch;
+    flex: 0 0 auto;
+    min-height: 0;
     border-top: 1px solid var(--ed-border-strong);
-    padding: var(--ed-sp-3) var(--ed-sp-2);
-    row-gap: var(--ed-sp-2);
+    padding: var(--ed-sp-2) var(--ed-sp-3) var(--ed-sp-3);
+    gap: var(--ed-sp-2);
+    box-sizing: border-box;
+    min-width: 0;
   }
+  /* Encabezado de grupo: una fila entera por pestaña. */
+  #toolbar-more.open .context-titulo {
+    display: block;
+    flex: 1 0 100%;
+    padding: var(--ed-sp-1) 0;
+    font-size: var(--ed-font-sm);
+    font-weight: 700;
+    color: var(--ed-text-muted);
+    text-transform: uppercase;
+    letter-spacing: .04em;
+  }
+  /* En una hoja apilada cada botón es tan alto como su contenido: el `height: 100%`
+     de escritorio se resolvía contra la barra entera y los botones de filas
+     distintas se pisaban (E-069). Sin anchos fijos en px para texto (E-051). */
+  #toolbar-more.open .context-bar .icon-btn {
+    height: auto;
+    min-height: 44px;
+    max-width: 100%;
+    flex: 0 1 auto;
+  }
+  #toolbar-more.open .context-bar .icon-btn .etiqueta { white-space: normal; text-align: center; overflow-wrap: anywhere; }
   /* Los separadores tienen sentido en una sola fila (escritorio); apiladas
      en móvil, el borde entre `.context-bar` ya separa los grupos. */
   #toolbar-more.open .context-sep { display: none; }
   /* Los grupos compuestos (paleta de color, panel de propiedades, rango +
      dividir) ocupan su propia fila entera en vez de encajar entre iconos. */
   #toolbar-more.open #swatches,
-  #toolbar-more.open #props-panel,
-  #toolbar-more.open #btn-range {
+  #toolbar-more.open #props-panel {
     flex-basis: 100%;
-    margin-top: var(--ed-sp-2);
+    margin-top: 0;
   }
+  /* Campos de texto/número del panel: también objetivo táctil de >= 40 px. */
+  #toolbar-more.open input[type="text"],
+  #toolbar-more.open input[type="number"],
+  #toolbar-more.open select {
+    min-height: 40px;
+    box-sizing: border-box;
+    max-width: 100%;
+  }
+  #toolbar-more.open #btn-range { flex: 1 1 8em; min-width: 0; }
   #toolbar-more.open #swatches { flex-wrap: wrap; }
+  #toolbar-more.open #props-panel { flex-wrap: wrap; padding: 0; row-gap: var(--ed-sp-2); }
 
   #app { position: relative; }
   .icon-btn, select, input[type="color"] {
