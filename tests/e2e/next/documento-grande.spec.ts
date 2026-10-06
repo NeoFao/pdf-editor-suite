@@ -59,7 +59,7 @@ test.describe('documento grande (500 páginas): apertura y comandos perezosos', 
     await expect(page.locator('.run').first()).toBeVisible();
     await page.waitForTimeout(200);
 
-    const antes = await page.evaluate(() => ({ ...(window as unknown as { __diagnostico: { renderPage: number; getPageText: number } }).__diagnostico }));
+    const antes = await page.evaluate(() => ({ ...(window as unknown as { __diagnostico: { renderPage: number; getPageText: number; paginasPintadas: number } }).__diagnostico }));
 
     await abrirPestana(page, 'organizar');
     await page.locator('#btn-rotate').click();
@@ -67,13 +67,13 @@ test.describe('documento grande (500 páginas): apertura y comandos perezosos', 
     // deja un instante a que el re-render de la página actual termine.
     await page.waitForTimeout(150);
 
-    const despues = await page.evaluate(() => ({ ...(window as unknown as { __diagnostico: { renderPage: number; getPageText: number } }).__diagnostico }));
+    const despues = await page.evaluate(() => ({ ...(window as unknown as { __diagnostico: { renderPage: number; getPageText: number; paginasPintadas: number } }).__diagnostico }));
 
-    // Rotar UNA página cuesta un puñado de llamadas (esa página + quizá su
-    // miniatura), nunca 500. Desde E-072 la rotación en modo "ajustar al ancho" además reajusta la escala,
-    // lo que repinta las pocas páginas VISIBLES (no las 500): de ahí el margen de 10 en vez de 5.
+    // Trabajo esperado: la página rotada (1 render) + las páginas YA pintadas, repintadas a la nueva escala por el
+    // reajuste al ancho (E-072) y, como mucho, otro tanto de miniaturas: renders <= pintadas*2 + 1. Es un límite
+    // derivado, no un número mágico: repintar las 500 páginas lo superaría de largo.
     expect(despues.getPageText - antes.getPageText).toBeLessThan(5);
-    expect(despues.renderPage - antes.renderPage).toBeLessThan(10);
+    expect(despues.renderPage - antes.renderPage).toBeLessThanOrEqual(antes.paginasPintadas * 2 + 1);
   });
 
   test('saltar a la página 400 por miniatura la pinta y actualiza el indicador', async ({ page }) => {
