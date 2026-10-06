@@ -365,6 +365,8 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   background: transparent; border: none; cursor: pointer;
   font-size: 1.1em; line-height: 1; color: inherit; padding: 2px 6px;
 }
+.conversion-warnings-group { margin-top: var(--ed-sp-1); }
+.conversion-warnings-group[hidden] { display: none; }
 .conversion-warnings-list { margin: var(--ed-sp-1) 0 0; padding-left: 1.25em; }
 
 /* ── Barra de estado ──────────────────────────────────────────────────── */
@@ -734,3 +736,11 @@ dialog.encabezado-panel::backdrop { background: rgba(0, 0, 0, .12); }
 .eh-mensaje { min-height: 1.2em; font-size: 13px; }
 .eh-barra { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
 .encabezado-panel [hidden] { display: none !important; }
+
+/* Anotación (resaltado, subrayado, tachado, nota) seleccionada con un clic (T14): contorno visible, sin tapar el texto. */
+.marcado-sel-quad {
+  box-sizing: border-box;
+  border: 2px solid var(--ed-focus-ring);
+  border-radius: 2px;
+  box-shadow: 0 0 0 1px #fff;
+}

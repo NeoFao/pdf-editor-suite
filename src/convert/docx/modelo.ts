@@ -1,4 +1,5 @@
 import { DocxError } from './DocxError';
+import { omitido, aproximado, type Advertencia, type TipoAdvertencia } from '../advertencia';
 import { parseXml, hijosElemento, primerHijo, textoDirecto, buscarDescendiente, type XmlElemento } from './xml';
 import { classifyFont } from '../../engine/fontClassify';
 import { leerRelaciones, rutaMediaDesdeWord, type Relacion } from './rels';
@@ -187,7 +188,7 @@ export interface ModeloDocx {
   margenIzqPt: number;
   margenDerPt: number;
   bloques: BloqueDocx[];
-  advertencias: string[];
+  advertencias: Advertencia[];
   /** Distancia del borde superior de la página al encabezado (`w:pgMar w:header`), en pt. */
   margenEncabezadoPt: number;
   /** Distancia del borde inferior de la página al pie (`w:pgMar w:footer`), en pt. */
@@ -511,7 +512,7 @@ interface Contexto {
    * `construirAdvertencias`, que cuenta patrones estructurales escaneando
    * todo el árbol al final. Se combinan al construir el `ModeloDocx` final.
    */
-  advertenciasExtra: string[];
+  advertenciasExtra: Advertencia[];
   /** Descartes/degradaciones contados por tipo (`anotar`); se convierten en avisos al final (`MENSAJES_PERDIDAS`). */
   perdidas: Map<string, number>;
   /** `true` mientras se procesa un encabezado o pie: ahí `PAGE`/`NUMPAGES` son campos reales y las imágenes se omiten con aviso. */
@@ -527,26 +528,26 @@ function anotar(ctx: Contexto, clave: string): void { ctx.perdidas.set(clave, (c
 function cuenta(c: number, uno: string, varios: string): string { return c === 1 ? uno : varios.replace('{n}', String(c)); }
 
 /** Texto de cada tipo de pérdida (nada se descarta o degrada en silencio, AGENTS.md §3). Orden = orden de aparición en el aviso. */
-const MENSAJES_PERDIDAS: [string, (c: number) => string][] = [
-  ['enlaceInterno', (c) => cuenta(c, 'Un enlace interno (a un marcador del documento) se dejó como texto sin enlace.', '{n} enlaces internos (a marcadores del documento) se dejaron como texto sin enlace.')],
-  ['enlaceSinDestino', (c) => cuenta(c, 'Un enlace sin destino resoluble se dejó como texto sin enlace.', '{n} enlaces sin destino resoluble se dejaron como texto sin enlace.')],
-  ['desconocido', (c) => cuenta(c, 'Se omitió el texto de un elemento no reconocido del documento.', 'Se omitió el texto de {n} elementos no reconocidos del documento.')],
-  ['ecuacion', (c) => cuenta(c, 'Se omitió una ecuación (aún no soportada).', 'Se omitieron {n} ecuaciones (aún no soportadas).')],
-  ['sym', (c) => cuenta(c, 'Se omitió un símbolo especial (w:sym).', 'Se omitieron {n} símbolos especiales (w:sym).')],
-  ['saltoColumna', (c) => cuenta(c, 'Un salto de columna se trató como salto de línea (sin columnas).', '{n} saltos de columna se trataron como saltos de línea (sin columnas).')],
-  ['listaSinDef', (c) => cuenta(c, 'Un párrafo de lista cuya numeración no está definida se maquetó sin marcador.', '{n} párrafos de lista cuya numeración no está definida se maquetaron sin marcador.')],
-  ['tablaAnidada', (c) => cuenta(c, 'Una tabla anidada dentro de otra se aplanó a texto (celdas separadas por tabulador).', '{n} tablas anidadas se aplanaron a texto (celdas separadas por tabulador).')],
-  ['imagenEnCelda', (c) => cuenta(c, 'Se omitió una imagen dentro de una celda de tabla (aún no soportado).', 'Se omitieron {n} imágenes dentro de celdas de tabla (aún no soportado).')],
-  ['saltoPaginaEnCelda', (c) => cuenta(c, 'Un salto de página dentro de una celda de tabla se trató como salto de línea.', '{n} saltos de página dentro de celdas de tabla se trataron como saltos de línea.')],
-  ['flotante', (c) => cuenta(c, 'Imagen flotante colocada sin ajuste de texto (el texto no la rodea y puede quedar debajo o encima de ella).', '{n} imágenes flotantes colocadas sin ajuste de texto (el texto no las rodea y puede quedar debajo o encima de ellas).')],
-  ['imagenEnZona', (c) => cuenta(c, 'Se omitió una imagen dentro de un encabezado o pie de página (aún no soportado).', 'Se omitieron {n} imágenes dentro de encabezados o pies de página (aún no soportado).')],
-  ['tablaEnZona', (c) => cuenta(c, 'Se omitió una tabla dentro de un encabezado o pie de página (aún no soportada).', 'Se omitieron {n} tablas dentro de encabezados o pies de página (aún no soportadas).')],
-  ['campo', (c) => cuenta(c, 'Un campo no soportado (fecha, índice, referencia...) se dejó con el último valor que Word guardó.', '{n} campos no soportados (fecha, índice, referencia...) se dejaron con el último valor que Word guardó.')],
-  ['bordeEstilo', (c) => cuenta(c, 'Un borde de tabla con estilo no continuo (doble, punteado...) se dibujó como línea continua.', '{n} bordes de tabla con estilo no continuo (doble, punteado...) se dibujaron como línea continua.')],
-  ['encabezadoFaltante', (c) => cuenta(c, 'Se omitió un encabezado de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} encabezados de página (no se encontró o no se pudo leer su contenido en el paquete).')],
-  ['pieFaltante', (c) => cuenta(c, 'Se omitió un pie de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} pies de página (no se encontró o no se pudo leer su contenido en el paquete).')],
-  ['zonaDeSeccionAnterior', (c) => cuenta(c, 'Se omitió un encabezado o pie de una sección anterior (se usan los de la última sección).', 'Se omitieron {n} encabezados o pies de secciones anteriores (se usan los de la última sección).')],
-  ['vMergeConTexto', (c) => cuenta(c, 'Una celda de continuación de una combinación vertical traía texto propio, que no se muestra (como hace Word).', '{n} celdas de continuación de combinaciones verticales traían texto propio, que no se muestra (como hace Word).')]
+const MENSAJES_PERDIDAS: [string, TipoAdvertencia, (c: number) => string][] = [
+  ['enlaceInterno', 'aproximado', (c) => cuenta(c, 'Un enlace interno (a un marcador del documento) se dejó como texto sin enlace.', '{n} enlaces internos (a marcadores del documento) se dejaron como texto sin enlace.')],
+  ['enlaceSinDestino', 'aproximado', (c) => cuenta(c, 'Un enlace sin destino resoluble se dejó como texto sin enlace.', '{n} enlaces sin destino resoluble se dejaron como texto sin enlace.')],
+  ['desconocido', 'omitido', (c) => cuenta(c, 'Se omitió el texto de un elemento no reconocido del documento.', 'Se omitió el texto de {n} elementos no reconocidos del documento.')],
+  ['ecuacion', 'omitido', (c) => cuenta(c, 'Se omitió una ecuación (aún no soportada).', 'Se omitieron {n} ecuaciones (aún no soportadas).')],
+  ['sym', 'omitido', (c) => cuenta(c, 'Se omitió un símbolo especial (w:sym).', 'Se omitieron {n} símbolos especiales (w:sym).')],
+  ['saltoColumna', 'aproximado', (c) => cuenta(c, 'Un salto de columna se trató como salto de línea (sin columnas).', '{n} saltos de columna se trataron como saltos de línea (sin columnas).')],
+  ['listaSinDef', 'aproximado', (c) => cuenta(c, 'Un párrafo de lista cuya numeración no está definida se maquetó sin marcador.', '{n} párrafos de lista cuya numeración no está definida se maquetaron sin marcador.')],
+  ['tablaAnidada', 'aproximado', (c) => cuenta(c, 'Una tabla anidada dentro de otra se aplanó a texto (celdas separadas por tabulador).', '{n} tablas anidadas se aplanaron a texto (celdas separadas por tabulador).')],
+  ['imagenEnCelda', 'omitido', (c) => cuenta(c, 'Se omitió una imagen dentro de una celda de tabla (aún no soportado).', 'Se omitieron {n} imágenes dentro de celdas de tabla (aún no soportado).')],
+  ['saltoPaginaEnCelda', 'aproximado', (c) => cuenta(c, 'Un salto de página dentro de una celda de tabla se trató como salto de línea.', '{n} saltos de página dentro de celdas de tabla se trataron como saltos de línea.')],
+  ['flotante', 'aproximado', (c) => cuenta(c, 'Imagen flotante colocada sin ajuste de texto (el texto no la rodea y puede quedar debajo o encima de ella).', '{n} imágenes flotantes colocadas sin ajuste de texto (el texto no las rodea y puede quedar debajo o encima de ellas).')],
+  ['imagenEnZona', 'omitido', (c) => cuenta(c, 'Se omitió una imagen dentro de un encabezado o pie de página (aún no soportado).', 'Se omitieron {n} imágenes dentro de encabezados o pies de página (aún no soportado).')],
+  ['tablaEnZona', 'omitido', (c) => cuenta(c, 'Se omitió una tabla dentro de un encabezado o pie de página (aún no soportada).', 'Se omitieron {n} tablas dentro de encabezados o pies de página (aún no soportadas).')],
+  ['campo', 'aproximado', (c) => cuenta(c, 'Un campo no soportado (fecha, índice, referencia...) se dejó con el último valor que Word guardó.', '{n} campos no soportados (fecha, índice, referencia...) se dejaron con el último valor que Word guardó.')],
+  ['bordeEstilo', 'aproximado', (c) => cuenta(c, 'Un borde de tabla con estilo no continuo (doble, punteado...) se dibujó como línea continua.', '{n} bordes de tabla con estilo no continuo (doble, punteado...) se dibujaron como línea continua.')],
+  ['encabezadoFaltante', 'omitido', (c) => cuenta(c, 'Se omitió un encabezado de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} encabezados de página (no se encontró o no se pudo leer su contenido en el paquete).')],
+  ['pieFaltante', 'omitido', (c) => cuenta(c, 'Se omitió un pie de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} pies de página (no se encontró o no se pudo leer su contenido en el paquete).')],
+  ['zonaDeSeccionAnterior', 'omitido', (c) => cuenta(c, 'Se omitió un encabezado o pie de una sección anterior (se usan los de la última sección).', 'Se omitieron {n} encabezados o pies de secciones anteriores (se usan los de la última sección).')],
+  ['vMergeConTexto', 'omitido', (c) => cuenta(c, 'Una celda de continuación de una combinación vertical traía texto propio, que no se muestra (como hace Word).', '{n} celdas de continuación de combinaciones verticales traían texto propio, que no se muestra (como hace Word).')]
 ];
 
 /** Hijos de un run que son ruido estructural o se cuentan aparte: no avisan por sí mismos. */
@@ -660,25 +661,25 @@ function resolverImagenDrawing(drawing: XmlElemento, ctx: Contexto): ParteParraf
   const anchor = primerHijo(drawing, 'wp:anchor');
   const inline = anchor ?? primerHijo(drawing, 'wp:inline');
   if (!inline) {
-    ctx.advertenciasExtra.push('No se pudo insertar una imagen del documento (formato de dibujo no reconocido).');
+    ctx.advertenciasExtra.push(omitido('No se pudo insertar una imagen del documento (formato de dibujo no reconocido).'));
     return null;
   }
   const extent = primerHijo(inline, 'wp:extent');
   const blip = buscarDescendiente(inline, 'a:blip');
   const embedId = blip?.atributos['r:embed'];
   if (!extent || !embedId) {
-    ctx.advertenciasExtra.push('No se pudo insertar una imagen del documento (faltan sus datos de tamaño u origen).');
+    ctx.advertenciasExtra.push(omitido('No se pudo insertar una imagen del documento (faltan sus datos de tamaño u origen).'));
     return null;
   }
   const rel = ctx.rels?.get(embedId);
   if (!rel) {
-    ctx.advertenciasExtra.push('No se pudo insertar una imagen del documento (no se encontró su relación en el paquete).');
+    ctx.advertenciasExtra.push(omitido('No se pudo insertar una imagen del documento (no se encontró su relación en el paquete).'));
     return null;
   }
   const cx = Number(extent.atributos['cx'] ?? '0');
   const cy = Number(extent.atributos['cy'] ?? '0');
   if (!(cx > 0) || !(cy > 0)) {
-    ctx.advertenciasExtra.push('No se pudo insertar una imagen del documento (tamaño declarado inválido).');
+    ctx.advertenciasExtra.push(omitido('No se pudo insertar una imagen del documento (tamaño declarado inválido).'));
     return null;
   }
   const base = { tipo: 'imagen' as const, refId: rutaMediaDesdeWord(rel.target), wPt: cx / EMU_POR_PUNTO, hPt: cy / EMU_POR_PUNTO };
@@ -776,7 +777,7 @@ function procesarHyperlink(h: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, par
   }
   const url = validarUrlEnlace(rel.target);
   if (!url) {
-    ctx.advertenciasExtra.push(`Se omitió un enlace con esquema no permitido ("${rel.target}").`);
+    ctx.advertenciasExtra.push(aproximado(`Se omitió un enlace con esquema no permitido ("${rel.target}"); el texto se conserva sin enlace.`));
     recorrerContenidoParrafo(h, baseRuns, ctx, partes);
     return;
   }
@@ -1039,8 +1040,8 @@ function pluralizar(n: number, singular: string, plural: string): string { retur
  * o no. `w:pict` (dibujo VML, Word anterior a 2007) sigue sin soportarse en
  * absoluto, así que sí se cuenta aquí.
  */
-function construirAdvertencias(docRoot: XmlElemento): string[] {
-  const advertencias: string[] = [];
+function construirAdvertencias(docRoot: XmlElemento): Advertencia[] {
+  const advertencias: Advertencia[] = [];
   const imagenesVml = contarElementos(docRoot, 'w:pict');
   const cuadros = contarElementos(docRoot, 'w:txbxContent');
   const notas = contarElementos(docRoot, 'w:footnoteReference') + contarElementos(docRoot, 'w:endnoteReference');
@@ -1050,15 +1051,15 @@ function construirAdvertencias(docRoot: XmlElemento): string[] {
   const conColumnas = contarColumnasMultiples(docRoot);
   const objetos = contarElementos(docRoot, 'w:object');
 
-  if (imagenesVml > 0) advertencias.push(`Se omitieron ${imagenesVml} ${pluralizar(imagenesVml, 'imagen', 'imágenes')} en formato antiguo (VML, aún no soportado).`);
-  if (cuadros > 0) advertencias.push(`Se omitieron ${cuadros} ${pluralizar(cuadros, 'cuadro de texto', 'cuadros de texto')} (aún no soportados).`);
-  if (notas > 0) advertencias.push(`Se omitieron ${notas} ${pluralizar(notas, 'nota al pie', 'notas al pie')} (aún no soportadas).`);
-  if (comentarios > 0) advertencias.push(`Se omitieron ${comentarios} ${pluralizar(comentarios, 'comentario', 'comentarios')} (aún no soportados).`);
-  if (cambios > 0) advertencias.push(`El documento tiene ${cambios} ${pluralizar(cambios, 'cambio', 'cambios')} de control de cambios sin resolver; se aceptaron las inserciones y se descartaron las eliminaciones.`);
+  if (imagenesVml > 0) advertencias.push(omitido(`Se omitieron ${imagenesVml} ${pluralizar(imagenesVml, 'imagen', 'imágenes')} en formato antiguo (VML, aún no soportado).`));
+  if (cuadros > 0) advertencias.push(omitido(`Se omitieron ${cuadros} ${pluralizar(cuadros, 'cuadro de texto', 'cuadros de texto')} (aún no soportados).`));
+  if (notas > 0) advertencias.push(omitido(`Se omitieron ${notas} ${pluralizar(notas, 'nota al pie', 'notas al pie')} (aún no soportadas).`));
+  if (comentarios > 0) advertencias.push(omitido(`Se omitieron ${comentarios} ${pluralizar(comentarios, 'comentario', 'comentarios')} (aún no soportados).`));
+  if (cambios > 0) advertencias.push(aproximado(`El documento tiene ${cambios} ${pluralizar(cambios, 'cambio', 'cambios')} de control de cambios sin resolver; se aceptaron las inserciones y se descartaron las eliminaciones.`));
 
-  if (objetos > 0) advertencias.push(`Se omitieron ${objetos} ${pluralizar(objetos, 'objeto incrustado', 'objetos incrustados')} (OLE; aún no soportados).`);
-  if (secciones > 1) advertencias.push(`El documento tiene ${secciones} secciones; se usa el tamaño de página y los márgenes de la última para todo el documento.`);
-  if (conColumnas > 0) advertencias.push(`Se omitió la distribución en columnas de ${conColumnas} ${pluralizar(conColumnas, 'sección', 'secciones')}; el texto se maqueta a una sola columna.`);
+  if (objetos > 0) advertencias.push(omitido(`Se omitieron ${objetos} ${pluralizar(objetos, 'objeto incrustado', 'objetos incrustados')} (OLE; aún no soportados).`));
+  if (secciones > 1) advertencias.push(aproximado(`El documento tiene ${secciones} secciones; se usa el tamaño de página y los márgenes de la última para todo el documento.`));
+  if (conColumnas > 0) advertencias.push(aproximado(`Se omitió la distribución en columnas de ${conColumnas} ${pluralizar(conColumnas, 'sección', 'secciones')}; el texto se maqueta a una sola columna.`));
 
   return advertencias;
 }
@@ -1168,7 +1169,7 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
   if (extras.settingsXml) {
     try { const ev = primerHijo(parseXml(extras.settingsXml), 'w:evenAndOddHeaders'); paresImpares = !!ev && leerToggle(ev); } catch { /* settings ilegible: sin encabezados pares/impares distintos */ }
   }
-  const perdidas = MENSAJES_PERDIDAS.filter(([clave]) => (ctx.perdidas.get(clave) ?? 0) > 0).map(([clave, msg]) => msg(ctx.perdidas.get(clave)!));
+  const perdidas: Advertencia[] = MENSAJES_PERDIDAS.filter(([clave]) => (ctx.perdidas.get(clave) ?? 0) > 0).map(([clave, tipo, msg]) => ({ tipo, mensaje: msg(ctx.perdidas.get(clave)!) }));
   const advertencias = [...construirAdvertencias(docRoot), ...ctx.advertenciasExtra, ...perdidas];
 
   return {

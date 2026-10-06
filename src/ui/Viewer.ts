@@ -9,7 +9,7 @@ import { pathMasCercano, normalizeRect, type PathCandidate } from './toolGeometr
 import { contarRenderPage, fijarPaginasPintadas } from '../diagnostico';
 import { hayGestoEnCurso } from './gesto';
 import { SeleccionTexto } from './SeleccionTexto';
-import type { QuadPt } from '../coords/quads';
+import { marcadoBajoPunto, type MarcadoHit, type QuadPt } from '../coords/quads';
 
 const GAP = 16;
 
@@ -28,7 +28,12 @@ const EVICT_OVERSCAN = 6;
 const MAX_PAGINAS_PINTADAS = 12;
 
 /** Herramienta activa del visor: excluyentes entre sí (App.setTool es el único punto de entrada). */
+/** Anotaciones que se pueden seleccionar y borrar con un clic (T14). */
+export type MarcadoKind = 'note' | 'highlight' | 'underline' | 'strikeout';
+
 export type ToolMode = 'none' | 'insert' | 'pen' | 'note' | 'rect' | 'eraser';
+
+export const ETIQUETA_MARCADO: Record<MarcadoKind, string> = { note: 'Nota', highlight: 'Resaltado', underline: 'Subrayado', strikeout: 'Tachado' };
 
 /** Radio de "casi encima" del borrador, en px CSS (se convierte a pt con la escala real de cada página). */
 const RADIO_BORRADOR_CSS = 6;
@@ -56,6 +61,10 @@ export interface ViewerCallbacks {
   onImageSelect?: (pageIndex: number, objIndex: number) => void;
   /** Fin de un gesto de mover/redimensionar una imagen: rect final en puntos PDF. */
   onImageChangeRect?: (pageIndex: number, objIndex: number, newRectPt: RectPt, oldRectPt: RectPt) => void;
+  /** Clic en modo borrador sobre un resaltado, subrayado, tachado o nota (sin trazo cerca): su índice entre todas las anotaciones de la página. */
+  onEraseMarcado?: (pageIndex: number, annotIndex: number, kind: MarcadoKind) => void;
+  /** Cambia la anotación de marcado seleccionada con un clic (herramienta "ninguna"); `null` = ya no hay ninguna. */
+  onMarcadoSelect?: (sel: { pageIndex: number; annotIndex: number; kind: MarcadoKind } | null) => void;
   /** Empieza un arrastre de selección de texto: la selección de línea/imagen vigente ya no vale. */
   onTextSelectionStart?: () => void;
 }
@@ -141,6 +150,111 @@ export class Viewer {
   }
 
   limpiarSeleccionTexto(): void { this.textoSel.limpiar(); }
+
+  /**
+   * Anotación de marcado seleccionada con un clic (T14), o `null`. Solo con la herramienta
+   * "ninguna". Se descarta al repintar su página (los índices de anotación pueden haberse
+   * desplazado), al reconstruir el visor y al cambiar de herramienta.
+   */
+  private marcadoSel: { pageIndex: number; annotIndex: number; kind: MarcadoKind } | null = null;
+
+  marcadoSeleccionado(): { pageIndex: number; annotIndex: number; kind: MarcadoKind } | null { return this.marcadoSel; }
+
+  /** Quita la selección de anotación y su contorno; avisa a la app solo si había una. */
+  limpiarMarcadoSeleccionado(): void {
+    const s = this.marcadoSel;
+    if (!s) return;
+    this.marcadoSel = null;
+    this.wrappers[s.pageIndex]?.querySelector('.marcado-sel-layer')?.remove();
+    this.cb.onMarcadoSelect?.(null);
+  }
+
+  /** Anotaciones seleccionables de la página `i`, con sus quads (pt de usuario). */
+  private marcadosDePagina(i: number): MarcadoHit[] {
+    const eng = this.session.engine, doc = this.session.doc;
+    const out: MarcadoHit[] = [];
+    for (const c of eng.getComments(doc, i)) {
+      if (c.kind !== 'note' && c.kind !== 'highlight' && c.kind !== 'underline' && c.kind !== 'strikeout') continue;
+      out.push({ index: c.index, kind: c.kind, rectPt: c.rectPt, quads: c.kind === 'note' ? [] : eng.getMarkupQuads(doc, i, c.index) });
+    }
+    return out;
+  }
+
+  /**
+   * Clic en la página `i` (fase de CAPTURA, antes que el `click` de una línea): con la herramienta "ninguna",
+   * un clic sobre una anotación la selecciona y NO llega a la línea de debajo (así no entra a editar).
+   * PRECEDENCIA con una línea resaltada debajo:
+   *  - arrastrar (> 4 px) selecciona TEXTO (T12): `SeleccionTexto` traga el `click` posterior en `window`,
+   *    que corre antes que este listener, así que aquí ni se ve;
+   *  - clic corto sobre la anotación: selecciona la ANOTACIÓN (es lo visible bajo el puntero, como en Acrobat) y
+   *    deja además la línea de debajo seleccionada, sin editarla (para encadenar Resaltar/Subrayar/Tachar);
+   *  - segundo clic sobre la anotación ya seleccionada: la deselecciona y deja pasar el clic, que edita la
+   *    línea (la edición sigue siendo posible; también con Enter desde el teclado).
+   * Tirador de mover, línea en edición, marco de imagen y controles de formulario quedan fuera.
+   */
+  private alClicMarcado(pageIndex: number, wrapper: HTMLElement, e: MouseEvent): void {
+    if (this.tool !== 'none') return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest('.run-drag, .run.editing, .image-box, input, select, textarea, button')) return;
+    const r = wrapper.getBoundingClientRect();
+    const p = this.geoms[pageIndex]!.cssToPt(e.clientX - r.left, e.clientY - r.top); // px CSS de página -> pt de usuario
+    const hit = marcadoBajoPunto(this.marcadosDePagina(pageIndex), p.xPt, p.yPt);
+    const actual = this.marcadoSel;
+    if (!hit) { this.limpiarMarcadoSeleccionado(); return; }
+    if (actual && actual.pageIndex === pageIndex && actual.annotIndex === hit.index) { this.limpiarMarcadoSeleccionado(); return; }
+    e.stopPropagation(); e.preventDefault();
+    this.limpiarMarcadoSeleccionado();
+    this.textoSel.limpiar();
+    this.root.querySelectorAll('.run.selected').forEach((el) => el.classList.remove('selected'));
+    this.marcadoSel = { pageIndex, annotIndex: hit.index, kind: hit.kind };
+    this.pintarMarcadoSel(hit);
+    this.cb.onMarcadoSelect?.(this.marcadoSel);
+    // La línea bajo el puntero queda SELECCIONADA (sin entrar a editarla): así Resaltar/Subrayar/Tachar siguen
+    // aplicándose a ella aunque ya tenga una anotación (varios marcados sobre la misma línea).
+    const run = t?.closest<HTMLElement>('.run');
+    const runId = run ? Number(run.dataset.runId) : NaN;
+    if (run && Number.isFinite(runId)) {
+      run.classList.add('selected');
+      this.cb.onSelect(pageIndex, runId);
+    }
+  }
+
+  /** Contorno visible de la anotación seleccionada: un recuadro por quad (px CSS de página, vía la geometría real). */
+  private pintarMarcadoSel(hit: MarcadoHit): void {
+    const s = this.marcadoSel;
+    const wrapper = s ? this.wrappers[s.pageIndex] : undefined;
+    if (!s || !wrapper) return;
+    wrapper.querySelector('.marcado-sel-layer')?.remove();
+    const geom = this.geoms[s.pageIndex]!;
+    const capa = document.createElement('div');
+    capa.className = 'marcado-sel-layer';
+    capa.setAttribute('role', 'listbox');
+    capa.setAttribute('aria-label', 'Anotación seleccionada');
+    Object.assign(capa.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
+    const opcion = document.createElement('div');
+    opcion.className = 'marcado-sel';
+    opcion.setAttribute('role', 'option');
+    opcion.setAttribute('aria-selected', 'true');
+    opcion.dataset.tipo = hit.kind;
+    const o = hit.kind === 'note' ? 'a' : 'o';
+    opcion.setAttribute('aria-label', `${ETIQUETA_MARCADO[hit.kind]} seleccionad${o}. Pulsa Supr para borrarl${o} o Escape para soltarl${o}.`);
+    const cajas = hit.quads.length > 0
+      ? hit.quads.map((q) => {
+        const pts = [0, 2, 4, 6].map((k) => geom.ptToCss(q[k]!, q[k + 1]!));
+        const left = Math.min(...pts.map((pp) => pp.x)), top = Math.min(...pts.map((pp) => pp.y));
+        return { left, top, width: Math.max(...pts.map((pp) => pp.x)) - left, height: Math.max(...pts.map((pp) => pp.y)) - top };
+      })
+      : [geom.rectPtToCss(hit.rectPt)];
+    for (const c of cajas) {
+      const caja = document.createElement('div');
+      caja.className = 'marcado-sel-quad';
+      caja.setAttribute('aria-hidden', 'true');
+      Object.assign(caja.style, { position: 'absolute', left: `${c.left}px`, top: `${c.top}px`, width: `${c.width}px`, height: `${c.height}px` });
+      opcion.appendChild(caja);
+    }
+    capa.appendChild(opcion);
+    wrapper.appendChild(capa);
+  }
 
   constructor(
     private readonly root: HTMLElement,
@@ -258,6 +372,7 @@ export class Viewer {
    * una `.run`/`.image-box` normalmente.
    */
   setTool(tool: ToolMode): void {
+    if (tool !== this.tool) this.limpiarMarcadoSeleccionado();
     this.tool = tool;
     const activo = tool === 'pen' || tool === 'rect' || tool === 'eraser';
     const cursor = tool === 'eraser' ? 'cell' : 'crosshair';
@@ -404,7 +519,10 @@ export class Viewer {
       .filter((p) => p.hasStroke)
       .map((p) => ({ objIndex: p.objIndex, segments: this.session.engine.getPathSegments(this.session.doc, pageIndex, p.objIndex) }));
     const objIndex = pathMasCercano(click.xPt, click.yPt, candidatos, maxDistPt);
-    if (objIndex !== null) this.cb.onErase?.(pageIndex, objIndex);
+    if (objIndex !== null) { this.cb.onErase?.(pageIndex, objIndex); return; }
+    // Sin trazo cerca: una anotación de marcado o nota bajo el puntero (por sus quads, no solo por /Rect).
+    const marcado = marcadoBajoPunto(this.marcadosDePagina(pageIndex), click.xPt, click.yPt);
+    if (marcado) this.cb.onEraseMarcado?.(pageIndex, marcado.index, marcado.kind);
   }
 
   private observeVisible(): void {
@@ -689,6 +807,7 @@ export class Viewer {
     // `App.onReload` recalcula y vuelve a fijar `currentPage` por su cuenta.
     this.pinnedPage = null;
     this.textoSel.limpiar();
+    this.marcadoSel = null; // el DOM del visor se descarta entero justo debajo
     this.finishProgrammaticScroll(); // limpia también el temporizador de respaldo
     this.layout();
     this.renderVisible();
@@ -712,6 +831,7 @@ export class Viewer {
         height: `${page.sizePt.heightPt * this.scale}px`
       });
       w.addEventListener('pointerdown', (e) => this.textoSel.alPulsar(page.index, e));
+      w.addEventListener('click', (e) => this.alClicMarcado(page.index, w, e), true);
       // Clic en el fondo (no en un run ni en el marco de una imagen) → insertar en ese punto y deseleccionar la imagen activa.
       w.addEventListener('click', (e) => {
         const target = e.target as HTMLElement;
@@ -807,6 +927,7 @@ export class Viewer {
     if (!wrapper) return;
     if (wrapper.querySelector('.run.editing')) return;
     if (this.selectedImage?.pageIndex === i) return;
+    if (this.marcadoSel?.pageIndex === i) return; // anotación seleccionada: no se pierde al desalojar
     if (this.textoSel.pageIndex === i) return; // selección de texto viva: no se pierde al desalojar
     if (wrapper.querySelector('.tool-layer > canvas, .tool-layer > .rect-preview')) return;
     wrapper.textContent = '';
@@ -824,6 +945,7 @@ export class Viewer {
     this.session.ensureText(i);
     const wrapper = this.wrappers[i]!;
     if (this.textoSel.pageIndex === i) this.textoSel.limpiar();
+    if (this.marcadoSel?.pageIndex === i) { this.marcadoSel = null; this.cb.onMarcadoSelect?.(null); }
     wrapper.textContent = '';
     contarRenderPage();
     const { width, height, data } = this.session.engine.renderPage(this.session.doc, i, this.scale);

@@ -1,3 +1,5 @@
+import { aproximado, type Advertencia } from '../advertencia';
+
 /**
  * Maquetador de flujo COMÚN, generalizado a partir de `../markdown/layout.ts`
  * (§9 fila #4 y fila #32). Ambos conversores (Markdown y DOCX) construyen su
@@ -87,7 +89,7 @@ export interface ResultadoLayout {
   imagenes: ImagenColocada[];
   enlaces: EnlaceColocado[];
   /** Avisos generados al paginar (p. ej. una combinación vertical de celdas que cruza un salto de página). */
-  advertencias: string[];
+  advertencias: Advertencia[];
 }
 
 export interface Seg {
@@ -445,10 +447,10 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
   }
 
   colocarFlotantes();
-  const advertencias: string[] = [];
+  const advertencias: Advertencia[] = [];
   if (mergesPartidos.size > 0) {
     const c = mergesPartidos.size;
-    advertencias.push(`${c === 1 ? 'Una celda combinada verticalmente cruza' : `${c} celdas combinadas verticalmente cruzan`} un salto de página: la celda se muestra cortada en el salto (el texto está en la primera página de la combinación).`);
+    advertencias.push(aproximado(`${c === 1 ? 'Una celda combinada verticalmente cruza' : `${c} celdas combinadas verticalmente cruzan`} un salto de página: la celda se muestra cortada en el salto (el texto está en la primera página de la combinación).`));
   }
   return { totalPaginas: page + 1, trazos, barras, imagenes, enlaces, advertencias };
 }

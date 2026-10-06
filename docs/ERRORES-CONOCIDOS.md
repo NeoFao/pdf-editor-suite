@@ -2290,3 +2290,58 @@ colisionó con la de T9 (ramas paralelas, tercera colisión de números). La reg
 aparezca una vez y en orden creciente en este fichero; su test cubre duplicado, fuera
 de orden y el repo real. El orden se exige a toda entrada nueva; las 13 que ya estaban desordenadas
 (E-004, 005, 007, 008, 009, 012, 015-019, 029, 030) se toleran en una lista fija que no crece.
+
+### E-058 · El aviso de conversión decía "omitió algo" también para contenido que sí estaba en el PDF (T13)
+
+**Síntoma.** Al abrir un `.docx` con una imagen flotante (colocada, aunque sin ajuste de
+texto), el banner `#conversion-warnings` decía "La conversión omitió algo del documento
+original". Una flotante aproximada, una tabla escalada o un enlace sin clic se
+presentaban igual que una ecuación o una nota al pie que de verdad no llegan al PDF.
+
+**Causa raíz.** El contrato era `advertencias: string[]`: la clase (omitido frente a
+convertido con aproximación) vivía solo en el texto de cada mensaje y la UI no podía
+distinguirla, así que usaba un encabezado único y genérico.
+
+**Arreglo.** `Advertencia = { tipo: 'omitido' | 'aproximado', mensaje }`
+(`src/convert/advertencia.ts`), tipada EN EL ORIGEN: cada `push` de `modelo.ts`,
+`render.ts`, `flujo/layout.ts` y los conversores Word y Markdown elige su clase
+(`MENSAJES_PERDIDAS` lleva el tipo en la tupla, así que añadir una pérdida sin clasificar
+no compila). La UI muestra dos grupos, "No se pudo incluir:" e "Incluido con diferencias:",
+dentro del mismo `role="status"`/`aria-live="polite"`, y oculta el grupo vacío.
+
+**Cómo se detecta ahora.** `tests/unit/advertencia.test.ts` (clasificación por tipo; la
+flotante colocada nunca es `omitido`); los tests unitarios existentes de Word/Markdown,
+adaptados a `textosAdvertencias`, siguen comprobando que ninguna advertencia se perdió; E2E
+`word-a-pdf.spec.ts` (flotante, nota al pie + objeto incrustado, enlace rechazado).
+
+### E-059 · Una anotación de marcado solo se podía quitar desde el panel, y el borrador la ignoraba (T14)
+
+**Síntoma.** Tras resaltar, subrayar o tachar (T11) la única forma de quitar la anotación
+era el panel Comentarios: un clic sobre ella no hacía nada (o abría la edición de la
+línea de debajo) y el modo borrador solo conocía trazos y rectángulos.
+
+**Causa raíz.** Las anotaciones reales no tienen objeto de contenido ni capa DOM propia: el
+clic llegaba a la `.run` de debajo. Acertar una anotación exige sus QuadPoints en pt de
+usuario (un subrayado de varias líneas NO responde en el hueco entre ellas, que sí cae
+dentro de su `/Rect`) y el clic llega en px CSS de página: mezclar ambos sin la geometría
+común es la familia de E-053.
+
+**Arreglo.** `puntoEnQuad`/`marcadoBajoPunto` (`src/coords/quads.ts`: sin suponer el orden de
+vértices ni quads alineados con los ejes). `Viewer.alClicMarcado` escucha el `click` de la
+página en CAPTURA, convierte el punto con `geom.cssToPt` y selecciona la anotación
+(`.marcado-sel[role=option][aria-selected=true]`, un recuadro por quad). Supr/Retroceso
+(atajo `suprimir`, solo con el foco en el cuerpo o el visor) la borra con `RemoveNoteCmd`;
+Escape la suelta; el borrador la borra si no hay trazo cerca. Precedencia: arrastrar
+(>4 px) selecciona texto (T12, su `click` posterior se traga antes); clic corto sobre la
+anotación la selecciona; un segundo clic sobre la ya seleccionada la suelta y deja editar
+la línea; el primer clic deja además la línea seleccionada (sin editarla) para poder encadenar
+Resaltar/Subrayar/Tachar sobre la misma línea (`markup-anotaciones.spec.ts` lo cubrió y falló
+cuando no lo hacía). Trampa encontrada al probarlo: tras un clic en una zona sin elemento enfocable el
+foco queda en `#viewer` (`tabindex=-1`), no en `<body>`.
+
+**Cómo se detecta ahora.** `tests/unit/quads-impacto.test.ts` (dentro/fuera/borde, orden de
+vértices, quad girado 30 grados, degenerado, /Rotate 270) y
+`tests/e2e/next/anotaciones-seleccion.spec.ts` (seleccionar+Supr+deshacer con el PDF
+guardado, Retroceso, Escape, nota, borrador, arrastre sigue seleccionando texto, precedencia,
+quads frente a /Rect, página girada). No se añade regla determinista: no hay patrón de código
+repetible, el riesgo ya lo cubre `pagegeometry-solo-con-fabrica` y el test E2E.

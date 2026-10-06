@@ -1,3 +1,4 @@
+import { agruparAdvertencias, type Advertencia, type TipoAdvertencia } from '../convert/advertencia';
 import { PdfiumEngine } from '../engine/pdfium/PdfiumEngine';
 import { EditSession } from '../model/EditSession';
 import { CommandBus } from '../commands/Command';
@@ -53,7 +54,7 @@ import { registrarGesto } from './gesto';
 import { resolverAtajo, esCampoEditable, type AccionAtajo } from './atajos';
 import { AtajosPanel } from './AtajosPanel';
 import { parseRange } from './pageRange';
-import { Viewer, type ToolMode } from './Viewer';
+import { Viewer, ETIQUETA_MARCADO, type ToolMode, type MarcadoKind } from './Viewer';
 import { calcularEscalaAjusteAncho } from './layout';
 import type { EditRequest } from './TextLayer';
 import { PageGeometry, type PtPoint } from '../coords/PageGeometry';
@@ -116,7 +117,7 @@ const TOOL_STATUS: Record<ToolMode, string> = {
   pen: 'Modo pluma: arrastra para dibujar.',
   note: 'Modo nota: haz clic donde quieras la nota.',
   rect: 'Modo rectángulo: arrastra para dibujarlo.',
-  eraser: 'Modo borrador: haz clic sobre un trazo o un rectángulo para borrarlo.'
+  eraser: 'Modo borrador: haz clic sobre un trazo, un rectángulo o un resaltado, subrayado o tachado para borrarlo.'
 };
 
 /**
@@ -211,7 +212,8 @@ export class App {
   private readonly status: HTMLElement;
   /** Aviso visible (no solo `#status`/consola) con las advertencias de una conversión Word/Markdown -> PDF (§9 fila #4: "no se pierde en silencio"). Oculto (`hidden`) cuando no hay advertencias pendientes. */
   private readonly avisoConversionEl: HTMLElement;
-  private readonly avisoConversionLista: HTMLElement;
+  /** Dos grupos (T13): `omitido` (no está en el PDF) y `aproximado` (está, pero distinto). Cada uno con su encabezado y lista; un grupo vacío se oculta. */
+  private readonly avisoGrupos: Record<TipoAdvertencia, { seccion: HTMLElement; lista: HTMLElement }>;
   private readonly pageIndicator: HTMLElement;
   private readonly btnInsert: HTMLButtonElement;
   private readonly btnPen: HTMLButtonElement;
@@ -647,7 +649,7 @@ export class App {
     const avisoCabecera = document.createElement('div');
     avisoCabecera.className = 'conversion-warnings-header';
     const avisoTitulo = document.createElement('strong');
-    avisoTitulo.textContent = 'La conversión omitió algo del documento original:';
+    avisoTitulo.textContent = 'Avisos de la conversión';
     const avisoCerrar = document.createElement('button');
     avisoCerrar.type = 'button';
     avisoCerrar.id = 'conversion-warnings-close';
@@ -657,9 +659,24 @@ export class App {
     avisoCerrar.setAttribute('aria-label', 'Cerrar aviso de advertencias de conversión');
     avisoCerrar.addEventListener('click', () => { this.avisoConversionEl.hidden = true; });
     avisoCabecera.append(avisoTitulo, avisoCerrar);
-    this.avisoConversionLista = document.createElement('ul');
-    this.avisoConversionLista.className = 'conversion-warnings-list';
-    this.avisoConversionEl.append(avisoCabecera, this.avisoConversionLista);
+    const grupo = (tipo: TipoAdvertencia, titulo: string): { seccion: HTMLElement; lista: HTMLElement } => {
+      const seccion = document.createElement('section');
+      seccion.className = 'conversion-warnings-group';
+      seccion.dataset.tipo = tipo;
+      seccion.hidden = true;
+      const tituloEl = document.createElement('strong');
+      tituloEl.className = 'conversion-warnings-group-title';
+      tituloEl.textContent = titulo;
+      const lista = document.createElement('ul');
+      lista.className = 'conversion-warnings-list';
+      seccion.append(tituloEl, lista);
+      return { seccion, lista };
+    };
+    this.avisoGrupos = {
+      omitido: grupo('omitido', 'No se pudo incluir:'),
+      aproximado: grupo('aproximado', 'Incluido con diferencias:')
+    };
+    this.avisoConversionEl.append(avisoCabecera, this.avisoGrupos.omitido.seccion, this.avisoGrupos.aproximado.seccion);
     rootEl.appendChild(this.avisoConversionEl);
 
     this.activarPestana(leerPestanaGuardada() ?? 'editar');
@@ -778,6 +795,8 @@ export class App {
       if (e.key === 'Escape' && this.moreOpen) { e.preventDefault(); this.closeMore(); return; }
       // Escape descarta la selección de texto por arrastre (T12) si no se está editando un campo.
       if (e.key === 'Escape' && !esCampoEditable(e.target) && this.viewer?.seleccionTexto()) { this.viewer.limpiarSeleccionTexto(); return; }
+      // Escape suelta la anotación seleccionada con un clic (T14).
+      if (e.key === 'Escape' && !esCampoEditable(e.target) && this.viewer?.marcadoSeleccionado()) { this.viewer.limpiarMarcadoSeleccionado(); return; }
 
       const def = resolverAtajo({
         key: e.key,
@@ -1027,14 +1046,21 @@ export class App {
   }
 
   /** Rellena y muestra el aviso visible de advertencias de conversión (ver el campo `avisoConversionEl`). */
-  private mostrarAvisoConversion(advertencias: string[]): void {
-    this.avisoConversionLista.textContent = '';
-    for (const texto of advertencias) {
-      const li = document.createElement('li');
-      li.textContent = texto;
-      this.avisoConversionLista.appendChild(li);
-    }
-    this.avisoConversionEl.hidden = false;
+  private mostrarAvisoConversion(advertencias: Advertencia[]): void {
+    const { omitidas, aproximadas } = agruparAdvertencias(advertencias);
+    const rellenar = (tipo: TipoAdvertencia, items: Advertencia[]): void => {
+      const { seccion, lista } = this.avisoGrupos[tipo];
+      lista.textContent = '';
+      for (const a of items) {
+        const li = document.createElement('li');
+        li.textContent = a.mensaje;
+        lista.appendChild(li);
+      }
+      seccion.hidden = items.length === 0;
+    };
+    rellenar('omitido', omitidas);
+    rellenar('aproximado', aproximadas);
+    this.avisoConversionEl.hidden = advertencias.length === 0;
   }
 
   /** Decodifica una imagen a RGBA usando el canvas del navegador. */
@@ -1084,6 +1110,15 @@ export class App {
         this.reflectPropsPanel();
       },
       onBackgroundClick: (pageIndex, at) => { this.selectedImage = null; this.handleBackgroundClick(pageIndex, at); },
+      onEraseMarcado: (pageIndex, annotIndex, kind) => { this.borrarMarcado(pageIndex, annotIndex, kind); },
+      onMarcadoSelect: (sel) => {
+        if (!sel) return;
+        this.selection = null; // la anotación sustituye a la selección de una línea o imagen
+        this.selectedImage = null;
+        this.viewer?.deselectImage();
+        this.reflectPropsPanel();
+        this.setStatus(`${ETIQUETA_MARCADO[sel.kind]} seleccionad${sel.kind === 'note' ? 'a' : 'o'}. Pulsa Supr para borrarl${sel.kind === 'note' ? 'a' : 'o'} o Escape para soltarl${sel.kind === 'note' ? 'a' : 'o'}.`);
+      },
       onTextSelectionStart: () => {
         this.selection = null; // la selección de texto sustituye a la de una línea o imagen
         this.selectedImage = null;
@@ -1268,6 +1303,27 @@ export class App {
     this.setStatus('Nota añadida.');
   }
 
+  /** ¿El foco está en el cuerpo o en el visor (su contenedor con scroll o una página) (no en un panel, botón o campo)? */
+  private focoEnVisor(target: EventTarget | null): boolean {
+    return target === document.body || (target instanceof HTMLElement && target.closest('#viewer, .page') !== null);
+  }
+
+  /** Borra la anotación seleccionada con un clic (Supr/Retroceso); con deshacer. */
+  private borrarMarcadoSeleccionado(): void {
+    const sel = this.viewer?.marcadoSeleccionado();
+    if (!sel) return;
+    this.borrarMarcado(sel.pageIndex, sel.annotIndex, sel.kind);
+  }
+
+  /** Borra una nota/resaltado/subrayado/tachado (índice entre todas las anotaciones de la página), con deshacer. */
+  private borrarMarcado(pageIndex: number, annotIndex: number, kind: MarcadoKind): void {
+    if (!this.bus) return;
+    this.viewer?.limpiarMarcadoSeleccionado();
+    const nombre = ETIQUETA_MARCADO[kind];
+    void this.bus.execute(new RemoveNoteCmd(pageIndex, annotIndex, `Borrar ${nombre.toLowerCase()}`));
+    this.setStatus(`${nombre} borrad${kind === 'note' ? 'a' : 'o'}.`);
+  }
+
   private async deleteSelected(): Promise<void> {
     if (!this.bus || !this.selection) { this.setStatus('Selecciona primero una línea (haz clic en ella).'); return; }
     const { pageIndex, runId } = this.selection;
@@ -1348,6 +1404,9 @@ export class App {
         // Igual que antes de este PR: solo si hay una imagen seleccionada
         // (#20/#21) — si no, no hay nada que hacer aquí y el navegador
         // conserva su comportamiento por defecto.
+        // T14: con una anotación seleccionada (clic), Supr/Retroceso la borra. Solo si el foco está en el visor o en el
+        // cuerpo: con el foco en un panel o un botón no se roba la tecla.
+        if (this.viewer?.marcadoSeleccionado() && this.focoEnVisor(e.target)) { e.preventDefault(); this.borrarMarcadoSeleccionado(); break; }
         if (this.selectedImage) { e.preventDefault(); void this.deleteSelectedImage(); }
         break;
       case 'escape':

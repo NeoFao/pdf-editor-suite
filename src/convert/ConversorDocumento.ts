@@ -17,9 +17,9 @@
  */
 /**
  * Resultado de `convertir()`. `advertencias` amplía el puerto (§9 fila #4,
- * conversor DOCX -> PDF): cadenas en español, listas para mostrar TAL CUAL
- * en la UI, de contenido del original que esta fase no soporta y por tanto
- * no aparece en el PDF (imágenes, encabezados/pies, notas, campos...) — la
+ * conversor DOCX -> PDF): advertencias tipadas (`{ tipo: 'omitido' | 'aproximado', mensaje }`, T13) con
+ * mensajes en español, listos para mostrar TAL CUAL en la UI: `omitido` = contenido
+ * del original que NO aparece en el PDF; `aproximado` = aparece pero distinto — la
  * honestidad de "no se pierde en silencio" (AGENTS.md, spec del lote) exige
  * que el conversor las DEVUELVA, no que las registre en consola. Se eligió
  * ampliar el tipo de retorno (en vez de un método opcional aparte,
@@ -30,9 +30,11 @@
  * limitaciones por comentario, no por UI; no hace falta que empiece a
  * generar advertencias ahora).
  */
+import type { Advertencia } from './advertencia';
+
 export interface ResultadoConversion {
   pdf: Uint8Array<ArrayBuffer>;
-  advertencias: string[];
+  advertencias: Advertencia[];
 }
 
 export interface ConversorDocumento {
