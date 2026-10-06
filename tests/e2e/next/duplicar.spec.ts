@@ -13,5 +13,5 @@ test('duplicar: la copia aparece y sube el conteo de miniaturas', async ({ page 
   await abrirPestana(page, 'organizar');
   await page.locator('#btn-duplicate').click();
   await expect(page.locator('#thumbs canvas')).toHaveCount(3);
-  await expect(page.locator('#page-indicator')).toHaveText('1 / 3');
+  await expect(page.locator('#page-indicator')).toHaveText('2 / 3'); // E-065: la actual pasa a la copia / primera página insertada
 });

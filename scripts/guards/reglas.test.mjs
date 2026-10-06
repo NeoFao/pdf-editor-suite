@@ -812,6 +812,15 @@ describe('puertos-e2e-sincronizados (E-062)', () => {
     assert.match(sinLiberar[0].mensaje, /liberar-puertos\.mjs no importa/);
   });
 
+  test('detecta un preview:* de package.json con el puerto escrito a mano (E-065)', () => {
+    const ok = importaConfig + '{ port: PUERTOS_E2E.appVieja,\n}';
+    const malo = '{ "scripts": { "preview:next": "vite preview --port 4173 --strictPort" } }';
+    const p = analizarPuertosE2E(ok, importaLiberar, claves, puertos, malo);
+    assert.match(p[0].mensaje, /preview:next.*puerto a mano/);
+    const bueno = '{ "scripts": { "preview:next": "node scripts/servir-preview.mjs next" } }';
+    assert.deepEqual(analizarPuertosE2E(ok, importaLiberar, claves, puertos, bueno), []);
+  });
+
   test('detecta un config sin ningún port', () => {
     const p = analizarPuertosE2E(importaConfig, importaLiberar, claves, puertos);
     assert.match(p[0].mensaje, /ningún `port:`/);

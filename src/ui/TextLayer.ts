@@ -258,8 +258,15 @@ export class TextLayer {
     handle.className = 'run-drag';
     // Posición/tamaño (geometría) inline; color, opacidad y visibilidad por
     // estado (reposo/hover/seleccionada) salen de la clase en CSS (E-029).
+    // El tirador sobresale 9 px por la esquina superior izquierda de la línea; en una línea pegada al
+    // borde de la página (E-066) se recoloca hacia dentro: su desplazamiento (px CSS de la capa sin
+    // girar, origen en la caja del bloque) nunca lo deja a la izquierda/arriba del borde de la página.
+    const sobresale = 9;
+    const bloqueX = parseFloat(block.style.left) || 0, bloqueY = parseFloat(block.style.top) || 0;
     Object.assign(handle.style, {
-      position: 'absolute', left: '-9px', top: '-9px', width: '14px', height: '14px'
+      position: 'absolute', width: '14px', height: '14px',
+      left: `${-Math.min(sobresale, Math.max(0, bloqueX))}px`,
+      top: `${-Math.min(sobresale, Math.max(0, bloqueY))}px`
     });
     handle.addEventListener('pointerdown', (e) => {
       e.preventDefault();

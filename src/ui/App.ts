@@ -449,9 +449,9 @@ export class App {
 
     const btnPrev = this.iconBoton('flecha-izq', 'Página anterior', 'btn-prev', () => this.goToPage(this.currentPage - 1));
     const btnNext = this.iconBoton('flecha-der', 'Página siguiente', 'btn-next', () => this.goToPage(this.currentPage + 1));
-    const btnRotate = this.iconBoton('rotar', 'Rotar', 'btn-rotate', () => { if (this.bus) void this.bus.execute(new RotatePageCmd(this.currentPage, 90)); }, { mostrarEtiqueta: true });
+    const btnRotate = this.iconBoton('rotar', 'Rotar', 'btn-rotate', () => { void this.rotateCurrentPage(); }, { mostrarEtiqueta: true });
     const btnDeletePage = this.iconBoton('eliminar-pagina', 'Eliminar página', 'btn-delete-page', () => this.deleteCurrentPage(), { mostrarEtiqueta: true });
-    const btnDuplicate = this.iconBoton('duplicar', 'Duplicar', 'btn-duplicate', () => { if (this.bus) void this.bus.execute(new DuplicatePageCmd(this.currentPage)); }, { mostrarEtiqueta: true });
+    const btnDuplicate = this.iconBoton('duplicar', 'Duplicar', 'btn-duplicate', () => { void this.duplicateCurrentPage(); }, { mostrarEtiqueta: true });
     const btnPageUp = this.iconBoton('subir', 'Subir', 'btn-page-up', () => this.moveCurrentPage(-1), { mostrarEtiqueta: true });
     const btnPageDown = this.iconBoton('bajar', 'Bajar', 'btn-page-down', () => this.moveCurrentPage(1), { mostrarEtiqueta: true });
 
@@ -1650,7 +1650,16 @@ export class App {
   private deleteCurrentPage(): void {
     const total = this.session?.model.pages.length ?? 0;
     if (!this.bus || total <= 1) { this.setStatus('No se puede eliminar la única página.'); return; }
-    void this.bus.execute(new DeletePageCmd(this.currentPage));
+    void this.eliminarPaginaActual();
+  }
+
+  /** Borra la página actual y deja como actual la siguiente (o la anterior si era la última) — E-065. */
+  private async eliminarPaginaActual(): Promise<void> {
+    if (!this.bus) return;
+    const idx = this.currentPage;
+    await this.bus.execute(new DeletePageCmd(idx));
+    const total = this.session?.model.pages.length ?? 0;
+    this.goToPage(Math.min(idx, total - 1));
     this.setStatus('Página eliminada.');
   }
 
@@ -1885,8 +1894,18 @@ export class App {
   private async handleInsertPdf(file: File): Promise<void> {
     if (!this.bus) return;
     const bytes = new Uint8Array(await file.arrayBuffer());
-    await this.bus.execute(new InsertPdfCmd(bytes, this.currentPage + 1));
+    const destino = this.currentPage + 1;
+    await this.bus.execute(new InsertPdfCmd(bytes, destino));
+    this.goToPage(destino); // E-065: la primera página insertada
     this.setStatus('PDF insertado.');
+  }
+
+  /** Rota la página actual y la mantiene como actual (E-065: el rebuild no debe dejar que el observer elija otra). */
+  private async rotateCurrentPage(): Promise<void> {
+    if (!this.bus) return;
+    const idx = this.currentPage;
+    await this.bus.execute(new RotatePageCmd(idx, 90));
+    this.goToPage(idx);
   }
 
   private moveCurrentPage(delta: number): void {
@@ -1894,9 +1913,18 @@ export class App {
     const from = this.currentPage;
     const to = from + delta;
     if (!this.bus || to < 0 || to >= total) return;
-    this.currentPage = to; // seguir la página movida
-    void this.bus.execute(new MovePageCmd(from, to));
-    this.setStatus('Página reordenada.');
+    void this.commitReorder(from, to);
+  }
+
+  /**
+   * Duplica la página actual y se queda en la COPIA (queda justo detrás, como en Acrobat).
+   * E-065: sin `goToPage` la página actual se quedaba en la original o la decidía el observer.
+   */
+  private async duplicateCurrentPage(): Promise<void> {
+    if (!this.bus) return;
+    const desde = this.currentPage;
+    await this.bus.execute(new DuplicatePageCmd(desde));
+    this.goToPage(desde + 1);
   }
 
   /**
