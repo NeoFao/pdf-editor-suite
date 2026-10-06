@@ -2982,3 +2982,36 @@ mismo hueco; guardar y reabrir), `tests/e2e/next/justificado-y-espacio-tex.spec.
 tinta: el margen `BEARING_EM` (0,05 em por lado) es una estimación, no el avance exacto. Con texto oblicuo (no múltiplo de 90°) se
 usa el avance natural, con su defecto. En RTL (árabe) las líneas ahora se unen en una sola (antes salían en tres piezas
 desordenadas), pero el orden visual de las letras no se trata (F6 sigue abierto).
+
+### E-086 · En LaTeX (pdfTeX) editar una línea con espacios pasaba TODA la línea a Helvetica
+
+**Síntoma.** En un PDF de pdfTeX (NimbusRomNo9L, Type 1 subconjunto), cambiar «Zakai» por «iakaZ» en «Alon Zakai» y pulsar Enter dejaba
+«La fuente original no tiene algún carácter; la línea usa Helvetica.» y la línea pasaba de Times a Helvetica; una línea sin espacio
+(«Mozilla») se editaba bien. Además el motor extraía «AlonZakai» mientras el editor mostraba «Alon Zakai».
+
+**Causa raíz.** TeX no escribe el espacio como glifo: separa las palabras con desplazamientos de `TJ` (`[(Alon)-333(Zakai)] TJ`) y el
+subconjunto no trae glifo de espacio. Al teclear un espacio, `FPDFText_SetText` lo escribe como un código inexistente (PDFium lo
+lee de vuelta como `ÿ`), así que la verificación de E-079 (releer lo escrito) lo tomaba por glifo ausente y la edición caía al camino
+de la fuente estándar (E-047) para toda la línea. Y `textoReal` descartaba los espacios que PDFium genera DENTRO de un objeto (los
+huecos de `TJ`), que en TeX son las separaciones de palabras reales.
+
+**Arreglo.** (1) `textoRealPorObjeto`/`textoRealDeObjeto` incluyen el espacio generado entre dos caracteres del MISMO objeto: la
+línea extrae «Alon Zakai». (2) Si la escritura falla, el texto tiene espacios y la fuente no tiene glifo de espacio
+(`fuenteSinEspacio`: ancho 0), `editLine` escribe PALABRA A PALABRA (`escribirPorPalabras`): la primera en sitio sobre el objeto
+original y cada una de las siguientes en un objeto nuevo con la MISMA fuente (`CreateTextObj` con el handle prestado), color, modo
+de render y matriz, desplazado por el avance natural de las anteriores más el ancho del espacio, medido de la propia línea
+(`medirEspacioPt`: hueco entre objetos vecinos y caja menos avance en objetos con `TJ`; sin muestras, 0,25 em como TeX). Cada
+palabra se relee (E-079). Un glifo VISIBLE ausente sigue siendo `glyph-missing` y entra la fuente estándar (E-047). Las líneas de un
+objeto con espacios tecleados pasan al camino compuesto (`EditarLineaCmd`, deshacer por snapshot); `editLine` devuelve
+`objetosAnadidos` y `ReemplazarTextoCmd` deshace por snapshot en ese caso.
+
+**Cómo se detecta ahora.** Fixture `sin-espacio-tex.pdf` (Type 1 incrustado escrito a mano, sin glifo de espacio, `/Widths` desde `A`,
+`Differences`, líneas con `TJ`: reproduce el `ÿ`), `tests/unit/EspacioTex.test.ts` (fuente original conservada en la línea editada y
+tras guardar y reabrir, palabras separadas por espacio, sin `.notdef`, espacio de ≈ 8 pt, 0 px distintos fuera de la franja, glifo
+visible ausente → Helvetica) y `tests/e2e/next/justificado-y-espacio-tex.spec.ts` (Chromium: estado «Editado.», fuente conservada,
+deshacer).
+
+**Límites conocidos.** La línea editada pasa a espaciado natural más un hueco medio entre palabras (la justificación original de TeX
+se pierde, como en E-083). Las palabras nuevas no heredan el recorte (`clip`) del objeto original. Cambiar tamaño o fuente
+(`setRunFontSize`, `setLineProps`) de una línea de TeX con espacios sigue sin tratarse: con la fuente sin espacio devuelve
+`glyph-missing` en vez de perder los espacios.

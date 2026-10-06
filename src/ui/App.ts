@@ -1350,6 +1350,21 @@ export class App {
       this.setStatus('Editado.');
       return;
     }
+    if (res.reason === 'glyph-missing' && /\s/.test(req.newText)) {
+      // E-086: con espacios y una fuente SIN glifo de espacio (pdfTeX) el fallo puede ser solo el espacio: se prueba el camino
+      // de línea (palabras como objetos con hueco, misma fuente, deshacer por snapshot) antes de sustituir la fuente.
+      const cmd = new EditarLineaCmd(req.pageIndex, req.linea, req.newText, false);
+      await cmd.execute(s);
+      if (cmd.ok) {
+        if (!cmd.sinCambios) {
+          this.bus.pushExecuted(cmd);
+          this.selection = { pageIndex: req.pageIndex, runId: cmd.lineaRunIdInicial };
+          this.reflectPropsPanel();
+          this.setStatus('Editado.');
+        }
+        return;
+      }
+    }
     if (res.reason === 'glyph-missing') {
       // La fuente incrustada (subconjunto) no trae ese glifo: como Acrobat,
       // se sustituye la línea por la fuente estándar PDF más parecida en vez

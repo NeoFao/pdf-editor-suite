@@ -25,7 +25,13 @@ export class EditarLineaCmd implements Command {
   razon: 'glyph-missing' | 'not-a-text-run' | 'empty-text' | 'stale' | null = null;
   lineaRunIdInicial: number;
 
-  constructor(readonly pageIndex: number, readonly linea: LineaParaEditar, readonly textoNuevo: string) {
+  constructor(
+    readonly pageIndex: number,
+    readonly linea: LineaParaEditar,
+    readonly textoNuevo: string,
+    /** `false`: si falta un glifo no se cae a la fuente estándar (el llamante decide qué hacer con `glyph-missing`). */
+    readonly permitirFuenteEstandar = true
+  ) {
     this.lineaRunIdInicial = linea.runIds[0] ?? -1;
   }
 
@@ -38,7 +44,7 @@ export class EditarLineaCmd implements Command {
     const antes = c.engine.save(c.doc);
     let res = c.engine.editLine(c.doc, this.pageIndex, this.linea, this.textoNuevo);
     // E-047: a la fuente original le falta algún glifo del tramo nuevo → ese tramo (no la línea entera) en la estándar.
-    if (!res.ok && res.reason === 'glyph-missing') res = c.engine.editLine(c.doc, this.pageIndex, this.linea, this.textoNuevo, { fuenteEstandar: true });
+    if (this.permitirFuenteEstandar && !res.ok && res.reason === 'glyph-missing') res = c.engine.editLine(c.doc, this.pageIndex, this.linea, this.textoNuevo, { fuenteEstandar: true });
     if (!res.ok) { this.razon = res.reason; return; }
     this.ok = true;
     if ('sinCambios' in res) { this.sinCambios = true; return; }
