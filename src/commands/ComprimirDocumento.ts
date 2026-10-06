@@ -69,7 +69,11 @@ export class ComprimirDocumentoCmd implements Command {
       // nunca se queda a medias: vuelve al snapshot previo. Si no se tocó nada, no hay
       // nada que restaurar y el documento vivo queda intacto (ni siquiera se reserializa).
       if (this.tocado) await c.reload(before);
+      // Si el worker se cerró por cancelación, su error de cierre no es lo que ve el llamador.
+      if (this.ganchos.signal?.aborted && !(e instanceof CompresionCancelada)) throw new CompresionCancelada();
       throw e;
+    } finally {
+      this.adaptador.cerrar?.();
     }
   }
 
@@ -112,6 +116,7 @@ export class ComprimirDocumentoCmd implements Command {
         if (plan!.reescalar) {
           const r = await this.adaptador.reescalar(rgba, width, height, plan!.targetWidthPx, plan!.targetHeightPx);
           rgba = r.rgba; width = r.width; height = r.height;
+          cancelar(); // respuesta que llega tras cancelar: se ignora (nada se aplica al motor)
         }
 
         if (alfaOriginal) {
@@ -125,6 +130,7 @@ export class ComprimirDocumentoCmd implements Command {
         }
 
         const jpegBytes = await this.adaptador.codificarJpeg(rgba, width, height, this.opciones.calidad);
+        cancelar();
         const original = c.engine.getImageRawSize(c.doc, pageIndex, img.objIndex) ?? Infinity;
         if (jpegBytes.length < original) {
           if (c.engine.replaceImageJpeg(c.doc, pageIndex, img.objIndex, jpegBytes)) { tocadas++; this.tocado = true; }

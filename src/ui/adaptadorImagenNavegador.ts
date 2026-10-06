@@ -19,6 +19,8 @@ export interface AdaptadorImagen {
   ): Promise<{ rgba: Uint8ClampedArray; width: number; height: number }>;
   /** Codifica RGBA (se asume opaco: el JPEG no tiene canal alfa) a JPEG con la calidad dada (0-1). */
   codificarJpeg(rgba: Uint8ClampedArray, width: number, height: number, calidad: number): Promise<Uint8Array>;
+  /** Libera recursos (el worker de T15). El comando lo llama al terminar, con éxito o no (§2.6). */
+  cerrar?(): void;
 }
 
 function canvasCon(rgba: Uint8ClampedArray, width: number, height: number): HTMLCanvasElement {

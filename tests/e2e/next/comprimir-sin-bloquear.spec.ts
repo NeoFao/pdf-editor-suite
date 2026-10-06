@@ -42,6 +42,7 @@ async function descargar(page: Page, nombre: string): Promise<Uint8Array> {
 /**
  * Retiene la codificación JPEG de la 3.ª imagen hasta `window.__soltarCompresion()`: así "a mitad"
  * es determinista (sin carreras contra el reloj): la compresión se queda parada en la imagen 3/10.
+ * Desde T15 la codificación va al worker: se retiene el envío de la 3.ª petición 'jpeg' al worker.
  */
 async function retenerEnLaTercera(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -50,11 +51,12 @@ async function retenerEnLaTercera(page: Page): Promise<void> {
     let soltar!: () => void;
     const puerta = new Promise<void>((r) => { soltar = r; });
     w.__soltarCompresion = soltar;
-    const orig = HTMLCanvasElement.prototype.toBlob;
-    HTMLCanvasElement.prototype.toBlob = function (cb, tipo, calidad) {
-      if (tipo === 'image/jpeg' && ++llamadas === 3) void puerta.then(() => orig.call(this, cb, tipo, calidad));
-      else orig.call(this, cb, tipo, calidad);
-    };
+    const orig = Worker.prototype.postMessage as (this: Worker, ...a: unknown[]) => void;
+    Worker.prototype.postMessage = function (this: Worker, ...args: unknown[]) {
+      const msg = args[0] as { tipo?: string } | undefined;
+      if (msg?.tipo === 'jpeg' && ++llamadas === 3) void puerta.then(() => { try { orig.apply(this, args); } catch { /* worker ya cerrado por la cancelación */ } });
+      else orig.apply(this, args);
+    } as typeof Worker.prototype.postMessage;
   });
 }
 
