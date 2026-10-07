@@ -127,12 +127,12 @@ test('la línea base del texto de una celda cae ~13,6pt bajo el borde superior d
   const xml = `<w:document><w:body><w:tbl>
     <w:tblPr><w:tblBorders><w:top w:val="single" w:sz="8" w:color="000000"/></w:tblBorders></w:tblPr>
     <w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid>
-    <w:tr><w:tc><w:p><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>X</w:t></w:r></w:p></w:tc></w:tr>
+    <w:tr><w:tc><w:p><w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>X</w:t></w:r></w:p></w:tc></w:tr>
   </w:tbl></w:body></w:document>`;
   const { trazos, barras } = renderizarModeloDocx(construirModeloDocx(xml, null, null), (_f, _s, t) => t.length * 5);
   const borde = barras.find((b) => b.hPt === 1 && b.wPt > 100)!; // borde superior de la fila (grosor 1pt)
   const topeFila = borde.yPt + borde.hPt;
-  // sizePt 10 -> altura de línea 12; baseline a 5 + 12*0.72 = 13,64pt bajo el tope.
+  // Interlineado exacto de 12 pt (E-103: la celda aplica el interlineado de su párrafo); baseline a 5 + 12*0.72 = 13,64pt bajo el tope.
   expect(topeFila - trazos[0]!.yPt).toBeCloseTo(13.64, 1);
 });
 

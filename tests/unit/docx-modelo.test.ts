@@ -146,9 +146,9 @@ test('tablas: grid de anchos, gridSpan, vMerge, bordes y sombreado quedan en el 
   const celdaCombinada = tabla.filas[0]!.celdas[0]!;
   expect(celdaCombinada.gridSpan).toBe(2);
   expect(celdaCombinada.colorFondo).toEqual([255, 204, 0]);
-  expect(celdaCombinada.partes[0]).toMatchObject({ tipo: 'texto', texto: 'Encabezado combinado' });
+  expect(celdaCombinada.partes.find((x) => x.tipo === 'texto')).toMatchObject({ tipo: 'texto', texto: 'Encabezado combinado' });
 
-  const filaDatos = tabla.filas[1]!.celdas.map((c) => (c.partes[0] as { texto: string }).texto);
+  const filaDatos = tabla.filas[1]!.celdas.map((c) => (c.partes.find((x) => x.tipo === 'texto') as { texto: string }).texto);
   expect(filaDatos).toEqual(['A1', 'B1', 'C1']);
 });
 
