@@ -31,6 +31,12 @@ import type { ImagenColocada } from './flujo/layout';
  * (`w:keepNext`/`w:keepLines`), bordes por celda (`w:tcBorders`) e imágenes
  * flotantes (`wp:anchor`) colocadas SIN ajuste de texto (con aviso).
  *
+ * Fase 2c: VARIAS SECCIONES (cada una con su tamaño y orientación de página,
+ * márgenes, encabezados/pies y numeración: las páginas del PDF salen con el
+ * tamaño de SU sección), imágenes y tablas dentro de encabezados y pies,
+ * texto alrededor de imágenes flotantes (cuadrado y arriba/abajo) y
+ * tabulaciones reales (paradas izquierda/centro/derecha/decimal con líder).
+ *
  * Fuentes: Calibri/Arial y similares se mapean a Helvetica, Times New
  * Roman/Cambria a Times, Consolas/Courier New a Courier (`fontClassify`),
  * conservando negrita/cursiva. Las métricas de Calibri no son las de
@@ -63,16 +69,22 @@ export class ConversorDocxNavegador implements ConversorDocumento {
     // (`w:evenAndOddHeaders`). Se leen aquí (el modelo es puro y no toca el ZIP) y se pasan ya decodificados.
     const settingsBytes = await zip.leer('word/settings.xml');
     const partes: Record<string, string> = {};
+    // Fase 2c: cada encabezado/pie tiene sus PROPIAS relaciones (word/_rels/header1.xml.rels): ahí viven sus imágenes.
+    const relsPartes: Record<string, string> = {};
     if (relsXml) {
       for (const rel of leerRelaciones(relsXml).values()) {
         if (!/(^|\/)(header|footer)\d*\.xml$/i.test(rel.target)) continue;
         const ruta = rutaMediaDesdeWord(rel.target);
         const bytesParte = await zip.leer(ruta);
-        if (bytesParte) partes[ruta] = decodificador.decode(bytesParte);
+        if (!bytesParte) continue;
+        partes[ruta] = decodificador.decode(bytesParte);
+        const barra = ruta.lastIndexOf('/');
+        const bytesRels = await zip.leer(`${ruta.slice(0, barra + 1)}_rels/${ruta.slice(barra + 1)}.rels`);
+        if (bytesRels) relsPartes[ruta] = decodificador.decode(bytesRels);
       }
     }
 
-    const modelo = construirModeloDocx(documentXml, stylesXml, numberingXml, relsXml, { settingsXml: settingsBytes ? decodificador.decode(settingsBytes) : null, partes });
+    const modelo = construirModeloDocx(documentXml, stylesXml, numberingXml, relsXml, { settingsXml: settingsBytes ? decodificador.decode(settingsBytes) : null, partes, relsPartes });
 
     // Mismo caché de `measureText` por conversión que `ConversorMarkdownNavegador`
     // (ver el comentario allí): evita cruzar la frontera WASM por cada
@@ -84,14 +96,22 @@ export class ConversorDocxNavegador implements ConversorDocumento {
       if (w === undefined) { w = this.engine.measureText(font, sizePt, s); cache.set(key, w); }
       return w;
     };
-    const { totalPaginas, trazos, barras, imagenes, enlaces } = renderizarModeloDocx(modelo, medir);
+    const { totalPaginas, trazos, barras, imagenes, enlaces, paginas } = renderizarModeloDocx(modelo, medir);
 
     const { rgbaPorId, advertenciasImagenes } = await this.resolverImagenes(zip, imagenes);
     const advertencias = [...modelo.advertencias, ...advertenciasImagenes];
 
-    const blank = this.engine.createBlank(modelo.paginaAnchoPt, modelo.paginaAltoPt);
-    const doc: DocHandle = await this.engine.open(blank);
-    for (let i = 1; i < totalPaginas; i++) this.engine.importPages(doc, blank, i);
+    // Una página en blanco POR TAMAÑO distinto (las secciones pueden cambiar de tamaño y de orientación), en el orden del layout.
+    const enBlanco = new Map<string, Uint8Array<ArrayBuffer>>();
+    const blancoDe = (i: number): Uint8Array<ArrayBuffer> => {
+      const { widthPt, heightPt } = paginas[i]!.geo;
+      const clave = `${widthPt}x${heightPt}`;
+      let b = enBlanco.get(clave);
+      if (!b) { b = this.engine.createBlank(widthPt, heightPt); enBlanco.set(clave, b); }
+      return b;
+    };
+    const doc: DocHandle = await this.engine.open(blancoDe(0));
+    for (let i = 1; i < totalPaginas; i++) this.engine.importPages(doc, blancoDe(i), i);
 
     // Lote por página (E-037, docs/ERRORES-CONOCIDOS.md): ver el mismo
     // razonamiento en `ConversorMarkdownNavegador`. Orden de dibujo: fondos

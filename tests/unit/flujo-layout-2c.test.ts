@@ -206,6 +206,11 @@ test('tabulación decimal: el separador decimal cae en la parada', () => {
   expect(n.xPt + 2 * 6).toBe(150); // "12" delante de la coma
 });
 
+test('tabulación decimal con separador de miles: la coma (último separador) es la que cae en la parada', () => {
+  const { segs } = lineaConTabs([tabAtomo(), atomo('1.234,50')], 0, 50, 250, { ...BASE, stops: [stop(150, 'decimal')] }, medir);
+  expect(textoEn(segs, '1.234,50').xPt + 5 * 6).toBe(150); // "1.234" delante de la coma
+});
+
 test('líder de puntos: rellena el hueco entre el texto y la parada derecha con puntos y el número acaba en la parada', () => {
   const { segs } = lineaConTabs([atomo('Capítulo'), tabAtomo(), atomo('3')], 0, 50, 250, { ...BASE, stops: [stop(250, 'right', 'dot')] }, medir);
   const puntos = segs.find((s) => /^\.+$/.test(s.text))!;

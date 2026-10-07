@@ -881,6 +881,141 @@ function docxFlotante() {
   ]);
 }
 
+/* ───────────────────────────── Word fase 2c ───────────────────────────── */
+
+/** Línea de 12 pt exactos, sin espacios: 52 por página Carta con 1" de margen (la altura útil son 648 pt). */
+const ESP_EXACTO = '<w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/>';
+const RPR_10 = '<w:rPr><w:sz w:val="20"/></w:rPr>';
+const lineaDoc = (t, ppr = '') => `<w:p><w:pPr>${ESP_EXACTO}${ppr}</w:pPr><w:r>${RPR_10}<w:t xml:space="preserve">${t}</w:t></w:r></w:p>`;
+
+/**
+ * `word-secciones.docx` (§9 fila #4, fase 2c): TRES páginas en DOS secciones. Sección 1: Carta vertical, dos páginas (salto
+ * explícito), encabezado propio "Encabezado sección uno" y pie "Página X de Y" centrado. Sección 2: Carta APAISADA (15840 x
+ * 12240 twips), encabezado propio "Encabezado apaisado", SIN pie propio (hereda el de la sección 1) y numeración REINICIADA
+ * (`w:pgNumType w:start="1"`): su única página dice "Página 1 de 3".
+ */
+export const DOCX_SECCIONES = {
+  vertical: { anchoPt: 612, altoPt: 792 }, apaisada: { anchoPt: 792, altoPt: 612 },
+  encabezado1: 'Encabezado sección uno', encabezado2: 'Encabezado apaisado',
+  texto1: 'Texto de la sección vertical, primera página.', texto1b: 'Texto de la sección vertical, segunda página.', texto2: 'Texto de la sección apaisada.'
+};
+function docxSecciones() {
+  const sectApaisada = '<w:sectPr><w:headerReference w:type="default" r:id="rIdH2"/><w:pgSz w:w="15840" w:h="12240" w:orient="landscape"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/><w:pgNumType w:start="1"/></w:sectPr>';
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  ${lineaDoc(DOCX_SECCIONES.texto1)}
+  <w:p><w:r><w:br w:type="page"/></w:r></w:p>
+  <w:p><w:pPr>${ESP_EXACTO}<w:sectPr><w:headerReference w:type="default" r:id="rIdH1"/><w:footerReference w:type="default" r:id="rIdF1"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/></w:sectPr></w:pPr><w:r>${RPR_10}<w:t>${DOCX_SECCIONES.texto1b}</w:t></w:r></w:p>
+  ${lineaDoc(DOCX_SECCIONES.texto2)}
+  ${sectApaisada}
+</w:body></w:document>`;
+  const cab = (t) => `<?xml version="1.0" encoding="UTF-8"?><w:hdr><w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="20"/></w:rPr><w:t>${t}</w:t></w:r></w:p></w:hdr>`;
+  const pie = `<?xml version="1.0" encoding="UTF-8"?><w:ftr><w:p><w:pPr><w:jc w:val="center"/><w:spacing w:before="0" w:after="0"/></w:pPr>
+    <w:r>${RPR_10}<w:t xml:space="preserve">Página </w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r>${RPR_10}<w:t>1</w:t></w:r></w:fldSimple>
+    <w:r>${RPR_10}<w:t xml:space="preserve"> de </w:t></w:r><w:fldSimple w:instr=" NUMPAGES "><w:r>${RPR_10}<w:t>1</w:t></w:r></w:fldSimple>
+  </w:p></w:ftr>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/_rels/document.xml.rels', datos: Buffer.from(relsXml([relacion('rIdH1', 'header', 'header1.xml', false), relacion('rIdH2', 'header', 'header2.xml', false), relacion('rIdF1', 'footer', 'footer1.xml', false)]), 'utf-8') },
+    { nombre: 'word/header1.xml', datos: Buffer.from(cab(DOCX_SECCIONES.encabezado1), 'utf-8') },
+    { nombre: 'word/header2.xml', datos: Buffer.from(cab(DOCX_SECCIONES.encabezado2), 'utf-8') },
+    { nombre: 'word/footer1.xml', datos: Buffer.from(pie, 'utf-8') }
+  ]);
+}
+
+/**
+ * `word-encabezado-rico.docx`: encabezado con un LOGO (imagen inline de 48 x 24 pt, con sus propias relaciones en
+ * `word/_rels/header1.xml.rels`) y una TABLA de dos celdas con borde inferior, en las tres páginas Carta del documento.
+ */
+export const DOCX_ENC_RICO = { logoWPt: 48, logoHPt: 24, celdas: ['Empresa S.A.', 'Informe mensual'], paginas: ['Página uno del informe.', 'Página dos del informe.', 'Página tres del informe.'] };
+function docxEncabezadoRico() {
+  const logo = '<w:drawing><wp:inline><wp:extent cx="609600" cy="304800"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rIdLogo"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing>';
+  const celda = (t) => `<w:tc><w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="20"/></w:rPr><w:t>${t}</w:t></w:r></w:p></w:tc>`;
+  const cab = `<?xml version="1.0" encoding="UTF-8"?><w:hdr>
+    <w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr><w:r>${logo}</w:r></w:p>
+    <w:tbl><w:tblPr><w:tblBorders><w:bottom w:val="single" w:sz="12" w:color="1F3864"/></w:tblBorders></w:tblPr><w:tblGrid><w:gridCol w:w="4680"/><w:gridCol w:w="4680"/></w:tblGrid>
+      <w:tr>${celda(DOCX_ENC_RICO.celdas[0])}${celda(DOCX_ENC_RICO.celdas[1])}</w:tr></w:tbl>
+    <w:p><w:pPr><w:spacing w:before="0" w:after="0"/></w:pPr></w:p></w:hdr>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  ${lineaDoc(DOCX_ENC_RICO.paginas[0])}
+  <w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:r><w:t>${DOCX_ENC_RICO.paginas[1]}</w:t></w:r></w:p>
+  <w:p><w:pPr><w:pageBreakBefore/></w:pPr><w:r><w:t>${DOCX_ENC_RICO.paginas[2]}</w:t></w:r></w:p>
+  <w:sectPr><w:headerReference w:type="default" r:id="rIdH1"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="360" w:footer="720"/></w:sectPr>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/_rels/document.xml.rels', datos: Buffer.from(relsXml([relacion('rIdH1', 'header', 'header1.xml', false)]), 'utf-8') },
+    { nombre: 'word/header1.xml', datos: Buffer.from(cab, 'utf-8') },
+    { nombre: 'word/_rels/header1.xml.rels', datos: Buffer.from(relsXml([relacion('rIdLogo', 'image', 'media/logo.png', false)]), 'utf-8') },
+    { nombre: 'word/media/logo.png', datos: pngSolido(16, 8, [0, 70, 160]) }
+  ]);
+}
+
+/**
+ * `word-ajuste.docx`: una imagen cuadrada de 144 pt (naranja) flotante a la DERECHA del margen, anclada al principio de
+ * un párrafo largo con `wp:wrapSquare` (9 pt de separación a la izquierda): el texto debe quedarse a su izquierda mientras
+ * se cruza con ella y volver al ancho completo debajo.
+ */
+export const DOCX_AJUSTE = { imagenPt: 144, distLPt: 9, palabras: 150 };
+function docxAjuste() {
+  const dibujo = `<w:drawing><wp:anchor distT="0" distB="0" distL="114300" distR="114300" behindDoc="0"><wp:positionH relativeFrom="margin"><wp:align>right</wp:align></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="1828800" cy="1828800"/><wp:wrapSquare wrapText="bothSides"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing>`;
+  const texto = Array.from({ length: DOCX_AJUSTE.palabras }, (_v, i) => `texto${i + 1}`).join(' ');
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:p><w:pPr><w:spacing w:before="0" w:after="120"/></w:pPr><w:r>${dibujo}<w:t xml:space="preserve">${texto}</w:t></w:r></w:p>
+  <w:p><w:r><w:t>Párrafo final, debajo de todo.</w:t></w:r></w:p>
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/_rels/document.xml.rels', datos: Buffer.from(relsXml([relacion('rId1', 'image', 'media/image1.png', false)]), 'utf-8') },
+    { nombre: 'word/media/image1.png', datos: pngSolido(16, 16, [255, 128, 0]) }
+  ]);
+}
+
+/**
+ * `word-tabs.docx`: un índice con líder de puntos ("Capítulo uno ........ 3", parada derecha a 9360 twips = 6,5"), una línea
+ * "Nombre TAB Valor" con parada izquierda, una cifra con parada decimal y un pie "Informe TAB TAB Página X de Y" con las dos
+ * paradas del estilo Footer (centrada y derecha).
+ */
+export const DOCX_TABS = { indice: [['Capítulo uno', '3'], ['Capítulo dos', '17'], ['Anexo', '120']], nombre: ['Nombre', 'Valor'], cifras: [['Subtotal', '1.234,50'], ['Total', '98,5']] };
+function docxTabs() {
+  const tabsDer = '<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9360"/></w:tabs>';
+  const entrada = ([t, n]) => `<w:p><w:pPr>${ESP_EXACTO}${tabsDer}</w:pPr><w:r>${RPR_10}<w:t>${t}</w:t></w:r><w:r>${RPR_10}<w:tab/></w:r><w:r>${RPR_10}<w:t>${n}</w:t></w:r></w:p>`;
+  const cifra = ([t, n]) => `<w:p><w:pPr>${ESP_EXACTO}<w:tabs><w:tab w:val="decimal" w:pos="5400"/></w:tabs></w:pPr><w:r>${RPR_10}<w:t>${t}</w:t></w:r><w:r>${RPR_10}<w:tab/></w:r><w:r>${RPR_10}<w:t>${n}</w:t></w:r></w:p>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Índice</w:t></w:r></w:p>
+  ${DOCX_TABS.indice.map(entrada).join('\n  ')}
+  <w:p><w:pPr>${ESP_EXACTO}<w:tabs><w:tab w:val="left" w:pos="3600"/></w:tabs></w:pPr><w:r>${RPR_10}<w:t>${DOCX_TABS.nombre[0]}</w:t></w:r><w:r>${RPR_10}<w:tab/></w:r><w:r>${RPR_10}<w:t>${DOCX_TABS.nombre[1]}</w:t></w:r></w:p>
+  ${DOCX_TABS.cifras.map(cifra).join('\n  ')}
+  <w:sectPr><w:footerReference w:type="default" r:id="rIdF1"/><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/></w:sectPr>
+</w:body></w:document>`;
+  const styles = `<?xml version="1.0" encoding="UTF-8"?>
+<w:styles>
+  <w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="22"/><w:rFonts w:ascii="Calibri"/></w:rPr></w:rPrDefault></w:docDefaults>
+  <w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:pPr><w:spacing w:before="0" w:after="200"/></w:pPr><w:rPr><w:b/><w:sz w:val="36"/><w:color w:val="1F3864"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Footer"><w:name w:val="footer"/><w:basedOn w:val="Normal"/><w:pPr><w:tabs><w:tab w:val="center" w:pos="4680"/><w:tab w:val="right" w:pos="9360"/></w:tabs><w:spacing w:before="0" w:after="0"/></w:pPr></w:style>
+</w:styles>`;
+  const pie = `<?xml version="1.0" encoding="UTF-8"?><w:ftr><w:p><w:pPr><w:pStyle w:val="Footer"/></w:pPr>
+    <w:r>${RPR_10}<w:t>Informe</w:t></w:r><w:r>${RPR_10}<w:tab/></w:r><w:r>${RPR_10}<w:tab/></w:r>
+    <w:r>${RPR_10}<w:t xml:space="preserve">Página </w:t></w:r><w:fldSimple w:instr=" PAGE "><w:r>${RPR_10}<w:t>1</w:t></w:r></w:fldSimple>
+    <w:r>${RPR_10}<w:t xml:space="preserve"> de </w:t></w:r><w:fldSimple w:instr=" NUMPAGES "><w:r>${RPR_10}<w:t>1</w:t></w:r></w:fldSimple>
+  </w:p></w:ftr>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/styles.xml', datos: Buffer.from(styles, 'utf-8') },
+    { nombre: 'word/_rels/document.xml.rels', datos: Buffer.from(relsXml([relacion('rIdF1', 'footer', 'footer1.xml', false)]), 'utf-8') },
+    { nombre: 'word/footer1.xml', datos: Buffer.from(pie, 'utf-8') }
+  ]);
+}
+
 /**
  * "Zip bomb" real: 8 MB de ceros comprimidos con deflate (que reduce a un
  * puñado de KB) en una única entrada — ejercita la defensa de ratio de
@@ -1530,6 +1665,10 @@ async function main() {
     'word-combinada.docx': docxCombinada(),
     'word-encabezados.docx': docxEncabezados(),
     'word-flotante.docx': docxFlotante(),
+    'word-secciones.docx': docxSecciones(),
+    'word-encabezado-rico.docx': docxEncabezadoRico(),
+    'word-ajuste.docx': docxAjuste(),
+    'word-tabs.docx': docxTabs(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {

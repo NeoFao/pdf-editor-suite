@@ -378,7 +378,8 @@ export function lineaConTabs(atoms: Atom[], desde: number, xIniPt: number, xFinP
     let off = 0;
     for (const [k, a] of g.entries()) {
       if (k > 0 && !a.pegado) off += medir(a.font, a.sizePt, ' ');
-      const idx = a.text.search(/[.,]/);
+      // El ÚLTIMO separador del átomo es el decimal ("1.234,50" y "1,234.50" cuadran por la coma y por el punto respectivamente).
+      const idx = Math.max(a.text.lastIndexOf('.'), a.text.lastIndexOf(','));
       if (idx >= 0) return off + medir(a.font, a.sizePt, a.text.slice(0, idx));
       off += medir(a.font, a.sizePt, a.text);
     }
