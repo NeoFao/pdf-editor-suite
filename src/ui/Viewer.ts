@@ -49,6 +49,8 @@ export interface ViewerCallbacks {
   onBackgroundClick: (pageIndex: number, at: PtPoint) => void;
   /** Doble clic en el marcador de una nota (B4): abre su editor con el texto actual. */
   onEditarNota?: (pageIndex: number, annotIndex: number, texto: string) => void;
+  /** Doble clic sobre un resaltado, subrayado o tachado: abrir su diálogo de comentario. */
+  onComentarMarcado?: (pageIndex: number, annotIndex: number) => void;
   /** `runIds`: todos los objetos de la línea que se mueve (una línea compuesta, N1). */
   onMove: (pageIndex: number, runId: number, dxPt: number, dyPt: number, runIds: readonly number[]) => void;
   onPageChange?: (pageIndex: number) => void;
@@ -256,7 +258,11 @@ export class Viewer {
     const hit = marcadoBajoPunto(this.marcadosDePagina(pageIndex), p.xPt, p.yPt);
     const actual = this.marcadoSel;
     if (!hit) { this.limpiarMarcadoSeleccionado(); return; }
-    if (actual && actual.pageIndex === pageIndex && actual.annotIndex === hit.index) { this.limpiarMarcadoSeleccionado(); return; }
+    if (actual && actual.pageIndex === pageIndex && actual.annotIndex === hit.index) {
+      // 2.º clic de un doble clic sobre el marcado: se queda seleccionado y no llega a la línea (lo recoge `dblclick`).
+      if (e.detail >= 2) { e.stopPropagation(); e.preventDefault(); return; }
+      this.limpiarMarcadoSeleccionado(); return;
+    }
     e.stopPropagation(); e.preventDefault();
     this.limpiarMarcadoSeleccionado();
     this.textoSel.limpiar();
@@ -272,6 +278,24 @@ export class Viewer {
       run.classList.add('selected');
       this.cb.onSelect(pageIndex, runId);
     }
+  }
+
+  /**
+   * Doble clic sobre un resaltado, subrayado o tachado (fase de CAPTURA): abre su diálogo de comentario. Usa la misma
+   * detección por QuadPoints que el clic (px CSS de página -> pt de usuario con la geometría común). El 2.º clic del
+   * par (`detail >= 2`) ya no deselecciona ni deja pasar el clic a la línea (ver `alClicMarcado`), así que aquí la
+   * anotación sigue seleccionada y la línea de debajo no entró a edición.
+   */
+  private alDobleClicMarcado(pageIndex: number, wrapper: HTMLElement, e: MouseEvent): void {
+    if (this.tool !== 'none') return;
+    const t = e.target as HTMLElement | null;
+    if (t?.closest('.run-drag, .run.editing, .image-box, input, select, textarea, button')) return;
+    const r = wrapper.getBoundingClientRect();
+    const p = this.geoms[pageIndex]!.cssToPt(e.clientX - r.left, e.clientY - r.top);
+    const hit = marcadoBajoPunto(this.marcadosDePagina(pageIndex), p.xPt, p.yPt);
+    if (!hit || hit.kind === 'note') return;
+    e.stopPropagation(); e.preventDefault();
+    this.cb.onComentarMarcado?.(pageIndex, hit.index);
   }
 
   /** Contorno visible de la anotación seleccionada: un recuadro por quad (px CSS de página, vía la geometría real). */
@@ -1094,6 +1118,7 @@ export class Viewer {
       });
       w.addEventListener('pointerdown', (e) => this.textoSel.alPulsar(page.index, e));
       w.addEventListener('click', (e) => this.alClicMarcado(page.index, w, e), true);
+      w.addEventListener('dblclick', (e) => this.alDobleClicMarcado(page.index, w, e), true);
       // Clic en el fondo (no en un run ni en el marco de una imagen) → insertar en ese punto y deseleccionar la imagen activa.
       w.addEventListener('click', (e) => {
         const target = e.target as HTMLElement;

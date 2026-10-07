@@ -7,9 +7,11 @@ import type { Command, Ctx } from './Command';
  */
 export class SetNoteTextCmd implements Command {
   readonly id = 'set-note-text';
-  readonly label = 'Editar nota';
+  readonly label: string;
   private previo: string | null = null;
-  constructor(readonly pageIndex: number, readonly annotIndex: number, readonly text: string) {}
+  constructor(readonly pageIndex: number, readonly annotIndex: number, readonly text: string, label = 'Editar nota') {
+    this.label = label;
+  }
 
   execute(c: Ctx): void {
     const actual = c.engine.getComments(c.doc, this.pageIndex).find((n) => n.index === this.annotIndex);

@@ -285,3 +285,13 @@ test('con un modal abierto tampoco se resuelven los atajos contextuales (Enter d
   expect(resolverAtajoContextual(enter)).not.toBeNull();
   expect(resolverAtajoContextual({ ...enter, modalAbierto: true })).toBeNull();
 });
+
+test('Enter con un marcado seleccionado: atajo contextual marcado-comentar, solo si se pide, y aparece en la tabla de ayuda', () => {
+  const enter = ev({ key: 'Enter' });
+  expect(resolverAtajoContextual(enter, ['marcado-comentar'])?.accion).toBe('marcado-comentar');
+  expect(resolverAtajoContextual(enter)?.accion).toBe('herramienta-colocar'); // Nota/Rectángulo mandan sin filtro
+  expect(resolverAtajoContextual(ev({ key: 'Enter', shift: true }), ['marcado-comentar'])).toBeNull();
+  expect(resolverAtajoContextual(ev({ key: 'Enter', editable: true }), ['marcado-comentar'])).toBeNull();
+  expect(resolverAtajo(enter)).toBeNull();
+  expect(TABLA_ATAJOS.some((d) => d.accion === 'marcado-comentar' && /doble clic/i.test(d.combinacion))).toBe(true);
+});

@@ -5,9 +5,11 @@ import { normalizarTextoNota } from '../texto/notaTexto';
  * Editor de nota (B4): sustituye al cuadro nativo de petición de texto. `<dialog>` modal con un textarea
  * multilínea («Texto de la nota»), Guardar y Cancelar. Ctrl/Cmd+Enter guarda; Escape cancela; el foco entra en el
  * textarea y, al cerrar, `mostrarModal` lo devuelve al disparador. Resuelve con el texto normalizado, o `null` si
- * se cancela o queda en blanco (así crear no deja una nota vacía). Sin innerHTML (§2.2): el valor entra por `.value`.
+ * se cancela o queda en blanco (así crear no deja una nota vacía). Con `permitirQuitar` (editar el comentario de un
+ * marcado) aparece además «Quitar comentario», que resuelve con `''` (vaciar `/Contents`): es el único modo de
+ * obtener `''`, así que un texto en blanco sigue siendo cancelar y no hay ambigüedad. Sin innerHTML (§2.2).
  */
-export function pedirTextoNota(opciones: { titulo: string; valorInicial?: string }): Promise<string | null> {
+export function pedirTextoNota(opciones: { titulo: string; valorInicial?: string; permitirQuitar?: boolean }): Promise<string | null> {
   return new Promise<string | null>((resolver) => {
     const dialog = document.createElement('dialog');
     dialog.id = 'nota-dialogo';
@@ -53,7 +55,17 @@ export function pedirTextoNota(opciones: { titulo: string; valorInicial?: string
     // Escape: el evento `cancel` nativo cierra el diálogo; `resultado` sigue en null.
     dialog.addEventListener('close', () => resolver(resultado));
 
-    barra.append(ayuda, btnCancelar, btnGuardar);
+    if (opciones.permitirQuitar) {
+      const btnQuitar = document.createElement('button');
+      btnQuitar.type = 'button';
+      btnQuitar.id = 'nota-dialogo-quitar';
+      btnQuitar.textContent = 'Quitar comentario';
+      btnQuitar.setAttribute('aria-label', 'Quitar comentario');
+      btnQuitar.addEventListener('click', () => { resultado = ''; dialog.close(); });
+      barra.append(ayuda, btnQuitar, btnCancelar, btnGuardar);
+    } else {
+      barra.append(ayuda, btnCancelar, btnGuardar);
+    }
     dialog.append(titulo, area, barra);
     mostrarModal(dialog, { tituloId: 'nota-dialogo-titulo' });
     area.focus();

@@ -777,7 +777,8 @@ export class App {
       irAPagina: (i) => this.goToPage(i),
       resaltar: (p, a) => this.viewer?.resaltarNota(p, a),
       editar: (p, a, t) => { void this.editarTextoNota(p, a, t); },
-      borrar: (p, a) => { void this.bus?.execute(new RemoveNoteCmd(p, a)); this.setStatus('Comentario borrado.'); }
+      borrar: (p, a) => { void this.bus?.execute(new RemoveNoteCmd(p, a)); this.setStatus('Comentario borrado.'); },
+      quitarComentario: (p, a) => { void this.quitarComentarioMarcado(p, a); }
     });
 
     this.outlineBarEl = document.createElement('div');
@@ -863,6 +864,19 @@ export class App {
       const def = resolverAtajoContextual({ key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey, editable: false });
       if (!def) return;
       if (this.ejecutarHerramientaTeclado(def.accion, e)) { e.preventDefault(); e.stopPropagation(); }
+    }, true);
+
+    // Enter con un marcado seleccionado (clic o Alt+↓/↑): abre su diálogo de comentario. En CAPTURA para adelantarse al
+    // Enter de la línea enfocada (que empezaría a editarla). Solo con la herramienta "ninguna" y el foco en el visor.
+    document.addEventListener('keydown', (e) => {
+      if (e.defaultPrevented || hayModalAbierto() || this.tool !== 'none' || !this.viewer) return;
+      if (esCampoEditable(e.target) || !this.focoEnVisor(e.target)) return;
+      const sel = this.viewer.marcadoSeleccionado();
+      if (!sel || sel.kind === 'note') return;
+      const def = resolverAtajoContextual({ key: e.key, ctrl: e.ctrlKey, meta: e.metaKey, shift: e.shiftKey, alt: e.altKey, editable: false }, ['marcado-comentar']);
+      if (!def) return;
+      e.preventDefault(); e.stopPropagation();
+      this.comentarMarcado(sel.pageIndex, sel.annotIndex);
     }, true);
 
     // Ctrl/Cmd+C con una selección de texto por arrastre (T12): copia exactamente ese tramo.
@@ -1205,6 +1219,7 @@ export class App {
       onBackgroundClick: (pageIndex, at) => { this.selectedImage = null; this.handleBackgroundClick(pageIndex, at); },
       onEraseMarcado: (pageIndex, annotIndex, kind) => { this.borrarMarcado(pageIndex, annotIndex, kind); },
       onEditarNota: (pageIndex, annotIndex, texto) => { void this.editarTextoNota(pageIndex, annotIndex, texto); },
+      onComentarMarcado: (pageIndex, annotIndex) => { this.comentarMarcado(pageIndex, annotIndex); },
       onMarcadoSelect: (sel) => {
         if (!sel) return;
         this.selection = null; // la anotación sustituye a la selección de una línea o imagen
@@ -1452,10 +1467,33 @@ export class App {
   private async editarTextoNota(pageIndex: number, annotIndex: number, actual: string): Promise<void> {
     if (this.bloqueado()) return;
     const nueva = actual === ''; // un marcado sin /Contents: se añade el primer comentario
-    const text = await pedirTextoNota({ titulo: nueva ? 'Añadir nota' : 'Editar nota', valorInicial: actual });
+    // Solo un marcado con comentario puede quedarse sin él; una nota /Text no (quitarla es borrarla).
+    const permitirQuitar = !nueva && this.esMarcadoTexto(pageIndex, annotIndex);
+    const text = await pedirTextoNota({ titulo: nueva ? 'Añadir nota' : 'Editar nota', valorInicial: actual, permitirQuitar });
     if (text === null || text === actual || !this.bus) return;
+    if (text === '') { await this.quitarComentarioMarcado(pageIndex, annotIndex); return; }
     await this.bus.execute(new SetNoteTextCmd(pageIndex, annotIndex, text));
     this.setStatus(nueva ? 'Comentario añadido.' : 'Comentario editado.');
+  }
+
+  /** ¿La anotación `annotIndex` de la página es un resaltado, subrayado o tachado? */
+  private esMarcadoTexto(pageIndex: number, annotIndex: number): boolean {
+    const c = this.session?.engine.getComments(this.session.doc, pageIndex).find((n) => n.index === annotIndex);
+    return !!c && (c.kind === 'highlight' || c.kind === 'underline' || c.kind === 'strikeout');
+  }
+
+  /** Vacía el comentario de un marcado (el marcado se queda), con deshacer. Las notas /Text no se vacían: se borran. */
+  private async quitarComentarioMarcado(pageIndex: number, annotIndex: number): Promise<void> {
+    if (this.bloqueado() || !this.bus || !this.esMarcadoTexto(pageIndex, annotIndex)) return;
+    await this.bus.execute(new SetNoteTextCmd(pageIndex, annotIndex, '', 'Quitar comentario'));
+    this.setStatus('Comentario quitado.');
+  }
+
+  /** Abre el diálogo de comentario del marcado `annotIndex` (doble clic en la página, o Enter con él seleccionado). */
+  private comentarMarcado(pageIndex: number, annotIndex: number): void {
+    const c = this.session?.engine.getComments(this.session.doc, pageIndex).find((n) => n.index === annotIndex);
+    if (!c || !this.esMarcadoTexto(pageIndex, annotIndex)) return;
+    void this.editarTextoNota(pageIndex, annotIndex, c.text);
   }
 
   /** Deshace y lo anuncia en `#status` (B1: un lector de pantalla no recibía confirmación). */

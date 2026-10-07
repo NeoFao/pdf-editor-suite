@@ -14,7 +14,10 @@ Código: `src/ui/ComentariosPanel.ts`; motor: `getComments` / `setNoteText`
   listan siempre. Muestran el TEXTO que cubren entre «», extraído con sus
   QuadPoints (`src/texto/textoMarcado.ts`, E-094), y debajo su `/Contents` si
   lo tienen. «Añadir/Editar comentario» abre el diálogo de nota (E-092). El
-  filtro busca también en el texto marcado.
+  filtro busca también en el texto marcado. «Quitar comentario» (panel y, al
+  editar, el diálogo) vacía el `/Contents` del marcado con deshacer, sin borrarlo
+  (E-095). Doble clic sobre el marcado en la página, o Enter con él seleccionado
+  (Alt+↓/↑), abre ese diálogo.
 - Por elemento: página, tipo, extracto (140 car.) y autor (`/T`) si existe.
 - Clic: `goToPage` + resalta la nota en el visor (clase `.note-marker.activa`).
 - Editar (`/Contents` vía `FPDFAnnot_SetStringValue`, deshacer restaura el texto
