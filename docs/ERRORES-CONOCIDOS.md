@@ -3157,3 +3157,25 @@ texto marcado (un resaltado propio no lo trae: «(sin texto)»), así que el def
 línea, y se normalizan los blancos (`\s+` a un espacio). Unidades: pt de usuario PDF.
 
 **Cómo se detecta ahora.** `tests/unit/seleccionTeclado.test.ts` («B3: …», dos casos). Sin regla guard: es una función pura con test.
+
+---
+
+### E-094 · El panel Comentarios mostraba «(sin texto)» en los resaltados y no dejaba comentarlos
+
+**Síntoma.** Un resaltado, subrayado o tachado propio salía en el panel como «Resaltado · Página 1 / (sin texto)»: el panel solo
+conocía el `/Contents` de la anotación, que un marcado no trae. No se veía qué texto cubría, el filtro no lo encontraba y no había
+forma de añadirle un comentario (Acrobat sí enseña el texto marcado y permite comentarlo).
+
+**Causa raíz.** El panel se diseñó para notas (T3), donde el texto de la anotación ES el comentario. Un marcado separa dos cosas: el
+texto de la página que cubre (sale de sus QuadPoints) y su comentario (`/Contents`, opcional). Solo se leía lo segundo.
+
+**Arreglo.** `textoMarcadoDeAnotacion` (`src/texto/textoMarcado.ts`) saca el texto con los QuadPoints reutilizando `getCharBoxes`
+(cacheado por página en `EditSession.ensureChars`) y `textoDeMarcado` (E-093), en pt de usuario sin girar, así que `/Rotate` y las
+cajas desplazadas (E-053/E-084) ya vienen resueltos. El panel lo calcula al leer cada página (cede el hilo por tiempo además de por
+páginas, E-043), lo cachea por anotación y lo descarta en `invalidarPagina`/`invalidarTodo` (`refreshPage`). Se muestra entre «»,
+truncado, con el comentario debajo si existe; «Añadir comentario» / «Editar comentario» abren el diálogo de E-092 y guardan con
+`SetNoteTextCmd` (deshacer). El filtro busca también en el texto marcado y el `aria-label` incluye tipo, página, texto y comentario.
+
+**Cómo se detecta ahora.** `tests/unit/textoMarcadoPanel.test.ts` (2 líneas, `/Rotate 90`, `/Contents` persistente) y
+`tests/e2e/next/comentarios-marcado.spec.ts` (texto exacto, comentario multilínea que persiste y se deshace, filtro, CropBox
+desplazada y `/Rotate 90`). Sin regla guard: es funcionalidad de presentación con test.

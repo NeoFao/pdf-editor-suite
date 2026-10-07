@@ -71,6 +71,7 @@ import { SetOutlineCmd } from '../commands/SetOutline';
 import { STANDARD_FONTS } from '../engine/standardFontFor';
 import { stripSubsetPrefix } from '../engine/fontClassify';
 import { ComentariosPanel } from './ComentariosPanel';
+import { textoMarcadoDeAnotacion } from '../texto/textoMarcado';
 import { SetNoteTextCmd } from '../commands/SetNoteText';
 import { RemoveNoteCmd } from '../commands/RemoveNote';
 import { crearIcono, type NombreIcono } from './iconos';
@@ -772,6 +773,7 @@ export class App {
     this.comentarios = new ComentariosPanel(this.commentsEl, {
       totalPaginas: () => this.session?.model.pages.length ?? 0,
       leerPagina: (i) => (this.session ? this.session.engine.getComments(this.session.doc, i) : []),
+      textoMarcado: (p, c) => (this.session ? textoMarcadoDeAnotacion(this.session, p, c) : ''),
       irAPagina: (i) => this.goToPage(i),
       resaltar: (p, a) => this.viewer?.resaltarNota(p, a),
       editar: (p, a, t) => { void this.editarTextoNota(p, a, t); },
@@ -1449,10 +1451,11 @@ export class App {
   /** Edita el texto de una anotación con el diálogo de nota (panel Comentarios y doble clic en el marcador). */
   private async editarTextoNota(pageIndex: number, annotIndex: number, actual: string): Promise<void> {
     if (this.bloqueado()) return;
-    const text = await pedirTextoNota({ titulo: 'Editar nota', valorInicial: actual });
+    const nueva = actual === ''; // un marcado sin /Contents: se añade el primer comentario
+    const text = await pedirTextoNota({ titulo: nueva ? 'Añadir nota' : 'Editar nota', valorInicial: actual });
     if (text === null || text === actual || !this.bus) return;
     await this.bus.execute(new SetNoteTextCmd(pageIndex, annotIndex, text));
-    this.setStatus('Comentario editado.');
+    this.setStatus(nueva ? 'Comentario añadido.' : 'Comentario editado.');
   }
 
   /** Deshace y lo anuncia en `#status` (B1: un lector de pantalla no recibía confirmación). */

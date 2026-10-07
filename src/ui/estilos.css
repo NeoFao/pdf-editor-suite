@@ -760,6 +760,7 @@ dialog.compress-panel[open] { display: flex; }
 .comentario-item:focus-visible, .comentario-accion:focus-visible { outline: 2px solid var(--ed-focus-ring); outline-offset: 2px; }
 .comentario-meta { font-size: 11px; color: var(--ed-text-muted); }
 .comentario-texto { overflow-wrap: anywhere; white-space: pre-line; }
+.comentario-marcado { overflow-wrap: anywhere; font-style: italic; }
 .note-marker.activa { outline: 2px solid var(--ed-accent); background: rgba(250, 204, 21, .35) !important; }
 
 /* Panel de marcadores editable: barra de acciones, selección y campo de título inline. */
