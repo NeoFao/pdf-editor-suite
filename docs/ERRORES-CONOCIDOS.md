@@ -3367,16 +3367,16 @@ ZapfDingbats; ▪ ◦ □ no existen en ninguna estándar).
 **Arreglo.** `pPrEfectivo` + `listaDeParrafo` (modelo.ts) son el camino ÚNICO del cuerpo y de las celdas; la celda añade una parte
 `inicioParrafo` (marcador + sangría del nivel) y `celdaAGrupos` (render.ts) la dibuja con `atomoMarcador`, el mismo átomo del cuerpo.
 Los contadores viven en `ctx.contadoresListas` (uno por documento, por `numId`), así que continúan entre celdas y cuerpo en orden de
-documento. `src/convert/docx/vinetas.ts`: `resolverVineta(lvlText, fuente)` traduce (Symbol B7 → •, Wingdings A7 → ▪, D8 → ➢, FC → ✓,
-76 → ❖, A8 → □, Courier New "o" → ◦; también el código Latin-1 de documentos antiguos) y elige la fuente estándar con el glifo. El
-cuadradito ▪ se dibuja con ■ de ZapfDingbats al 60 % (misma forma; el texto extraído es "■", no "▪"); la "o" de Courier New es el
-glifo original de Word. Sin glifo posible (□) o carácter/fuente desconocidos: "•" y aviso `aproximado` `vinetaFuente`. Las
-correspondencias oficiales (Alan Wood / Unicode) de D8, FC y A8 son U+2B9A, U+2714 y U+25FB; se usan las del dueño (➢ ✓ □), que son
-las que una estándar puede dibujar o avisar.
+documento. `src/convert/docx/vinetas.ts`: `resolverVineta(lvlText, fuente)` traduce al Unicode OFICIAL (Alan Wood / Unicode: Wingdings
+A7 = U+25AA, A8 = U+25FB, D8 = U+2B9A, FC = U+2714, 76 = U+2756; Symbol B7 = U+2022; Courier New "o" = la letra "o"; también el código
+Latin-1 de documentos antiguos) y elige la fuente estándar con el glifo exacto (✔ ❖ con ZapfDingbats). Solo lo EXACTO va sin aviso:
+toda sustitución visual (▪ dibujado como ■ al 60 %, U+2B9A como ➢, U+25FB sin glifo como "•", o un carácter/fuente desconocidos)
+avisa `aproximado` (`vinetaFuente`) con el carácter original y el dibujado. Los párrafos sin lista de una celda aplican también su
+sangría (mismo `pPrEfectivo`).
 
 **Cómo se detecta ahora.** `tests/unit/docx-vinetas.test.ts` (tabla y caída a aproximado), `docx-modelo-listas-celda.test.ts`
-(contadores 1-6 entre cuerpo y celdas, dos `numId`, sangría, posición x en el PDF, aviso), `ConversorDocxNavegador-2c.test.ts` y el
-E2E de `word-a-pdf.spec.ts` con el fixture `word-listas-celda.docx` ("3. tres" dentro de la celda, "5. cinco", ✓ y ■ en su línea).
-Sin regla guard: es funcionalidad con test. Límites: la sangría de párrafos SIN lista dentro de una celda sigue sin aplicarse; una
+(contadores 1-6 entre cuerpo y celdas, dos `numId`, sangría con y sin lista, posición x en el PDF, avisos), `ConversorDocxNavegador-2c.test.ts` y el
+E2E de `word-a-pdf.spec.ts` con el fixture `word-listas-celda.docx` ("3. tres" dentro de la celda, "5. cinco", ✔ y ■ en su línea, un aviso por el ▪).
+Sin regla guard: es funcionalidad con test. Límites: la sangría derecha y la alineación por párrafo dentro de una celda no se aplican; una
 viñeta con imagen (`w:lvlPicBulletId`) no se reproduce; el reparto de contadores entre `w:num` distintos con el mismo `abstractNum`
 sigue sin modelarse.

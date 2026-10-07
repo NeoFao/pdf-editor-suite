@@ -57,23 +57,46 @@ test('en el PDF, la primera línea de cada ítem de la celda lleva su marcador y
 const lvlBullet = (texto: string, fuente: string | null) =>
   `<w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="${texto}"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>${fuente ? `<w:rPr><w:rFonts w:ascii="${fuente}" w:hAnsi="${fuente}" w:hint="default"/></w:rPr>` : ''}</w:lvl>`;
 
-test('la viñeta usa el carácter de lvlText: Wingdings F0FC es ✓ y lleva fuente ZapfDingbats', () => {
+test('la viñeta usa el carácter de lvlText: Wingdings F0FC es ✔ (exacto) con fuente ZapfDingbats y NO avisa', () => {
   const m = construirModeloDocx(doc(item('a')), null, numbering(lvlBullet('', 'Wingdings')));
   const p = m.bloques.filter(esParrafo)[0]!;
-  expect(p.lista).toMatchObject({ textoMarcador: '✓', fuenteMarcador: 'ZapfDingbats' });
+  expect(p.lista).toMatchObject({ textoMarcador: '✔', fuenteMarcador: 'ZapfDingbats' });
   expect(textosAdvertencias(m.advertencias).join('|')).not.toMatch(/viñeta/i);
 });
 
-test('una viñeta sin glifo disponible (Wingdings F0A8) sale como "•" y avisa como aproximado, una sola vez por tipo', () => {
-  const m = construirModeloDocx(doc(item('a'), item('b')), null, numbering(lvlBullet('', 'Wingdings')));
-  expect(m.bloques.filter(esParrafo).map((p) => p.lista?.textoMarcador)).toEqual(['•', '•']);
-  const aviso = m.advertencias.filter((a) => /viñeta/i.test(a.mensaje));
-  expect(aviso).toHaveLength(1);
-  expect(aviso[0]!.tipo).toBe('aproximado');
+test('toda sustitución visual avisa (aproximado) con el carácter original y el dibujado, una vez por par', () => {
+  const casos: [string, string, string][] = [['', '▪', '■'], ['', 'U+2B9A', '➢'], ['', 'U+25FB', '•']];
+  for (const [car, original, dibujado] of casos) {
+    const m = construirModeloDocx(doc(item('a'), item('b')), null, numbering(lvlBullet(car, 'Wingdings')));
+    expect(m.bloques.filter(esParrafo).map((p) => p.lista?.textoMarcador)).toEqual([dibujado, dibujado]);
+    const aviso = m.advertencias.filter((a) => /viñeta/i.test(a.mensaje));
+    expect(aviso).toHaveLength(1);
+    expect(aviso[0]!.tipo).toBe('aproximado');
+    expect(aviso[0]!.mensaje).toContain(original);
+    expect(aviso[0]!.mensaje).toContain(`"${dibujado}"`);
+    expect(aviso[0]!.mensaje).toContain('Wingdings');
+  }
 });
 
 test('una viñeta dentro de una celda también usa su carácter real', () => {
   const m = construirModeloDocx(doc(tabla(celda(item('a')))), null, numbering(lvlBullet('', 'Wingdings')));
   const ini = m.bloques.find(esTabla)!.filas[0]!.celdas[0]!.partes.find((p) => p.tipo === 'inicioParrafo');
   expect(ini).toMatchObject({ lista: { textoMarcador: '➢' } });
+  expect(m.advertencias.some((a) => /viñeta/i.test(a.mensaje))).toBe(true);
+});
+
+test('la sangría de un párrafo SIN lista dentro de una celda se aplica (mismo camino que el cuerpo)', () => {
+  const p = '<w:p><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr><w:r><w:t>sangrado</w:t></w:r></w:p>';
+  const m = construirModeloDocx(doc(tabla(celda(p))), null, null);
+  const ini = m.bloques.find(esTabla)!.filas[0]!.celdas[0]!.partes.find((x) => x.tipo === 'inicioParrafo');
+  expect(ini).toMatchObject({ lista: null, sangriaIzqPt: 36, sangriaPrimeraLineaPt: -18 });
+  const r = renderizarModeloDocx(m, (_f, sz, t) => t.length * sz * 0.5);
+  const t = r.trazos.find((x) => x.text.includes('sangrado'))!;
+  expect(t.xPt).toBeCloseTo(72 + 5 + 36 - 18, 1);
+});
+
+test('un párrafo de celda sin sangría no cambia: x en el borde interior', () => {
+  const m = construirModeloDocx(doc(tabla(celda('<w:p><w:r><w:t>plano</w:t></w:r></w:p>'))), null, null);
+  const r = renderizarModeloDocx(m, (_f, sz, t) => t.length * sz * 0.5);
+  expect(r.trazos.find((x) => x.text.includes('plano'))!.xPt).toBeCloseTo(72 + 5, 1);
 });

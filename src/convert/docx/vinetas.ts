@@ -9,10 +9,10 @@
  *    los de WinAnsi; ZapfDingbats tiene ✓ ➢ ❖ ■; ni ▪ ni ◦ ni □ existen en ninguna estándar).
  * Lo que no llega al final del camino cae a "•" y se marca `aproximada` (aviso `vinetaFuente`).
  *
- * Equivalencias (Wingdings, tabla de Alan Wood / Unicode "official mappings"): A7 = U+25AA ▪, 76 = U+2756 ❖. El dueño
- * fija D8 = ➢ (U+27A2) y FC = ✓ (U+2713) y A8 = □ (U+25A1); la tabla oficial dice 2B9A, 2714 y 25FB (glifos casi iguales,
- * pero ZapfDingbats solo dibuja los primeros). Symbol B7 = U+2022 (Adobe symbol.txt). Courier New "o" = ◦ por convención
- * (Word dibuja ahí una "o" minúscula de Courier, que es justo lo que se reproduce).
+ * Equivalencias OFICIALES (Wingdings: Alan Wood / Unicode "official mappings"): A7 = U+25AA ▪, A8 = U+25FB ◻, D8 = U+2B9A ⮚,
+ * FC = U+2714 ✔, 76 = U+2756 ❖. Symbol B7 = U+2022 (Adobe symbol.txt). Courier New "o" es la propia letra "o" (lo que Word dibuja).
+ * Solo lo EXACTO (el glifo oficial existe en la fuente estándar) va sin aviso; toda sustitución visual (▪ como ■ al 60 %, ⮚ como ➢,
+ * ◻ sin glifo -> "•") es `aproximada` y el llamante avisa con el carácter original y el dibujado.
  */
 
 export interface VinetaResuelta {
@@ -22,29 +22,36 @@ export interface VinetaResuelta {
   font: string;
   /** Factor sobre el tamaño de la fuente del párrafo. */
   escala: number;
-  /** `true`: no se pudo reproducir; se usó "•" (el llamante avisa con `vinetaFuente`). */
+  /** `true`: lo dibujado NO es exactamente el carácter oficial (sustituto visual o "•"): el llamante avisa (`vinetaFuente`). */
   aproximada: boolean;
+  /** Carácter oficial/original del `lvlText` (para el aviso); coincide con `texto` cuando no hay aproximación. */
+  oficial: string;
 }
 
-const POR_DEFECTO: VinetaResuelta = { texto: '•', font: 'Helvetica', escala: 1, aproximada: false };
-const APROXIMADA: VinetaResuelta = { ...POR_DEFECTO, aproximada: true };
+const POR_DEFECTO: VinetaResuelta = { texto: '•', font: 'Helvetica', escala: 1, aproximada: false, oficial: '•' };
 
 /** Código (0x20..0xFF) de la fuente de símbolos -> Unicode. */
 const EQUIVALENTE_UNICODE: Readonly<Record<string, ReadonlyMap<number, string>>> = {
   symbol: new Map([[0xb7, '•']]),
-  wingdings: new Map([[0xa7, '▪'], [0xd8, '➢'], [0xfc, '✓'], [0x76, '❖'], [0xa8, '□']])
+  wingdings: new Map([[0xa7, '▪'], [0xa8, '◻'], [0xd8, '⮚'], [0xfc, '✔'], [0x76, '❖']])
 };
 
-/** Unicode -> cómo dibujarlo con una fuente estándar; ausente = ninguna estándar tiene el glifo. */
-const GLIFO_ESTANDAR: ReadonlyMap<string, { texto: string; font: string; escala: number }> = new Map([
-  ['•', { texto: '•', font: 'Helvetica', escala: 1 }],
-  ['✓', { texto: '✓', font: 'ZapfDingbats', escala: 1 }],
-  ['➢', { texto: '➢', font: 'ZapfDingbats', escala: 1 }],
-  ['❖', { texto: '❖', font: 'ZapfDingbats', escala: 1 }],
-  // ▪ (cuadrado pequeño): no existe en ninguna estándar; el cuadrado de ZapfDingbats a 0,6 es la misma forma.
-  ['▪', { texto: '■', font: 'ZapfDingbats', escala: 0.6 }],
-  // ◦ (Courier New "o"): se dibuja el glifo original, la "o" de Courier.
-  ['◦', { texto: 'o', font: 'Courier', escala: 1 }]
+/**
+ * Unicode oficial -> cómo dibujarlo con una fuente estándar; ausente = ninguna estándar tiene el glifo. `exacto: false`: el glifo
+ * dibujado es otro (un sustituto visual) y se avisa.
+ */
+const GLIFO_ESTANDAR: ReadonlyMap<string, { texto: string; font: string; escala: number; exacto: boolean }> = new Map([
+  ['•', { texto: '•', font: 'Helvetica', escala: 1, exacto: true }],
+  ['✔', { texto: '✔', font: 'ZapfDingbats', escala: 1, exacto: true }],
+  ['✓', { texto: '✓', font: 'ZapfDingbats', escala: 1, exacto: true }],
+  ['➢', { texto: '➢', font: 'ZapfDingbats', escala: 1, exacto: true }],
+  ['❖', { texto: '❖', font: 'ZapfDingbats', escala: 1, exacto: true }],
+  // ▪ (cuadrado pequeño): no existe en ninguna estándar; el cuadrado de ZapfDingbats a 0,6 es un sustituto.
+  ['▪', { texto: '■', font: 'ZapfDingbats', escala: 0.6, exacto: false }],
+  // ⮚ (U+2B9A): ninguna estándar lo tiene; ➢ (U+27A2) de ZapfDingbats es el sustituto más cercano.
+  ['⮚', { texto: '➢', font: 'ZapfDingbats', escala: 1, exacto: false }],
+  // Courier New "o": se dibuja la propia "o" de Courier, que es lo que dibuja Word.
+  ['o', { texto: 'o', font: 'Courier', escala: 1, exacto: true }]
 ]);
 
 /** Caracteres que Helvetica (WinAnsi) dibuja tal cual: ASCII imprimible, Latin-1 y las rayas/viñeta de CP1252. */
@@ -64,12 +71,14 @@ export function resolverVineta(lvlText: string | null, fuente: string | null): V
     const codigo = c >= 0xf020 && c <= 0xf0ff ? c - 0xf000 : c <= 0xff ? c : -1;
     unicode = tabla.get(codigo);
   } else if (familia === 'courier new' && primero === 'o') {
-    unicode = '◦';
+    unicode = 'o';
   } else if (!enZonaPrivada && dibujableEnHelvetica(c)) {
-    return { texto: primero, font: 'Helvetica', escala: 1, aproximada: false };
+    return { texto: primero, font: 'Helvetica', escala: 1, aproximada: false, oficial: primero };
   } else if (!enZonaPrivada) {
     unicode = primero; // un Unicode normal (✓, ➢...) que quizá una estándar sí tenga
   }
+  const oficial = unicode ?? primero;
   const glifo = unicode !== undefined ? GLIFO_ESTANDAR.get(unicode) : undefined;
-  return glifo ? { ...glifo, aproximada: false } : APROXIMADA;
+  if (!glifo) return { texto: '•', font: 'Helvetica', escala: 1, aproximada: true, oficial };
+  return { texto: glifo.texto, font: glifo.font, escala: glifo.escala, aproximada: !glifo.exacto, oficial };
 }

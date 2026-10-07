@@ -300,13 +300,16 @@ test('abrir word-numeracion-tabs.docx: marcadores romanos y de letra, y la tabul
   eng.close(doc);
 });
 
-test('abrir word-listas-celda.docx: la lista numerada sigue dentro de la celda (3., 4.) y vuelve al cuerpo (5.); viñetas ✓ y cuadradito, sin aviso (E-102)', async ({ page }) => {
+test('abrir word-listas-celda.docx: la lista numerada sigue dentro de la celda (3., 4.) y vuelve al cuerpo (5.); viñetas ✔ exacta y cuadradito con aviso (E-102)', async ({ page }) => {
   const { eng, doc } = await convertirYGuardar(page, WORD_LISTAS_CELDA, 'word-listas-celda');
-  await expect(page.locator('#conversion-warnings')).toBeHidden();
+  // Solo el ▪ (sustituido por ■) avisa; ✔ y la redonda de Symbol son exactas.
+  await expect(page.locator('#conversion-warnings')).toBeVisible();
+  await expect(page.locator('#conversion-warnings')).toContainText('viñeta');
+  await expect(page.locator('#conversion-warnings')).toContainText('▪');
   const runs = eng.getPageText(doc, 0);
   const lineas = runs.map((r) => r.textoReal.trim());
   for (const esperada of ['1. uno', '2. dos', '3. tres', '4. cuatro', '5. cinco', '• redonda']) expect(lineas).toContain(esperada);
-  for (const [vineta, texto] of [['■', 'cuadro'], ['✓', 'visto']] as const) {
+  for (const [vineta, texto] of [['■', 'cuadro'], ['✔', 'visto']] as const) {
     const v = runs.find((r) => r.textoReal.trim() === vineta)!;
     const t = runs.find((r) => r.textoReal.trim() === texto)!;
     expect(v).toBeDefined();

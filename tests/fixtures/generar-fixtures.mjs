@@ -1074,8 +1074,8 @@ function docxNumeracionTabs() {
 
 /**
  * `word-listas-celda.docx` (E-102): una lista numerada que EMPIEZA en el cuerpo (1. 2.), sigue dentro de una celda (3. 4.) y
- * vuelve al cuerpo (5.); en la otra celda, viñetas Wingdings (F0A7 cuadradito, F0FC visto) y Symbol (F0B7 redonda).
- * Sin avisos: los cuatro glifos se dibujan (el cuadradito con el cuadrado de ZapfDingbats a escala reducida).
+ * vuelve al cuerpo (5.); en la otra celda, viñetas Wingdings (F0A7 cuadradito, F0FC ✔) y Symbol (F0B7 redonda).
+ * Un solo aviso (aproximado): el cuadradito U+25AA se dibuja con el cuadrado de ZapfDingbats a escala reducida; ✔ y la redonda son exactos.
  */
 export const DOCX_LISTAS_CELDA = { cuerpo: ['uno', 'dos'], celdaA: ['tres', 'cuatro'], cuerpoFinal: 'cinco', celdaB: ['cuadro', 'visto', 'redonda'] };
 function docxListasCelda() {

@@ -1,6 +1,6 @@
 import { DocxError } from './DocxError';
 import { formatoNumero, aplicarLvlText } from './numeracion';
-import { resolverVineta } from './vinetas';
+import { resolverVineta, type VinetaResuelta } from './vinetas';
 import { omitido, aproximado, type Advertencia, type TipoAdvertencia } from '../advertencia';
 import { parseXml, hijosElemento, primerHijo, textoDirecto, buscarDescendiente, type XmlElemento } from './xml';
 import { classifyFont } from '../../engine/fontClassify';
@@ -450,11 +450,22 @@ function siguienteMarcador(numId: string, ilvl: number, nivel: NivelListaDef, ct
   };
   if (nivel.formato === 'bullet') {
     const v = resolverVineta(nivel.lvlText, nivel.fuenteVineta);
-    if (v.aproximada) anotar(ctx, 'vinetaFuente');
+    if (v.aproximada) avisarVineta(v, nivel.fuenteVineta, ctx);
     return { textoMarcador: v.texto, fuenteMarcador: v.font, escalaMarcador: v.escala };
   }
   const plantilla = nivel.lvlText ?? `%${ilvl + 1}.`;
   return { textoMarcador: aplicarLvlText(plantilla, Array.from({ length: ilvl + 1 }, (_v, k) => formateado(k))) };
+}
+
+/** Aviso `vinetaFuente` (aproximado), uno por par original/dibujado: dice QUÉ carácter pedía Word y CUÁL se dibujó. */
+function avisarVineta(v: VinetaResuelta, fuente: string | null, ctx: Contexto): void {
+  const cod = (c: string): string => `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`;
+  const clave = `${fuente ?? ''}|${v.oficial}|${v.texto}|${v.font}`;
+  if (ctx.vinetasAvisadas.has(clave)) return;
+  ctx.vinetasAvisadas.add(clave);
+  const original = /[-]/.test(v.oficial) ? cod(v.oficial) : `"${v.oficial}" (${cod(v.oficial)})`;
+  const dibujado = v.font === 'Helvetica' ? `"${v.texto}"` : `"${v.texto}" (${v.font}${v.escala !== 1 ? ` al ${Math.round(v.escala * 100)} %` : ''})`;
+  ctx.advertenciasExtra.push(aproximado(`vinetaFuente: la viñeta ${original}${fuente ? ` de ${fuente}` : ''} se dibujó como ${dibujado}: ninguna fuente estándar del PDF tiene ese glifo exacto.`));
 }
 
 function calcularInfoLista(numId: string, ilvl: number, ctx: Contexto): InfoLista | null {
@@ -581,6 +592,8 @@ interface Contexto {
   numMap: Map<string, string>;
   abstractNums: Map<string, AbstractNumDef>;
   contadoresListas: Map<string, (number | null)[]>;
+  /** Viñetas ya avisadas (`vinetaFuente`), para un aviso por par original/dibujado. */
+  vinetasAvisadas: Set<string>;
   /** `word/_rels/document.xml.rels` ya parseado (`null` si el .docx no lo trae, p. ej. sin imágenes ni enlaces). */
   rels: Map<string, Relacion> | null;
   /**
@@ -618,7 +631,6 @@ const MENSAJES_PERDIDAS: [string, TipoAdvertencia, (c: number) => string][] = [
   ['saltoPaginaEnCelda', 'aproximado', (c) => cuenta(c, 'Un salto de página dentro de una celda de tabla se trató como salto de línea.', '{n} saltos de página dentro de celdas de tabla se trataron como saltos de línea.')],
   ['flotante', 'aproximado', (c) => cuenta(c, 'Imagen flotante colocada sin ajuste de texto (el texto no la rodea y puede quedar debajo o encima de ella).', '{n} imágenes flotantes colocadas sin ajuste de texto (el texto no las rodea y puede quedar debajo o encima de ellas).')],
   ['flotanteAprox', 'aproximado', (c) => cuenta(c, 'El ajuste de texto de una imagen flotante con contorno (estrecho o a través, con polígono) se aproximó a un cuadrado.', 'El ajuste de texto de {n} imágenes flotantes con contorno (estrecho o a través, con polígono) se aproximó a un cuadrado.')],
-  ['vinetaFuente', 'aproximado', (c) => cuenta(c, 'Una viñeta usa un símbolo (de Wingdings, Symbol...) que ninguna fuente estándar del PDF tiene y se dibujó como "•".', '{n} viñetas usan un símbolo (de Wingdings, Symbol...) que ninguna fuente estándar del PDF tiene y se dibujaron como "•".')],
   ['listaFormato', 'aproximado', (c) => cuenta(c, 'Un párrafo de lista usa un formato de numeración no soportado (p. ej. ordinales en letras) y se numeró con cifras.', '{n} párrafos de lista usan un formato de numeración no soportado (p. ej. ordinales en letras) y se numeraron con cifras.')],
   ['seccionParImpar', 'aproximado', (c) => cuenta(c, 'Un salto de sección de tipo página par, página impar o columna siguiente se trató como un salto a página nueva.', '{n} saltos de sección de tipo página par, página impar o columna siguiente se trataron como saltos a página nueva.')],
   ['numeroPaginaFormato', 'aproximado', (c) => cuenta(c, 'El formato de numeración de página de una sección (romano, letras...) no se reproduce: se numera con cifras arábigas.', 'El formato de numeración de página de {n} secciones (romano, letras...) no se reproduce: se numera con cifras arábigas.')],
@@ -1053,9 +1065,9 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
         const jc = pPr ? primerHijo(pPr, 'w:jc') : null;
         if (jc?.atributos['w:val'] !== undefined) alineacion = mapAlineacion(jc.atributos['w:val']);
       }
-      // Lista de la celda (E-102): mismo marcador, mismos contadores y misma sangría que un párrafo de cuerpo.
+      // Lista y sangría de la celda (E-102): mismo marcador, mismos contadores y misma sangría que un párrafo de cuerpo (sea o no de lista).
       const { acc: accP } = pPrEfectivo(hijo, ctx);
-      if (accP.numId) partes.push({ tipo: 'inicioParrafo', lista: listaDeParrafo(accP, ctx), sangriaIzqPt: accP.sangriaIzqPt, sangriaPrimeraLineaPt: accP.sangriaPrimeraLineaPt });
+      if (accP.numId || accP.sangriaIzqPt !== 0 || accP.sangriaPrimeraLineaPt !== 0) partes.push({ tipo: 'inicioParrafo', lista: listaDeParrafo(accP, ctx), sangriaIzqPt: accP.sangriaIzqPt, sangriaPrimeraLineaPt: accP.sangriaPrimeraLineaPt });
       const baseRuns = rPrPorDefecto();
       if (ctx.docDefaultsRPr) aplicarRPr(baseRuns, ctx.docDefaultsRPr);
       const desde = partes.length;
@@ -1283,7 +1295,7 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
     : { numMap: new Map<string, string>(), abstractNums: new Map<string, AbstractNumDef>() };
   const rels = relsXml ? leerRelaciones(relsXml) : null;
 
-  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, camposAbiertos: [] };
+  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), vinetasAvisadas: new Set(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, camposAbiertos: [] };
 
   const bloques: BloqueDocx[] = [];
   // Una marca por sección, en orden de documento: su `w:sectPr` y dónde acaba (índice en `bloques`, exclusivo).
