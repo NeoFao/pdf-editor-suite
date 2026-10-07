@@ -3300,3 +3300,28 @@ combinar otro PDF en la sesión se ven con UserUnit 1 hasta reabrir el fichero g
 
 **Cómo se detecta ahora.** `tests/e2e/next/userunit.spec.ts` (E-099: doble tamaño, inválido = 1, `/Rotate 90`, modo ancho, bytes
 idénticos; las E-098 se repiten con zoom manual) y `PdfiumEngine.pageBox.test.ts`. Sin regla guard: no hay patrón de código fiable.
+
+### E-100 · La selección de texto con el ratón se quedaba en UNA página (paridad con Acrobat)
+
+**Síntoma.** Un arrastre que empezaba en la página N y acababa en otra solo seleccionaba hasta donde llegaba la página de inicio:
+no se podía copiar ni resaltar/subrayar/tachar un texto que cruzase páginas. Medido antes de cambiar nada: en
+`seleccion-multipagina.pdf`, arrastrar de "Alfa dos" (p1) a "Gamma dos" (p3) pintaba rectángulos solo en p1 y copiaba solo su cola.
+
+**Causa raíz.** `SeleccionTexto` guardaba `{ pageIndex, ancla, foco }`: los dos extremos compartían página, y el gesto convertía el
+puntero con la geometría de la página de inicio.
+
+**Arreglo.** El modelo pasa a `{ paginaAncla, ancla, paginaFoco, foco }`. El puntero se resuelve a la página que tiene debajo (búsqueda
+binaria por altura; en el hueco entre páginas, la más cercana). `tramos()` da, en orden de lectura, el resto de la primera página desde
+el punto inicial, las intermedias enteras y el principio de la última hasta el punto final; los caracteres se piden al MODELO
+(`session.ensureChars`), no al DOM, porque una página intermedia puede no estar pintada (lazy, E-043/E-044/E-045). Copiar une las páginas
+con `\n`. Marcar crea UNA anotación por página con `AddMarkupPaginasCmd` (un snapshot, un paso de deshacer, E-090). Desalojo: solo
+la primera y la última página de la selección se protegen; una intermedia desalojada recupera su capa al repintarse
+(`alRepintarPagina`), y repintar un extremo descarta la selección como antes (E-057). Mientras dura el arrastre el desalojo ya estaba
+bloqueado por `hayGestoEnCurso()` (E-034/E-045). Autoscroll: con el puntero a menos de 36 px del borde del visor, un temporizador
+(parado en `onSettle` del gesto) desplaza el scroll y recalcula el foco, para poder llegar con el ratón a páginas que no se ven.
+La selección por teclado (T16) sigue siendo de una página: Mayús+flecha sobre una selección multipágina la sustituye por una nueva.
+
+**Cómo se detecta ahora.** `tests/e2e/next/seleccion-multipagina.spec.ts` (fixture `seleccion-multipagina.pdf`, 3 páginas × 3 líneas:
+texto copiado exacto en arrastre directo e inverso, una anotación por página con quads sobre las líneas correctas, deshacer las quita
+todas y rehacer las devuelve, subrayar/tachar, una sola página sin cambios y autoscroll con la ventana baja). Sin regla guard: no hay
+patrón de código fiable.

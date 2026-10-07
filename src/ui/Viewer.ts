@@ -153,6 +153,8 @@ export class Viewer {
       return { sizePt: p.sizePt, rotation: p.rotation, origenPt: p.origenPt };
     },
     chars: (i) => this.session.ensureChars(i),
+    numPaginas: () => this.session.model.pages.length,
+    scroller: () => this.root,
     activa: () => this.tool === 'none',
     alEmpezar: () => {
       // La selección de texto sustituye a la de una línea o imagen.
@@ -162,10 +164,11 @@ export class Viewer {
   });
 
   /** Texto y quads de la selección de texto vigente (con ratón), o `null` si no hay. */
-  seleccionTexto(): { pageIndex: number; texto: string; quads: QuadPt[] } | null {
+  seleccionTexto(): { pageIndex: number; texto: string; partes: { pageIndex: number; quads: QuadPt[] }[] } | null {
     const pageIndex = this.textoSel.pageIndex;
     if (pageIndex === null) return null;
-    return { pageIndex, texto: this.textoSel.texto(), quads: this.textoSel.quads() };
+    // E-100: la selección puede abarcar varias páginas; `partes` trae los quads de cada una, en orden de lectura.
+    return { pageIndex, texto: this.textoSel.texto(), partes: this.textoSel.quadsPorPagina() };
   }
 
   limpiarSeleccionTexto(): void { this.textoSel.limpiar(); }
@@ -1227,7 +1230,7 @@ export class Viewer {
     if (wrapper.querySelector('.run.editing')) return;
     if (this.selectedImage?.pageIndex === i) return;
     if (this.marcadoSel?.pageIndex === i) return; // anotación seleccionada: no se pierde al desalojar
-    if (this.textoSel.pageIndex === i) return; // selección de texto viva: no se pierde al desalojar
+    if (this.textoSel.esExtremo(i)) return; // primera/última página de la selección de texto: no se pierde al desalojar (las intermedias se repintan al volver, E-100)
     if (wrapper.querySelector('.tool-layer > canvas, .tool-layer > .rect-preview')) return;
     wrapper.textContent = '';
     this.rendered.delete(i);
@@ -1243,7 +1246,7 @@ export class Viewer {
     // `page` sigue viendo los runs recién cargados más abajo.
     this.session.ensureText(i);
     const wrapper = this.wrappers[i]!;
-    if (this.textoSel.pageIndex === i) this.textoSel.limpiar();
+    if (this.textoSel.esExtremo(i)) this.textoSel.limpiar(); // repintar un extremo descarta la selección (E-057); una intermedia solo recupera su capa al final
     if (this.marcadoSel?.pageIndex === i) { this.marcadoSel = null; this.cb.onMarcadoSelect?.(null); }
     wrapper.textContent = '';
     contarRenderPage();
@@ -1299,5 +1302,6 @@ export class Viewer {
     });
     this.attachToolCapture(toolLayer, i);
     wrapper.appendChild(toolLayer);
+    this.textoSel.alRepintarPagina(i); // página intermedia de una selección multipágina: recupera su capa (E-100)
   }
 }
