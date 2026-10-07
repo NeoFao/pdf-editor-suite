@@ -94,6 +94,20 @@ export interface PosicionFlotante { h: PosFlotanteH; v: PosFlotanteV; ajuste?: A
 
 /** Relleno de una parada de tabulación (`w:leader`). */
 export type LiderTab = 'none' | 'dot' | 'hyphen' | 'underscore';
+/**
+ * Comienzo de un párrafo DENTRO de una celda (E-102, E-103): el formato de párrafo efectivo (`pPrEfectivo`, el mismo que el del
+ * cuerpo: estilo + directo + numeración) que la celda aplica a las líneas hasta el siguiente `inicioParrafo` o `saltoLinea`.
+ * Todo en pt (1/20 de twip ya convertido); `sangriaIzqPt`/`sangriaDerPt` se miden desde el borde INTERIOR de la celda.
+ */
+export interface InicioParrafoCelda {
+  tipo: 'inicioParrafo';
+  lista: InfoLista | null;
+  sangriaIzqPt: number; sangriaPrimeraLineaPt: number; sangriaDerPt: number;
+  alineacion: Alineacion;
+  espacioAntesPt: number; espacioDespuesPt: number;
+  interlineadoFactor: number; interlineadoExactoPt: number | null;
+}
+
 /** Parada de tabulación de un párrafo (`w:tabs > w:tab`): `posPt` en puntos PDF desde el margen izquierdo de la página. */
 export interface ParadaTab { posPt: number; tipo: 'left' | 'center' | 'right' | 'decimal'; leader: LiderTab }
 
@@ -112,7 +126,7 @@ export type ParteParrafo =
    * Solo dentro de una celda de tabla (E-102): arranque de un párrafo de LISTA de la celda. Lleva su marcador (el mismo cálculo y
    * los mismos contadores que un párrafo de cuerpo) y la sangría del nivel (pt PDF, desde el borde interior de la celda).
    */
-  | { tipo: 'inicioParrafo'; lista: InfoLista | null; sangriaIzqPt: number; sangriaPrimeraLineaPt: number }
+  | InicioParrafoCelda
   /** Imagen inline (`w:drawing > wp:inline`, fase 2a). `refId` es la ruta dentro del ZIP del .docx (p. ej. `word/media/image1.png`); `wPt`/`hPt` son el tamaño DECLARADO por Word (`wp:extent`, EMU → pt), sin clampar todavía al ancho útil de página — eso lo hace `render.ts`, que conoce la geometría. */
   | { tipo: 'imagen'; refId: string; wPt: number; hPt: number;
     /** Fase 2b: presente si es una imagen FLOTANTE (`wp:anchor`) — se coloca en su posición sin ajuste de texto. Sin esto, es inline. */
@@ -178,6 +192,7 @@ export interface CeldaTabla {
   vMerge: 'restart' | 'continue' | null;
   /** Color de sombreado (`w:shd w:fill`), o `null` sin sombreado. */
   colorFondo: RGB | null;
+  /** Alineación del PRIMER párrafo de la celda (valor por defecto de un modelo sin `inicioParrafo`); cada párrafo lleva la suya en su `inicioParrafo`. */
   alineacion: Alineacion;
   /** Fase 2b: `w:tcBorders` de la celda (precedencia celda > tabla). `undefined` si la celda no declara ninguno. */
   bordes?: BordesCelda;
@@ -609,6 +624,8 @@ interface Contexto {
   zona: boolean;
   /** `true` mientras se procesa una celda de tabla: ahí una imagen se omite con aviso (`imagenEnCelda`). */
   enCelda: boolean;
+  /** `w:pPr` de la cadena del estilo de la tabla en curso (de la raíz a la hoja): base de los párrafos de sus celdas, entre docDefaults y el estilo de párrafo (E-103). */
+  pPrTabla: XmlElemento[];
   /** Campos complejos (`w:fldChar`) abiertos, el más interno al final. `suprimir`: el resultado cacheado se descarta porque ya se emitió un `campo`. */
   camposAbiertos: { instr: string; separado: boolean; suprimir: boolean; emitido: boolean }[];
 }
@@ -925,6 +942,8 @@ function pPrEfectivo(el: XmlElemento, ctx: Contexto): { pPr: XmlElemento | null;
 
   const acc = pPrPorDefecto();
   if (ctx.docDefaultsPPr) aplicarPPr(acc, ctx.docDefaultsPPr);
+  // Un párrafo de celda parte del `w:pPr` del estilo de su tabla (p. ej. "Table Grid": sin espacio después, interlineado sencillo) (E-103).
+  if (ctx.enCelda) for (const x of ctx.pPrTabla) aplicarPPr(acc, x);
   for (const est of cadena) if (est.pPr) aplicarPPr(acc, est.pPr);
   if (pPr) aplicarPPr(acc, pPr);
 
@@ -1060,14 +1079,15 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
   for (const hijo of aplanarCuerpo(tc)) {
     if (hijo.nombre === 'w:p') {
       if (bloquesVistos > 0) partes.push({ tipo: 'saltoLinea' });
-      const pPr = primerHijo(hijo, 'w:pPr');
-      if (bloquesVistos === 0) {
-        const jc = pPr ? primerHijo(pPr, 'w:jc') : null;
-        if (jc?.atributos['w:val'] !== undefined) alineacion = mapAlineacion(jc.atributos['w:val']);
-      }
-      // Lista y sangría de la celda (E-102): mismo marcador, mismos contadores y misma sangría que un párrafo de cuerpo (sea o no de lista).
+      // Formato de la celda (E-102, E-103): cada párrafo trae SU lista, sangrías, alineación, espaciado e interlineado, con el mismo `pPrEfectivo` que el cuerpo.
       const { acc: accP } = pPrEfectivo(hijo, ctx);
-      if (accP.numId || accP.sangriaIzqPt !== 0 || accP.sangriaPrimeraLineaPt !== 0) partes.push({ tipo: 'inicioParrafo', lista: listaDeParrafo(accP, ctx), sangriaIzqPt: accP.sangriaIzqPt, sangriaPrimeraLineaPt: accP.sangriaPrimeraLineaPt });
+      if (bloquesVistos === 0) alineacion = accP.alineacion;
+      partes.push({
+        tipo: 'inicioParrafo', lista: listaDeParrafo(accP, ctx),
+        sangriaIzqPt: accP.sangriaIzqPt, sangriaPrimeraLineaPt: accP.sangriaPrimeraLineaPt, sangriaDerPt: accP.sangriaDerPt,
+        alineacion: accP.alineacion, espacioAntesPt: accP.espacioAntesPt, espacioDespuesPt: accP.espacioDespuesPt,
+        interlineadoFactor: accP.interlineadoFactor, interlineadoExactoPt: accP.interlineadoExactoPt
+      });
       const baseRuns = rPrPorDefecto();
       if (ctx.docDefaultsRPr) aplicarRPr(baseRuns, ctx.docDefaultsRPr);
       const desde = partes.length;
@@ -1124,7 +1144,10 @@ function procesarTablaReal(tbl: XmlElemento, ctx: Contexto): Tabla {
   }
   const { color: bordeColor, grosorPt: bordeGrosorPt } = leerBordesTabla(tblBorders);
   const bordesTabla = leerBordesTablaPorLado(tblBorders, ctx);
+  const pPrTablaAntes = ctx.pPrTabla;
+  ctx.pPrTabla = estiloTabla ? cadenaEstilo(estiloTabla, ctx.estilos).flatMap((est) => (est.pPr ? [est.pPr] : [])) : [];
   const filas = hijosElemento(tbl, 'w:tr').map((fila) => procesarFila(fila, ctx));
+  ctx.pPrTabla = pPrTablaAntes;
   if (anchosColPt.length === 0) {
     // Sin w:tblGrid (raro en un .docx real: Word siempre lo escribe): ancho
     // de 1" por columna como valor por defecto razonable, mejor que fallar.
@@ -1295,7 +1318,7 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
     : { numMap: new Map<string, string>(), abstractNums: new Map<string, AbstractNumDef>() };
   const rels = relsXml ? leerRelaciones(relsXml) : null;
 
-  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), vinetasAvisadas: new Set(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, camposAbiertos: [] };
+  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), vinetasAvisadas: new Set(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, pPrTabla: [], camposAbiertos: [] };
 
   const bloques: BloqueDocx[] = [];
   // Una marca por sección, en orden de documento: su `w:sectPr` y dónde acaba (índice en `bloques`, exclusivo).

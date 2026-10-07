@@ -1111,6 +1111,38 @@ function docxListasCelda() {
 }
 
 /**
+ * `word-parrafo-celda.docx` (E-103): una tabla de UNA fila y 4 celdas de 115 pt (x = 72, 187, 302, 417; relleno 5 pt) que prueba el
+ * formato de párrafo DENTRO de la celda: A centrada, B a la derecha, C justificada con sangría derecha de 36 pt y D a la
+ * izquierda con espaciado 12 antes / 6 después e interlineado 1,5. Detrás, un párrafo del cuerpo para medir la altura de la fila.
+ * Sin avisos.
+ */
+export const DOCX_PARRAFO_CELDA = {
+  centro: 'Centro', derecha: 'Derecha',
+  justif: 'uno dos tres cuatro cinco seis siete ocho nueve diez once doce',
+  espaciado: 'Espaciado uno dos tres cuatro cinco seis siete ocho nueve diez once doce trece catorce',
+  despues: 'Despues'
+};
+function docxParrafoCelda() {
+  const p = (ppr, t) => `<w:p><w:pPr>${ppr}</w:pPr><w:r>${RPR_10}<w:t>${t}</w:t></w:r></w:p>`;
+  const celda = (cuerpo) => `<w:tc>${cuerpo}</w:tc>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:tbl><w:tblGrid>${'<w:gridCol w:w="2300"/>'.repeat(4)}</w:tblGrid><w:tr>
+    ${celda(p(`${ESP_EXACTO}<w:jc w:val="center"/>`, DOCX_PARRAFO_CELDA.centro))}
+    ${celda(p(`${ESP_EXACTO}<w:jc w:val="right"/>`, DOCX_PARRAFO_CELDA.derecha))}
+    ${celda(p(`${ESP_EXACTO}<w:ind w:right="720"/><w:jc w:val="both"/>`, DOCX_PARRAFO_CELDA.justif))}
+    ${celda(p('<w:spacing w:before="240" w:after="120" w:line="360" w:lineRule="auto"/>', DOCX_PARRAFO_CELDA.espaciado))}
+  </w:tr></w:tbl>
+  ${p(ESP_EXACTO, DOCX_PARRAFO_CELDA.despues)}
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') }
+  ]);
+}
+
+/**
  * "Zip bomb" real: 8 MB de ceros comprimidos con deflate (que reduce a un
  * puñado de KB) en una única entrada — ejercita la defensa de ratio de
  * compresión de `src/convert/docx/zip.ts` con datos reales, no solo tamaños
@@ -1817,6 +1849,7 @@ async function main() {
     'word-tabs.docx': docxTabs(),
     'word-numeracion-tabs.docx': docxNumeracionTabs(),
     'word-listas-celda.docx': docxListasCelda(),
+    'word-parrafo-celda.docx': docxParrafoCelda(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {

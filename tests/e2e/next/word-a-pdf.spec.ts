@@ -224,6 +224,7 @@ const WORD_AJUSTE = path.resolve(AQUI, '../../fixtures/generados/word-ajuste.doc
 const WORD_TABS = path.resolve(AQUI, '../../fixtures/generados/word-tabs.docx');
 const WORD_NUM_TABS = path.resolve(AQUI, '../../fixtures/generados/word-numeracion-tabs.docx');
 const WORD_LISTAS_CELDA = path.resolve(AQUI, '../../fixtures/generados/word-listas-celda.docx');
+const WORD_PARRAFO_CELDA = path.resolve(AQUI, '../../fixtures/generados/word-parrafo-celda.docx');
 
 /** Abre el .docx en la app, espera la conversión, guarda el PDF resultante y lo abre con el motor para inspeccionarlo. */
 async function convertirYGuardar(page: Page, fixture: string, nombre: string) {
@@ -319,5 +320,25 @@ test('abrir word-listas-celda.docx: la lista numerada sigue dentro de la celda (
   // Las celdas están a la derecha del margen: el "3." cuelga dentro de su celda, no en el margen del cuerpo.
   const tres = runs.find((r) => r.textoReal.trim() === '3. tres')!;
   expect(tres.boxPt.xPt).toBeGreaterThan(72 + 5);
+  eng.close(doc);
+});
+
+test('abrir word-parrafo-celda.docx: alineación, sangría derecha y espaciado de cada párrafo dentro de las celdas, sin aviso (E-103)', async ({ page }) => {
+  const { eng, doc } = await convertirYGuardar(page, WORD_PARRAFO_CELDA, 'word-parrafo-celda');
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
+  const runs = eng.getPageText(doc, 0);
+  const run = (t: string) => runs.find((r) => r.textoReal.trim() === t)!;
+  const ancho = (t: string): number => eng.measureText('Helvetica', 10, t);
+  // Celdas de 115 pt en x = 72, 187, 302, 417; relleno 5 => interior de 105 pt.
+  expect(Math.abs(run('Centro').boxPt.xPt - (72 + 5 + (105 - ancho('Centro')) / 2))).toBeLessThanOrEqual(2);
+  expect(Math.abs(run('Derecha').boxPt.xPt - (187 + 5 + 105 - ancho('Derecha')))).toBeLessThanOrEqual(2);
+  // Justificada con sangría derecha de 36 pt: ninguna palabra pasa de 302 + 5 + 105 - 36 = 376 y alguna llega hasta ahí.
+  const colC = runs.filter((r) => r.boxPt.xPt >= 302 && r.boxPt.xPt < 417);
+  const derechos = colC.map((r) => r.boxPt.xPt + r.boxPt.wPt);
+  expect(Math.max(...derechos)).toBeLessThanOrEqual(376 + 2);
+  expect(Math.max(...derechos)).toBeGreaterThanOrEqual(376 - 2);
+  // Espaciado 12 antes / 6 después e interlineado 1,5: la fila (la manda la celda D) crece y empuja el párrafo de debajo.
+  // (La medida exacta de la altura está en ConversorDocxNavegador-parrafo-celda.test.ts; aquí, el mínimo con 2 líneas de 15 pt.)
+  expect(run('Centro').boxPt.yPt - run('Despues').boxPt.yPt).toBeGreaterThan(10 + 12 + 2 * 15 + 6 - 5);
   eng.close(doc);
 });

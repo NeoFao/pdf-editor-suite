@@ -3380,3 +3380,32 @@ E2E de `word-a-pdf.spec.ts` con el fixture `word-listas-celda.docx` ("3. tres" d
 Sin regla guard: es funcionalidad con test. Límites: la sangría derecha y la alineación por párrafo dentro de una celda no se aplican; una
 viñeta con imagen (`w:lvlPicBulletId`) no se reproduce; el reparto de contadores entre `w:num` distintos con el mismo `abstractNum`
 sigue sin modelarse.
+
+### E-103 · Word → PDF: dentro de una celda, la alineación, la sangría derecha, el espaciado y el interlineado de cada párrafo no se aplicaban
+
+**Síntoma.** En una tabla, un párrafo centrado, a la derecha o justificado dentro de una celda salía a la izquierda (solo valía el `w:jc`
+DIRECTO del primer párrafo, y para toda la celda); una sangría derecha se ignoraba (el texto llegaba hasta el borde); los 12 pt
+"antes"/"después" y un interlineado de 1,5 no movían nada y la fila quedaba más baja que en Word; un `Table Grid` con
+`w:spacing w:after="0"` no se distinguía de una tabla sin estilo. Nada de eso avisaba.
+
+**Causa raíz.** `procesarCelda` solo leía `w:jc` directo del primer `w:p` (`CeldaTabla.alineacion`, para toda la celda) y la parte
+`inicioParrafo` (E-102) solo llevaba lista y sangría izquierda/primera línea. El alto de línea de una celda era una constante
+(`TABLA_LINE_HEIGHT_FACTOR` = 1,2) y el espaciado no existía. `pPrEfectivo` ya calculaba todo (estilo + directo) pero la celda tiraba
+la mitad. Además, el `w:pPr` del ESTILO DE LA TABLA (que Word aplica a sus celdas, entre docDefaults y el estilo de párrafo) no se leía.
+
+**Arreglo.** `inicioParrafo` pasa a ser SIEMPRE el principio de cada párrafo de celda y lleva el formato completo
+(`InicioParrafoCelda`: alineación, sangrías izq./der./primera línea, espaciado antes/después, interlineado). `celdaAGrupos` lo copia a cada
+grupo y `lineasDe` maqueta con el ancho `interior - izq - der`, la alineación del PROPIO párrafo y `alturaDeLinea` (la función que ahora
+también usa el cuerpo: `exact`/`atLeast` o `tamaño × factor`); el espaciado son huecos sin texto antes y después, así que la altura
+de la fila crece sola. `pPrEfectivo` parte, en celdas, del `w:pPr` de la cadena del estilo de la tabla (`ctx.pPrTabla`). Efecto
+asumido: una celda ya no tiene el interlineado fijo de 1,2 sino el del documento (en un documento sin estilos, 1,15 y 8 pt después, igual
+que el cuerpo). No había avisos de este límite que quitar (se degradaba en silencio).
+
+**Cómo se detecta ahora.** `tests/unit/docx-parrafo-celda.test.ts` (modelo por párrafo y por estilo; x centrada/derecha/justificada con sangría
+derecha y última línea sin estirar; espaciado e interlineado en las líneas y en la altura de la fila; estilo de tabla) y
+`ConversorDocxNavegador-parrafo-celda.test.ts` (motor real: cajas de caracteres del PDF de `word-parrafo-celda.docx`, con la fórmula de cada x en
+el test y la altura de la fila = 10 + 12 + n × 15 + 6) más el E2E de `word-a-pdf.spec.ts`. Sin regla guard: es funcionalidad con test.
+Límites: con sangría de primera línea, centrado/derecha/justificado miden contra el ancho completo (igual que el cuerpo); un párrafo vacío de
+celda usa 10 pt como tamaño base; `w:contextualSpacing` y `w:spacing w:beforeAutospacing` no se modelan; los `w:rPr` del estilo de párrafo
+no se aplican al texto de las celdas.
+
