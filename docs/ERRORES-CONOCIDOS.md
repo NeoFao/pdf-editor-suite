@@ -3287,8 +3287,11 @@ mixtas perdía la proporción física respecto a las demás (límite anotado en 
 **Causa raíz.** PDFium ignora `/UserUnit` (E-098) y el visor usaba un único zoom para todas las páginas.
 
 **Arreglo.** `PdfEngine.userUnit(doc, i)` (1 si falta o no es finito y > 0), leído del diccionario de página con pdf-lib en
-`src/engine/userUnit.ts` (solo si el fichero contiene `UserUnit` o flujos `/ObjStm`; indexado por número de objeto de página,
-así que reordenar o borrar no lo desplaza). `PageModel.userUnit` lo lleva a la vista y `Viewer.escalaPagina(i)` = zoom ×
+`src/engine/userUnit.ts`, indexado por número de objeto de página (reordenar o borrar no lo desplaza). Detección barata: se
+busca `UserUnit` en los bytes (sin decodificar el fichero) y, si no está, se infla cada `/ObjStm` con `/FlateDecode` (tope de
+16 MB por flujo y 64 MB en total) y se busca ahí; pdf-lib se importa de forma dinámica (chunk aparte, el paquete principal pasó
+de 968 a 536 kB) y solo si de verdad hay `UserUnit`. Un `/ObjStm` cifrado, con otro filtro o que no se pueda inflar cuenta como
+sin `UserUnit` (límite). Coste de abrir 3000 páginas con `/ObjStm`: 113 ms con el análisis completo, 33 ms ahora. `PageModel.userUnit` lo lleva a la vista y `Viewer.escalaPagina(i)` = zoom ×
 `/UserUnit` es el ÚNICO punto donde se aplica: tamaño CSS, render, `PageGeometry.scale` (texto, selección, notas, marcados,
 inserción) y `paginaDom().escala` salen de ahí. El modo "ancho" divide por `ancho × userUnit`. `PageGeometry`, `pageSize`, `pageBox`
 y todas las coordenadas siguen en unidades de usuario SIN escalar: exportar y guardar dan los mismos bytes.

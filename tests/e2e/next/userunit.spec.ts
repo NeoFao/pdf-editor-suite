@@ -228,3 +228,13 @@ test('E-099 guardar no muta el documento: los bytes no dependen de la escala de 
   expect([0, 1, 2].map((i) => eng.userUnit(re, i))).toEqual([2, 2, 2]);
   eng.close(re);
 });
+
+test('E-099 pdf-lib solo se descarga si el PDF declara /UserUnit (también dentro de un /ObjStm)', async ({ page }) => {
+  const pedidos: string[] = [];
+  page.on('request', (r) => { if (/\/assets\/index-[\w-]+\.js$/.test(new URL(r.url()).pathname)) pedidos.push(r.url()); });
+  await abrir(page, 'ancho', path.resolve(AQUI, '../../fixtures/generados/nativo.pdf'));
+  await page.waitForTimeout(500);
+  expect(pedidos, 'un PDF con /ObjStm pero sin /UserUnit no debe cargar el chunk de pdf-lib').toEqual([]);
+  await abrir(page, 'ancho'); // userunit.pdf: /UserUnit solo dentro de un /ObjStm comprimido
+  await expect.poll(() => pedidos.length, 'un PDF con /UserUnit en un /ObjStm debe cargar pdf-lib').toBeGreaterThan(0);
+});
