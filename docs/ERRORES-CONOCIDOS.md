@@ -3229,3 +3229,30 @@ tabulación según la parada (izquierda/centro/derecha/decimal, líder de puntos
 en cada página, líneas sin solape con la flotante, el número de página a la derecha) y los E2E de `word-a-pdf.spec.ts` con los
 fixtures `word-secciones`, `word-encabezado-rico`, `word-ajuste` y `word-tabs`. Sin regla guard: es funcionalidad con test, no un
 patrón de código que pueda repetirse.
+
+### E-097 · Ronda 2 de accesibilidad: una auditoría estática mezcló defectos reales con falsos positivos (B-01…B-09)
+
+**Síntoma.** Una auditoría solo de lectura de código marcó 8 defectos WCAG 2.2 AA en la interfaz nueva. Verificados en Chromium real
+(árbol de accesibilidad por CDP, foco, estilos calculados), solo una parte lo era.
+
+**Reales (arreglados).**
+- B-03: `AtajosPanel` llamaba a `showModal()` a mano. Ya era modal (aria-modal implícito, resto inerte, Escape), pero Tab escapaba
+  del diálogo y el foco no volvía al disparador. Ahora usa `mostrarModal` (como el resto de diálogos).
+- B-04: el estado «sin guardar» era solo un «•» visual. Ahora el punto es `aria-hidden`, el nombre lleva un texto solo-lector
+  («Documento con cambios sin guardar») y la región viva oculta `#sucio-aviso` lo anuncia UNA vez por transición limpio→sucio.
+- B-05: sin `prefers-reduced-motion` las transiciones seguían activas; consulta global en `estilos.css`.
+- B-02 (parcial): el navegador deriva `posinset/setsize`, pero no se ven en el árbol AX de CDP; se fijan explícitos en cada
+  `treeitem` para no depender de la estructura DOM.
+
+**Falsos positivos (que la próxima auditoría no los repita).**
+- B-01: `role="status"` ya implica `aria-live="polite"` (el árbol AX de Chromium reporta `live: polite`).
+- B-06: Chromium usa el `placeholder` como nombre accesible del `searchbox` («Buscar…»); no queda sin nombre.
+- B-08: cada fila de comentarios es un `<button>` con `aria-label` descriptivo (tipo, página, texto); al enfocarla con las flechas
+  el lector la lee. Añadir una región viva duplicaría el anuncio.
+- B-09: la selección por teclado ya se anuncia en `#status` (`Seleccionado: «…»`, `aria-live`).
+
+**Causa raíz.** Se auditó el código sin comprobar el árbol de accesibilidad resultante; y un diálogo se escribió a mano en vez de
+con el helper común.
+
+**Cómo se detecta ahora.** `tests/e2e/next/accesibilidad-ronda2.spec.ts` (los reales fallaban antes; los falsos positivos quedan
+como regresión del comportamiento correcto). Sin regla guard: no hay patrón de código fiable.
