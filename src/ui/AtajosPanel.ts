@@ -10,6 +10,7 @@
  * igual que el resto de diálogos de esta app (ver `TextPanel.ts`).
  */
 import { TABLA_ATAJOS } from './atajos';
+import { mostrarModal } from './dialogo';
 
 export class AtajosPanel {
   static open(): void {
@@ -24,7 +25,6 @@ export class AtajosPanel {
     // B2: el foco inicial va al título (no al primer enfocable, que era el enlace «Versión anterior»).
     titulo.id = 'shortcuts-title';
     titulo.tabIndex = -1;
-    dialog.setAttribute('aria-labelledby', 'shortcuts-title');
 
     const tabla = document.createElement('table');
     tabla.id = 'shortcuts-table';
@@ -72,9 +72,8 @@ export class AtajosPanel {
     barra.append(enlaceLegacy, btnCerrar);
 
     dialog.append(titulo, tabla, notaPluma, barra);
-    dialog.addEventListener('close', () => dialog.remove());
-    document.body.appendChild(dialog);
-    dialog.showModal();
+    // B-03: foco atrapado, aria-modal y foco devuelto al disparador al cerrar (helper común).
+    mostrarModal(dialog, { tituloId: 'shortcuts-title' });
     titulo.focus();
   }
 }

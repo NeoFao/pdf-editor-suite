@@ -261,6 +261,8 @@ export class PanelMarcadores {
       const li = document.createElement('li');
       li.setAttribute('role', 'treeitem');
       li.setAttribute('aria-level', String(ruta.length));
+      li.setAttribute('aria-posinset', String(i + 1));
+      li.setAttribute('aria-setsize', String(items.length));
       li.setAttribute('aria-label', item.title);
       li.setAttribute('aria-selected', String(mismaRuta(this.sel, ruta)));
       li.dataset.ruta = clave(ruta);

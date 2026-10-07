@@ -802,3 +802,26 @@ dialog.encabezado-panel::backdrop { background: rgba(0, 0, 0, .12); }
   border-radius: 2px;
   box-shadow: 0 0 0 1px #fff;
 }
+
+/* Texto solo para lectores de pantalla (B-04). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* B-05 (WCAG 2.3.3): quien pide menos movimiento no ve transiciones ni animaciones. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}

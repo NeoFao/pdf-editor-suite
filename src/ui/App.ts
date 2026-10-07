@@ -158,6 +158,8 @@ export class App {
   private docName = 'documento.pdf';
   /** N8: hay cambios (ejecutar/deshacer/rehacer en el bus) posteriores al último guardado o apertura. */
   private sucio = false;
+  /** B-04: región viva (oculta) que anuncia UNA vez el paso de limpio a sucio. */
+  private readonly sucioAvisoEl: HTMLElement;
   private readonly tituloBase = document.title;
   /**
    * Herramienta activa: `'none' | 'insert' | 'pen' | 'note' | 'rect' |
@@ -562,6 +564,11 @@ export class App {
     this.docNameEl = document.createElement('span');
     this.docNameEl.className = 'doc-name';
     this.docNameEl.textContent = 'Sin documento';
+    this.sucioAvisoEl = document.createElement('span');
+    this.sucioAvisoEl.id = 'sucio-aviso';
+    this.sucioAvisoEl.className = 'sr-only';
+    this.sucioAvisoEl.setAttribute('role', 'status');
+    this.sucioAvisoEl.setAttribute('aria-live', 'polite');
 
     const topbar = document.createElement('div');
     topbar.className = 'topbar';
@@ -826,7 +833,7 @@ export class App {
     const pageNav = document.createElement('div');
     pageNav.className = 'page-nav';
     pageNav.append(btnPrev, this.pageIndicator, btnNext);
-    statusbar.append(this.status, pageNav);
+    statusbar.append(this.status, this.sucioAvisoEl, pageNav);
     rootEl.appendChild(statusbar);
 
     // Atajos de teclado (§9 #34): la tabla declarativa y la regla de oro del
@@ -937,9 +944,24 @@ export class App {
 
   /** N8: refleja "documento modificado" en el nombre del documento y en `document.title` (prefijo "• "). */
   private marcarSucio(valor: boolean): void {
+    const antes = this.sucio;
     this.sucio = valor;
     const base = this.session ? this.docName : 'Sin documento';
-    this.docNameEl.textContent = valor ? `• ${base}` : base;
+    // B-04: el punto es decorativo (aria-hidden); el estado lo da un texto solo-lector en el nombre.
+    this.docNameEl.textContent = '';
+    if (valor) {
+      const punto = document.createElement('span');
+      punto.setAttribute('aria-hidden', 'true');
+      punto.textContent = '• ';
+      const oculto = document.createElement('span');
+      oculto.className = 'sr-only';
+      oculto.textContent = 'Documento con cambios sin guardar: ';
+      this.docNameEl.append(punto, oculto);
+    }
+    this.docNameEl.append(base);
+    // Un único anuncio por transición limpio -> sucio (no uno por cambio).
+    if (valor && !antes) this.sucioAvisoEl.textContent = 'Documento con cambios sin guardar.';
+    else if (!valor) this.sucioAvisoEl.textContent = '';
     this.docNameEl.toggleAttribute('data-sucio', valor);
     document.title = valor ? `• ${this.tituloBase}` : this.tituloBase;
   }
