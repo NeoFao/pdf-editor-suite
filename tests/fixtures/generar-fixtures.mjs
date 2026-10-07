@@ -399,6 +399,24 @@ async function pdfTamanosMixtos() {
   return doc.save();
 }
 
+/** Texto de cada línea (3 por página) de `seleccion-multipagina.pdf` (E-100). */
+export const LINEAS_SELECCION_MULTIPAGINA = [
+  ['Alfa uno', 'Alfa dos', 'Alfa tres'],
+  ['Beta uno', 'Beta dos', 'Beta tres'],
+  ['Gamma uno', 'Gamma dos', 'Gamma tres']
+];
+
+/** 3 páginas de 300x200 pt con 3 líneas conocidas cada una: la selección por arrastre entre páginas (E-100). */
+async function pdfSeleccionMultipagina() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  for (const lineas of LINEAS_SELECCION_MULTIPAGINA) {
+    const p = doc.addPage([300, 200]);
+    lineas.forEach((t, k) => p.drawText(t, { x: 30, y: 150 - k * 40, size: 16, font }));
+  }
+  return doc.save();
+}
+
 /**
  * Una página con líneas pegadas a los bordes (E-066): el tirador de mover (-9 px fuera de la caja)
  * de la línea de la esquina superior izquierda y de la del borde inferior caerían fuera de la página.
@@ -1679,6 +1697,7 @@ async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
     'nativo.pdf': await pdfNativo(),
+    'seleccion-multipagina.pdf': await pdfSeleccionMultipagina(),
     'hostil.pdf': await pdfHostil(),
     'apaisado.pdf': await pdfApaisado(),
     'rotada.pdf': await pdfRotada(),

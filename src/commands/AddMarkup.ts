@@ -29,3 +29,26 @@ export class AddMarkupCmd implements Command {
   }
   async undo(c: Ctx): Promise<void> { if (this.before) await c.reload(this.before); }
 }
+
+/**
+ * Resalta, subraya o tacha una selección que abarca varias páginas (E-100): UNA anotación por página con sus
+ * quads (pt PDF de usuario), todas en UN solo paso de deshacer por snapshot (E-090). Con una sola página es
+ * equivalente a `AddMarkupCmd`.
+ */
+export class AddMarkupPaginasCmd implements Command {
+  readonly id = 'add-markup-paginas';
+  readonly label: string;
+  private before: Uint8Array<ArrayBuffer> | null = null;
+  constructor(
+    readonly partes: readonly { pageIndex: number; quads: readonly QuadPt[] }[],
+    readonly tipo: MarkupKind,
+    readonly color: [number, number, number]
+  ) { this.label = ETIQUETA[tipo]; }
+
+  execute(c: Ctx): void {
+    this.before = c.engine.save(c.doc);
+    for (const p of this.partes) c.engine.addMarkup(c.doc, p.pageIndex, this.tipo, p.quads, this.color, '', '');
+    for (const p of this.partes) c.refreshPage(p.pageIndex);
+  }
+  async undo(c: Ctx): Promise<void> { if (this.before) await c.reload(this.before); }
+}

@@ -28,7 +28,7 @@ import { SetFormTextCmd } from '../commands/SetFormText';
 import { SetFormCheckedCmd } from '../commands/SetFormChecked';
 import { SetFormChoiceCmd } from '../commands/SetFormChoice';
 import { SetFormRadioCmd } from '../commands/SetFormRadio';
-import { AddMarkupCmd } from '../commands/AddMarkup';
+import { AddMarkupCmd, AddMarkupPaginasCmd } from '../commands/AddMarkup';
 import { quadsPorLinea } from '../coords/quads';
 import type { MarkupKind } from '../engine/PdfEngine';
 import { DrawStrokeCmd } from '../commands/DrawStroke';
@@ -2078,8 +2078,9 @@ export class App {
     // Selección de texto por arrastre (T12): UNA anotación con un quad por línea visual,
     // recortado al tramo exacto. Tiene prioridad sobre la línea entera seleccionada.
     const ts = this.viewer?.seleccionTexto();
-    if (ts && ts.quads.length > 0 && this.bus) {
-      void this.bus.execute(new AddMarkupCmd(ts.pageIndex, tipo, ts.quads, color));
+    if (ts && ts.partes.length > 0 && this.bus) {
+      // E-100: una anotación por página abarcada, en UN solo paso de deshacer.
+      void this.bus.execute(new AddMarkupPaginasCmd(ts.partes, tipo, color));
       this.viewer?.limpiarSeleccionTexto();
       this.setStatus(hecho);
       return;
