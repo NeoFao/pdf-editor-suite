@@ -3256,3 +3256,25 @@ con el helper común.
 
 **Cómo se detecta ahora.** `tests/e2e/next/accesibilidad-ronda2.spec.ts` (los reales fallaban antes; los falsos positivos quedan
 como regresión del comportamiento correcto). Sin regla guard: no hay patrón de código fiable.
+
+### E-098 · `/UserUnit` en la página: investigado, NO es un defecto de coordenadas (sin cambio de código)
+
+**Pregunta.** PDF 1.6+ admite `/UserUnit` (p. ej. 2 = cada unidad de usuario mide 2/72"). ¿Hay incoherencia entre render y
+coordenadas, como en E-084?
+
+**Medido** (`userunit.pdf`, UserUnit 2, MediaBox 300x200; páginas: sin girar, `/Rotate 90`, CropBox [20 20 280 180]):
+PDFium IGNORA `/UserUnit` en todo. `pageSize` = 300x200 (no 600x400), el render a escala 1 mide 300x200, y las cajas de
+texto/origen están en unidades de usuario sin escalar. Es decir, tamaño, render y coordenadas son coherentes entre sí, así
+que no hay desfase: la capa de texto cae sobre los píxeles, el clic edita la línea correcta y la inserción y las notas
+caen donde se hace clic, también con `/Rotate 90` y con CropBox desplazado (`tests/e2e/next/userunit.spec.ts`, 12 pruebas;
+`PdfiumEngine.pageBox.test.ts`). Por tanto no se toca `PageGeometry` ni `engine.pageBox`.
+
+**Consecuencia conocida (límite, no defecto).** La página se ve a 1/UserUnit de su tamaño físico: un plano con UserUnit 2
+sale a la mitad de lo que mostraría Acrobat a "tamaño real" (Acrobat sí aplica UserUnit al tamaño físico y a la regla).
+Propuesta (sin implementar): si se quiere paridad en "tamaño real/100 %", multiplicar el zoom base por UserUnit en la capa
+de vista, nunca en `PageGeometry` (las coordenadas deben seguir en unidades de usuario). Habría que exponer `userUnit`
+desde `engine.pageBox` solo para ese cálculo. Al exportar, el diccionario `/UserUnit` se conserva porque no se toca.
+
+**Cómo se detecta ahora.** Las pruebas anteriores: si un PDFium futuro empezase a aplicar UserUnit en unas funciones y no
+en otras, fallarían la coincidencia de píxeles y la posición de inserción. No hay regla determinista: no hay patrón de
+código que prevenir.
