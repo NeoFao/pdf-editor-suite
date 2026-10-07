@@ -3100,3 +3100,23 @@ regenerarse el contenido (medido: 39 px, máx. 64/765). PDFium ni `@embedpdf/pdf
 forma de regenerar la página sin `GenerateContent`. Lo documenta el test «E-090 limitación conocida» de `Inglete.test.ts`: si falla,
 PDFium ya conserva `M`/`i` y hay que quitar esta limitación. Quedan fuera del arreglo (no son edición de texto): `SetObjectRectCmd`,
 `InsertTextCmd` y similares, que deshacen con la operación inversa.
+
+### E-091 · `busqueda-navegacion.spec.ts` medía la caja de la coincidencia con lecturas únicas · defecto del TEST, no de la app
+
+**Síntoma.** En la verificación de E-090, una vez dentro de un lote de 342 tests, `busqueda-navegacion.spec.ts` falló; en aislado pasó
+5/5. Sin mensaje conservado. Se trató como carrera de la app hasta demostrar lo contrario: 200 ejecuciones aisladas, 30 con la CPU
+ralentizada x4 (x6 hunde el proceso del navegador con las 500 páginas, no son aserciones) y un lote completo de `next` = 0 fallos, y un
+test determinista que retrasaba el evento de scroll (hilo principal bloqueado 400 ms tras pedir la coincidencia, de modo que el respaldo
+de 150 ms de E-068 vence antes) tampoco movió el indicador de página. No hay evidencia de defecto en `goToPage`, el pin (E-068), el
+centrado (E-067) ni el repintado tras desalojo (E-045).
+
+**Causa raíz (del test).** El helper `actualDentroDelVisor` hacía `toHaveCount(1)` y luego leía `boundingBox()` una sola vez: ese
+instante puede caer a medias del desplazamiento del salto o sobre una capa `.hl-layer` recién sustituida (E-045); lo mismo con la
+lectura puntual del indicador de página y con el recuento de píxeles oscuros del canvas (que se pinta de forma perezosa). Mismo patrón
+que E-039: medir una sola vez algo que se asienta con el tiempo.
+
+**Arreglo.** Las comprobaciones esperan con `expect.poll` (caja dentro del visor, página destino, número actual, píxeles bajo la caja),
+sin relajar lo que se comprueba y sin reintentos ni `waitForTimeout`. Se añade un test siempre activo con la CPU ralentizada x4
+(`Emulation.setCPUThrottlingRate`) con el salto cercano, el lejano con desalojo y la vuelta.
+
+**Cómo se detecta ahora.** `tests/e2e/next/busqueda-navegacion.spec.ts` (6 tests, uno con CPU x4).
