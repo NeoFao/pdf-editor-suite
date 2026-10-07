@@ -3406,6 +3406,26 @@ derecha y última línea sin estirar; espaciado e interlineado en las líneas y 
 `ConversorDocxNavegador-parrafo-celda.test.ts` (motor real: cajas de caracteres del PDF de `word-parrafo-celda.docx`, con la fórmula de cada x en
 el test y la altura de la fila = 10 + 12 + n × 15 + 6) más el E2E de `word-a-pdf.spec.ts`. Sin regla guard: es funcionalidad con test.
 Límites: con sangría de primera línea, centrado/derecha/justificado miden contra el ancho completo (igual que el cuerpo); un párrafo vacío de
-celda usa 10 pt como tamaño base; `w:contextualSpacing` y `w:spacing w:beforeAutospacing` no se modelan; los `w:rPr` del estilo de párrafo
-no se aplican al texto de las celdas.
+celda usa 10 pt como tamaño base; `w:contextualSpacing` y `w:spacing w:beforeAutospacing` no se modelan (el `w:rPr` del estilo de párrafo en celdas se resolvió en E-104).
+
+### E-104 · Word → PDF: el formato de carácter de los estilos (negrita, tamaño, color...) no llegaba al texto de las celdas, y las conmutables no seguían la regla de toggle
+
+**Síntoma.** Un estilo de párrafo con negrita y 20 pt, aplicado a un párrafo DENTRO de una celda, salía a 11 pt normal (en el cuerpo sí
+funcionaba). Tampoco se aplicaba el `w:rPr` del estilo de tabla. En cuerpo y celdas, un estilo de párrafo con `w:b` más un estilo de
+carácter con `w:b` daba negrita en vez de anularse (OOXML 17.7.3: las propiedades conmutables hacen XOR entre niveles). Sin avisos.
+
+**Causa raíz.** El formato de carácter se construía en dos sitios: `procesarParrafo` (docDefaults + cadena de estilos de párrafo + marca) y
+`procesarCelda`, que solo partía de docDefaults. `aplicarRPr` hacía "el último que hable gana" también para b/i.
+
+**Arreglo.** Una sola función, `rPrEfectivo` (el equivalente de `pPrEfectivo` para el carácter), que usan cuerpo y celdas: docDefaults <
+estilo de tabla (solo en celdas, `ctx.estiloTabla`) < estilo de párrafo (basedOn) < estilo de carácter del run (`w:rStyle`, basedOn) <
+`w:rPr` directo. `b` e `i` se guardan POR NIVEL (`TogNiveles`) y el valor efectivo es el XOR de tabla/párrafo/carácter sobre docDefaults, con
+el directo por encima. Un estilo de tabla con `w:tblStylePr` que trae `w:rPr` (primera fila, bandas) avisa (`estiloTablaCondicional`):
+no se aplica.
+
+**Cómo se detecta ahora.** `tests/unit/docx-rpr-efectivo.test.ts` (cadena completa, basedOn de dos niveles, toggle, aviso; cuerpo y celda
+dan lo mismo) y `ConversorDocxNavegador-rpr-estilo.test.ts` (motor real sobre `word-rpr-estilo.docx`: fuente y tamaño efectivo de cada
+objeto de texto del PDF). Sin regla guard: es funcionalidad con test. Límites: solo b, i, u, sz, color y rFonts (caps, smallCaps, strike,
+vertAlign... no se modelan); el formato condicional de estilos de tabla no se aplica (con aviso); `w:rPr` de la marca de párrafo se trata como
+nivel de párrafo (comportamiento heredado).
 
