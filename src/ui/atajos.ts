@@ -67,7 +67,8 @@ export type AccionAtajo =
   | 'tool-eraser'
   | 'tool-note'
   | 'herramienta-colocar'
-  | 'herramienta-mover';
+  | 'herramienta-mover'
+  | 'marcado-comentar';
 
 export interface DefinicionAtajo {
   /** Texto para el panel de ayuda (`AtajosPanel`), no usado por `resolverAtajo`. */
@@ -320,6 +321,16 @@ export const TABLA_ATAJOS: DefinicionAtajo[] = [
     bloqueaEnEditable: true,
     contextual: true,
     coincide: (e) => !ctrlOMeta(e) && !e.alt && (tecla(e) === 'arrowleft' || tecla(e) === 'arrowright' || tecla(e) === 'arrowup' || tecla(e) === 'arrowdown')
+  },
+  // Comentar un resaltado, subrayado o tachado sin ratón: Enter con él seleccionado (clic o Alt + ↓/↑). Contextual:
+  // solo con un marcado seleccionado y la herramienta "ninguna" (App); `herramienta-colocar` manda con Nota/Rectángulo.
+  {
+    combinacion: 'Enter (con un resaltado, subrayado o tachado seleccionado)  ·  doble clic sobre él',
+    accion: 'marcado-comentar',
+    descripcion: 'Abrir el diálogo para añadir, editar o quitar el comentario del marcado seleccionado',
+    bloqueaEnEditable: true,
+    contextual: true,
+    coincide: (e) => !ctrlOMeta(e) && !e.alt && !e.shift && tecla(e) === 'enter'
   }
 ];
 
@@ -338,9 +349,9 @@ export function resolverAtajo(e: EventoAtajo): DefinicionAtajo | null {
 }
 
 /** Como `resolverAtajo`, pero solo entre los atajos contextuales (Nota/Rectángulo por teclado, E-073). */
-export function resolverAtajoContextual(e: EventoAtajo): DefinicionAtajo | null {
+export function resolverAtajoContextual(e: EventoAtajo, solo?: AccionAtajo[]): DefinicionAtajo | null {
   if (e.modalAbierto) return null;
-  const def = TABLA_ATAJOS.find((d) => d.contextual && d.coincide(e));
+  const def = TABLA_ATAJOS.find((d) => d.contextual && (!solo || solo.includes(d.accion)) && d.coincide(e));
   if (!def) return null;
   if (def.bloqueaEnEditable && e.editable) return null;
   return def;

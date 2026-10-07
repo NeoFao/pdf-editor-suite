@@ -15,6 +15,8 @@ export interface ComentariosHooks {
   /** Abre el editor de nota (diálogo, B4) con el texto actual; quien lo implementa guarda el resultado. */
   editar(pageIndex: number, annotIndex: number, textoActual: string): void;
   borrar(pageIndex: number, annotIndex: number): void;
+  /** Vacía el comentario (`/Contents`) de un marcado sin borrar el marcado (con deshacer). */
+  quitarComentario(pageIndex: number, annotIndex: number): void;
 }
 
 type Fila = CommentInfo & { pageIndex: number; marcado: string };
@@ -197,7 +199,12 @@ export class ComentariosPanel {
       ? this.btn('Añadir comentario', `Añadir comentario al marcado de la página ${pagina}`, () => this.hooks.editar(c.pageIndex, c.index, c.text))
       : this.btn(marcado ? 'Editar comentario' : 'Editar', `Editar comentario de la página ${pagina}`, () => this.hooks.editar(c.pageIndex, c.index, c.text));
     const borrar = this.btn('Borrar', `Borrar comentario de la página ${pagina}`, () => this.hooks.borrar(c.pageIndex, c.index));
-    li.append(abrir, editar, borrar);
+    if (marcado && !anadir) {
+      const quitar = this.btn('Quitar comentario', `Quitar comentario del marcado de la página ${pagina}`, () => this.hooks.quitarComentario(c.pageIndex, c.index));
+      li.append(abrir, editar, quitar, borrar);
+    } else {
+      li.append(abrir, editar, borrar);
+    }
     return li;
   }
 

@@ -3179,3 +3179,25 @@ truncado, con el comentario debajo si existe; «Añadir comentario» / «Editar 
 **Cómo se detecta ahora.** `tests/unit/textoMarcadoPanel.test.ts` (2 líneas, `/Rotate 90`, `/Contents` persistente) y
 `tests/e2e/next/comentarios-marcado.spec.ts` (texto exacto, comentario multilínea que persiste y se deshace, filtro, CropBox
 desplazada y `/Rotate 90`). Sin regla guard: es funcionalidad de presentación con test.
+
+### E-095 · El comentario de un marcado no se podía quitar y el marcado no se comentaba desde la página
+
+**Síntoma.** Tras comentar un resaltado, subrayado o tachado (E-094) solo se podía cambiar el texto: en el diálogo un texto en
+blanco equivale a Cancelar (E-092), así que no había forma de dejarlo sin comentario salvo borrar el marcado entero. Además, para
+comentar un marcado había que ir al panel: ni el doble clic sobre él en la página ni el teclado abrían su diálogo.
+
+**Causa raíz.** El diálogo de nota resolvía `null` tanto para «cancelar» como para «en blanco», y el panel solo ofrecía Añadir/Editar.
+Hacer que «en blanco» vacíe el comentario habría sido ambiguo (un Guardar accidental destruiría el texto), y las notas `/Text` no
+pueden quedar vacías (quitar una nota es borrarla).
+
+**Arreglo.** Quitar es una acción explícita: «Quitar comentario» en el panel (solo marcados con comentario) y dentro del diálogo al
+EDITAR (`permitirQuitar`, resuelve `''`; crear no lo ofrece y en blanco sigue siendo cancelar). Ambos ejecutan `SetNoteTextCmd` con
+`''` (con deshacer) y nunca tocan una nota `/Text`. El doble clic (`alDobleClicMarcado`, fase de captura) usa la misma detección por
+QuadPoints que el clic (T14, `marcadoBajoPunto`, px CSS de página a pt de usuario con la geometría común); el segundo clic del par
+(`detail >= 2`) ya no deselecciona ni deja pasar el clic a la línea. Enter con un marcado seleccionado (clic o Alt+↓/↑, T16) abre el
+mismo diálogo (atajo contextual `marcado-comentar`, en captura para adelantarse al Enter de la línea enfocada); figura en la tabla de
+atajos y en la ayuda `?`.
+
+**Cómo se detecta ahora.** `tests/e2e/next/comentarios-marcado.spec.ts` (quitar desde el panel y deshacer, quitar desde el diálogo,
+en blanco que solo cancela, sin botón al crear, doble clic sin editar la línea, Alt+↓ y Enter) y `tests/unit/atajos.test.ts`. Sin
+regla guard: es funcionalidad de interacción con test.

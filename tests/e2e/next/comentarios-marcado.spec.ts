@@ -128,3 +128,96 @@ for (const pagina of [0, 1, 2]) {
     await expect(page.locator('.comentario-item')).toContainText(`Página ${pagina + 1}`);
   });
 }
+
+// Quitar el comentario de un marcado (sin borrar el marcado) y abrir su diálogo con doble clic o con Enter.
+async function comentar(page: Page, texto: string): Promise<void> {
+  await page.getByRole('button', { name: /Añadir comentario/ }).click();
+  const dialogo = page.getByRole('dialog', { name: /nota/i });
+  await dialogo.getByLabel('Texto de la nota').fill(texto);
+  await dialogo.getByRole('button', { name: 'Guardar' }).click();
+  await expect(dialogo).toHaveCount(0);
+}
+
+test('quitar el comentario desde el panel: el marcado se queda, el comentario desaparece y deshacer lo devuelve', async ({ page }) => {
+  await abrir(page);
+  await resaltarDosLineas(page);
+  await comentar(page, 'Para quitar');
+  const item = page.locator('.comentario-item');
+  await expect(item.locator('.comentario-texto')).toHaveText('Para quitar');
+  const quitar = page.getByRole('button', { name: /Quitar comentario del marcado de la página 1/ });
+  await expect(quitar).toBeVisible();
+  await quitar.click();
+  await expect(page.locator('#status')).toHaveText('Comentario quitado.');
+  await expect(item).toHaveCount(1); // el resaltado sigue ahí
+  await expect(item.locator('.comentario-marcado')).toHaveText(`«${L2} ${L3}»`);
+  await expect(item.locator('.comentario-texto')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /Añadir comentario/ })).toBeVisible();
+  await expect(quitar).toHaveCount(0);
+
+  await page.locator('#btn-undo').click();
+  await expect(item.locator('.comentario-texto')).toHaveText('Para quitar');
+});
+
+test('quitar el comentario desde el diálogo: «Quitar comentario» explícito; en blanco + Guardar solo cancela; al crear no hay botón', async ({ page }) => {
+  await abrir(page);
+  await resaltarDosLineas(page);
+  // Al CREAR no se ofrece quitar.
+  await page.getByRole('button', { name: /Añadir comentario/ }).click();
+  const dialogo = page.getByRole('dialog', { name: /nota/i });
+  await expect(dialogo.getByRole('button', { name: 'Quitar comentario' })).toHaveCount(0);
+  await dialogo.getByRole('button', { name: 'Cancelar' }).click();
+  await comentar(page, 'Se irá');
+
+  const item = page.locator('.comentario-item');
+  await page.getByRole('button', { name: /Editar comentario de la página 1/ }).click();
+  await dialogo.getByLabel('Texto de la nota').fill('');
+  await dialogo.getByRole('button', { name: 'Guardar' }).click(); // en blanco = cancelar, no quita
+  await expect(dialogo).toHaveCount(0);
+  await expect(item.locator('.comentario-texto')).toHaveText('Se irá');
+
+  await page.getByRole('button', { name: /Editar comentario de la página 1/ }).click();
+  await dialogo.getByRole('button', { name: 'Quitar comentario' }).click();
+  await expect(dialogo).toHaveCount(0);
+  await expect(item).toHaveCount(1);
+  await expect(item.locator('.comentario-texto')).toHaveCount(0);
+  await page.locator('#btn-undo').click();
+  await expect(item.locator('.comentario-texto')).toHaveText('Se irá');
+});
+
+test('doble clic sobre el resaltado en la página abre su diálogo de comentario (sin editar la línea) y guarda', async ({ page }) => {
+  await abrir(page);
+  await resaltarDosLineas(page);
+  const caja = (await page.locator('.run', { hasText: L2 }).first().boundingBox())!;
+  await page.mouse.dblclick(caja.x + caja.width / 2, caja.y + caja.height / 2);
+  const dialogo = page.getByRole('dialog', { name: /Añadir nota/ });
+  await expect(dialogo).toBeVisible();
+  await dialogo.getByLabel('Texto de la nota').fill('Con doble clic');
+  await dialogo.getByRole('button', { name: 'Guardar' }).click();
+  await expect(dialogo).toHaveCount(0);
+  await expect(page.locator('.run.editing')).toHaveCount(0);
+  await expect(page.locator('.comentario-item .comentario-texto')).toHaveText('Con doble clic');
+
+  // Con comentario, el mismo doble clic abre «Editar nota» con «Quitar comentario».
+  await page.mouse.dblclick(caja.x + caja.width / 2, caja.y + caja.height / 2);
+  const editar = page.getByRole('dialog', { name: /Editar nota/ });
+  await expect(editar.getByLabel('Texto de la nota')).toHaveValue('Con doble clic');
+  await expect(editar.getByRole('button', { name: 'Quitar comentario' })).toBeVisible();
+});
+
+test('con teclado: Alt+↓ selecciona el marcado y Enter abre su diálogo y guarda con Ctrl+Enter', async ({ page }) => {
+  await abrir(page);
+  await resaltarDosLineas(page);
+  await page.locator('#viewer').focus();
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.run:focus')).toHaveCount(1);
+  await page.keyboard.press('Alt+ArrowDown');
+  await expect(page.locator('#status')).toContainText('Resaltado 1 de 1');
+  await page.keyboard.press('Enter');
+  const dialogo = page.getByRole('dialog', { name: /Añadir nota/ });
+  await expect(dialogo).toBeVisible();
+  await expect(page.locator('.run.editing')).toHaveCount(0);
+  await dialogo.getByLabel('Texto de la nota').fill('Desde teclado');
+  await page.keyboard.press('Control+Enter');
+  await expect(dialogo).toHaveCount(0);
+  await expect(page.locator('.comentario-item .comentario-texto')).toHaveText('Desde teclado');
+});
