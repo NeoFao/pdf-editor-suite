@@ -2,6 +2,7 @@ import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
 import { validarUrlEnlace } from '../validarUrlEnlace';
+import { leerUserUnits } from '../userUnit';
 import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
 import { BEARING_EM } from '../../texto/lineasEditables';
 import type { QuadPt } from '../../coords/quads';
@@ -80,6 +81,8 @@ const DESPLAZAMIENTO_MIN_EM = 0.15;
 
 export class PdfiumEngine implements PdfEngine {
   private readonly srcPtr = new Map<DocHandle, number>();
+  /** `/UserUnit` ≠ 1 por número de objeto de página, por documento (E-099); ver `leerUserUnits`. */
+  private readonly userUnits = new Map<DocHandle, Map<number, number>>();
   // Entorno de formularios (AcroForm), uno por documento. `info` es el struct
   // FPDF_FORMFILLINFO reservado por PDFiumExt_OpenFormFillInfo; `form` es el
   // FPDF_FORMHANDLE que exigen todas las FPDFAnnot_GetFormField*/EPDFAnnot_*
@@ -119,6 +122,7 @@ export class PdfiumEngine implements PdfEngine {
     const info = this.p.PDFiumExt_OpenFormFillInfo();
     const form = info ? this.p.PDFiumExt_InitFormFillEnvironment(doc, info) : 0;
     this.formEnv.set(doc, { info, form: form || 0 });
+    this.userUnits.set(doc, await leerUserUnits(bytes));
     return doc;
   }
 
@@ -153,6 +157,18 @@ export class PdfiumEngine implements PdfEngine {
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       return { widthPt: this.p.FPDF_GetPageWidthF(page), heightPt: this.p.FPDF_GetPageHeightF(page) };
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  userUnit(doc: DocHandle, pageIndex: number): number {
+    const mapa = this.userUnits.get(doc);
+    if (!mapa || mapa.size === 0) return 1;
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      return mapa.get(this.p.EPDFPage_GetObjectNumber(page)) ?? 1;
     } finally {
       this.p.FPDF_ClosePage(page);
     }
@@ -2881,6 +2897,7 @@ export class PdfiumEngine implements PdfEngine {
       if (env.info) this.p.PDFiumExt_CloseFormFillInfo(env.info);
       this.formEnv.delete(doc);
     }
+    this.userUnits.delete(doc);
     this.p.FPDF_CloseDocument(doc);
     const ptr = this.srcPtr.get(doc);
     if (ptr !== undefined) { this.mem.free(ptr); this.srcPtr.delete(doc); }

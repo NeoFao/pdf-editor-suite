@@ -86,6 +86,7 @@ export class Viewer {
   private rendered = new Set<number>();
   /** N3: DPR con el que se pintaron las páginas vivas (`repintarSiCambioDpr` compara contra él). */
   private dprPintado = window.devicePixelRatio;
+  /** Zoom del usuario (1 = 100 %). La escala REAL de cada página es `escalaPagina(i)`: zoom × `/UserUnit` (E-099). */
   private scale = 1;
   private highlights = new Map<number, RectPt[]>();
   /** Coincidencia ACTUAL de buscar y reemplazar (la que reemplazará el próximo "Reemplazar"), en puntos PDF; se pinta más fuerte que el resto. */
@@ -399,7 +400,16 @@ export class Viewer {
    */
   paginaDom(i: number): { el: HTMLElement; escala: number } | null {
     const el = this.wrappers[i];
-    return el ? { el, escala: this.scale } : null;
+    return el ? { el, escala: this.escalaPagina(i) } : null;
+  }
+
+  /**
+   * Escala REAL de la página `i`, en px CSS por unidad de usuario: el zoom × su `/UserUnit` (E-099). Es el ÚNICO sitio donde
+   * se aplica `/UserUnit`: el resto (geometría, capas, notas, selección, marcados) la recibe por `PageGeometry.scale` o por
+   * `paginaDom().escala`. Las coordenadas del motor y `PageGeometry` siguen en unidades de usuario sin escalar.
+   */
+  private escalaPagina(i: number): number {
+    return this.scale * (this.session.model.pages[i]?.userUnit ?? 1);
   }
 
   /** Cambia la escala (zoom) y vuelve a maquetar y renderizar. */
@@ -745,7 +755,8 @@ export class Viewer {
     const v = this.zonaVisibleCss(pageIndex);
     if (!p || !v) return null;
     const w = Math.min(120, p.sizePt.widthPt), h = Math.min(80, p.sizePt.heightPt);
-    const cx = (v.izq + v.der) / 2 / this.scale, cy = (v.arr + v.aba) / 2 / this.scale;
+    const e = this.escalaPagina(pageIndex);
+    const cx = (v.izq + v.der) / 2 / e, cy = (v.arr + v.aba) / 2 / e;
     this.borradorRect = { pageIndex, x: cx - w / 2, y: cy - h / 2, w, h };
     return this.ajustarYPintarBorrador();
   }
@@ -763,7 +774,7 @@ export class Viewer {
     const b = this.borradorRect;
     const geom = b ? this.geoms[b.pageIndex] : null;
     if (!b || !geom) return false;
-    const s = this.scale;
+    const s = this.escalaPagina(b.pageIndex);
     const a = geom.cssToPt(b.x * s, b.y * s);
     const c = geom.cssToPt((b.x + b.w) * s, (b.y + b.h) * s);
     const rect = normalizeRect(a.xPt, a.yPt, c.xPt, c.yPt);
@@ -793,7 +804,7 @@ export class Viewer {
       el.className = 'rect-preview';
       layer.appendChild(el);
     }
-    const s = this.scale;
+    const s = this.escalaPagina(b.pageIndex);
     Object.assign(el.style, {
       position: 'absolute', boxSizing: 'border-box', pointerEvents: 'none',
       border: `2px dashed rgb(${this.toolColor.join(',')})`,
@@ -1100,7 +1111,7 @@ export class Viewer {
   }
 
   private cssHeights(): number[] {
-    return this.session.model.pages.map((p) => p.sizePt.heightPt * this.scale);
+    return this.session.model.pages.map((p) => p.sizePt.heightPt * this.escalaPagina(p.index));
   }
 
   private layout(): void {
@@ -1113,8 +1124,8 @@ export class Viewer {
         margin: `0 auto ${GAP}px`,
         background: '#fff',
         boxShadow: '0 1px 6px rgba(0,0,0,.25)',
-        width: `${page.sizePt.widthPt * this.scale}px`,
-        height: `${page.sizePt.heightPt * this.scale}px`
+        width: `${page.sizePt.widthPt * this.escalaPagina(page.index)}px`,
+        height: `${page.sizePt.heightPt * this.escalaPagina(page.index)}px`
       });
       w.addEventListener('pointerdown', (e) => this.textoSel.alPulsar(page.index, e));
       w.addEventListener('click', (e) => this.alClicMarcado(page.index, w, e), true);
@@ -1134,7 +1145,7 @@ export class Viewer {
       this.root.appendChild(w);
       this.wrappers.push(w);
       // `page.sizePt` es el tamaño VISUAL (pt, ya girado); la fábrica lo devuelve al espacio de usuario (E-053).
-      this.geoms.push(PageGeometry.desdePagina(page, this.scale));
+      this.geoms.push(PageGeometry.desdePagina(page, this.escalaPagina(page.index)));
     }
     this.observeVisible();
   }
@@ -1237,10 +1248,11 @@ export class Viewer {
     wrapper.textContent = '';
     contarRenderPage();
     // N3: bitmap a `escala × factor` (DPR acotado), CSS al tamaño de la página (`escala` px por pt).
-    const cssAncho = page.sizePt.widthPt * this.scale, cssAlto = page.sizePt.heightPt * this.scale;
+    const escala = this.escalaPagina(i);
+    const cssAncho = page.sizePt.widthPt * escala, cssAlto = page.sizePt.heightPt * escala;
     this.dprPintado = window.devicePixelRatio;
     const factor = factorNitidez(this.dprPintado, cssAncho, cssAlto);
-    const { width, height, data } = this.session.engine.renderPage(this.session.doc, i, this.scale * factor);
+    const { width, height, data } = this.session.engine.renderPage(this.session.doc, i, escala * factor);
     const canvas = document.createElement('canvas');
     canvas.width = width; canvas.height = height;
     canvas.style.display = 'block';
