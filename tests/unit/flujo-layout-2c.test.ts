@@ -1,6 +1,6 @@
 import { test, expect } from 'vitest';
 import {
-  paginar, colocarZona, parrafoFlex, lineaConTabs,
+  paginar, colocarZona, parrafoFlex, lineaConTabs, lineasConTabs,
   type Atom, type Medir, type FlowItem, type PageGeometry, type FlowParrafoFlex, type TabStopAbs, type Obstaculo
 } from '../../src/convert/flujo/layout';
 
@@ -265,4 +265,17 @@ test('colocarZona coloca una imagen flotante de la zona respecto a la página re
   expect(z.imagenes).toHaveLength(1);
   expect(z.imagenes[0]!.xPt).toBe(10);
   expect(z.imagenes[0]!.yPt).toBe(400 - 5 - 20);
+});
+
+test('lineasConTabs (celdas de tabla, E-101): una franja fija, MISMO resultado que lineaConTabs, y reparte en líneas si no cabe', () => {
+  const tabs = { stops: [{ posPt: 100, tipo: 'left', leader: 'none' } as TabStopAbs], defectoPt: 36, origenPt: 20 };
+  const atoms = [atomo('ab'), tabAtomo(), atomo('cd')];
+  const ls = lineasConTabs({ atoms, xNormalPt: 20, xPrimeraPt: 20, wPt: 200, align: 'left', alturaLinea: (sz) => sz * 1.2, tabs, medir });
+  expect(ls).toHaveLength(1);
+  expect(ls[0]!.segs.map((sg) => [sg.text, sg.xPt])).toEqual(lineaConTabs(atoms, 0, 20, 220, tabs, medir).segs.map((sg) => [sg.text, sg.xPt]));
+  expect(ls[0]!.segs.map((sg) => [sg.text, sg.xPt])).toEqual([['ab', 20], ['cd', 100]]);
+  expect(ls[0]!.height).toBe(12);
+  // Franja estrecha: el segundo tramo no cabe y pasa a una línea nueva.
+  const estrecha = lineasConTabs({ atoms: [atomo('abcdefgh'), tabAtomo(), atomo('ij')], xNormalPt: 20, xPrimeraPt: 20, wPt: 70, align: 'left', alturaLinea: () => 12, tabs, medir });
+  expect(estrecha.length).toBeGreaterThanOrEqual(2);
 });

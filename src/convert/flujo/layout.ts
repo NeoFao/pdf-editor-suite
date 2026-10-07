@@ -482,6 +482,23 @@ export function parrafoFlex(o: OpcionesParrafoFlex): FlowParrafoFlex {
 }
 
 /**
+ * Las líneas de un tramo con tabulaciones dentro de UNA franja fija (`xNormalPt`..`xNormalPt + wPt`, sin obstáculos): lo
+ * que `paginar` calcula al vuelo, pero resuelto aquí para quien conoce ya su franja (las celdas de tabla, E-101). Es el
+ * MISMO motor (`parrafoFlex` → `lineaConTabs`): no hay una segunda lógica de tabulaciones. Ninguna línea lleva sangría de primera línea.
+ */
+export function lineasConTabs(o: OpcionesParrafoFlex): FlowLine[] {
+  const flex = parrafoFlex({ ...o, xPrimeraPt: o.xNormalPt, primeraDelParrafo: false });
+  const out: FlowLine[] = [];
+  for (let d = 0; d < flex.total;) {
+    const r = flex.paso(d, { xPt: o.xNormalPt, wPt: o.wPt }, d === 0);
+    if (!r || r.siguiente <= d) break;
+    out.push(r.linea);
+    d = r.siguiente;
+  }
+  return out;
+}
+
+/**
  * Reparte los ítems de flujo en páginas de tamaño `geo`, saltando de página
  * cuando un ítem (más su posible "no huérfano") no cabe en lo que queda, o
  * cuando aparece un `FlowPageBreak` explícito (solo si ya se pintó algo en

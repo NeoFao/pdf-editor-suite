@@ -213,10 +213,10 @@ test('la parada por defecto sale de w:defaultTabStop de settings.xml (36 pt si n
   expect(m.tabPorDefectoPt).toBe(72);
 });
 
-test('un tabulador dentro de una celda de tabla sigue aproximándose y AHORA lo avisa (aproximado)', () => {
+test('un tabulador dentro de una celda de tabla ya es real (E-101): no se avisa de aproximación', () => {
   const xml = documento('<w:tbl><w:tblGrid><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>a</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>b</w:t></w:r></w:p></w:tc></w:tr></w:tbl>');
   const m = construirModeloDocx(xml, null, null);
-  expect(m.advertencias.find((a) => /tabulaci/i.test(a.mensaje))?.tipo).toBe('aproximado');
+  expect(m.advertencias.find((a) => /tabulaci/i.test(a.mensaje))).toBeUndefined();
 });
 
 test('un enlace externo del encabezado se resuelve con las relaciones del PROPIO encabezado (no con las del documento)', () => {
