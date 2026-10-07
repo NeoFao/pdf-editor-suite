@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
-import { abrirPestana } from './_ayudas';
+import { abrirPestana, escribirNota } from './_ayudas';
 
 /**
  * E-084: con una caja visible (CropBox, o MediaBox sin CropBox) cuyo origen NO es (0,0), como las plantillas de Acrobat
@@ -182,11 +182,11 @@ for (const c of CASOS) {
     await abrir(page);
     const w = await envolver(page, c.pagina);
     await abrirPestana(page, 'comentar');
-    page.once('dialog', (d) => d.accept('Nota cropbox'));
     await page.locator('#btn-note').click();
     const caja = (await w.boundingBox())!;
     const fx = 0.3, fy = 0.8;
     await w.click({ position: { x: caja.width * fx, y: caja.height * fy } });
+    await escribirNota(page, 'Nota cropbox');
     await expect(page.locator('#status')).toHaveText('Nota añadida.');
     const bytes = await descargar(page, `nota${c.pagina}.pdf`);
     const eng = await PdfiumEngine.create();

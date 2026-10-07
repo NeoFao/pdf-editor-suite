@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
-import { abrirPestana } from './_ayudas';
+import { abrirPestana, escribirNota } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(AQUI, '../../fixtures/generados/nativo.pdf');
@@ -14,10 +14,10 @@ test('nota: se coloca con un clic, se ve su marcador y persiste al guardar; desh
   await expect(page.locator('.run').first()).toBeVisible();
 
   await abrirPestana(page, 'comentar');
-  page.once('dialog', (d) => d.accept('Mi nota'));
   await page.locator('#btn-note').click(); // activa el modo nota
   const pagina = page.locator('.page').first();
   await pagina.click({ position: { x: 160, y: 175 } });
+  await escribirNota(page, 'Mi nota');
   await expect(page.locator('#status')).toHaveText('Nota añadida.');
 
   const marcador = page.locator('.note-marker');
@@ -44,10 +44,10 @@ test('nota: el marcador es alcanzable con el ratón (title/aria-label no quedan 
   await expect(page.locator('.run').first()).toBeVisible();
 
   await abrirPestana(page, 'comentar');
-  page.once('dialog', (d) => d.accept('Nota alcanzable'));
   await page.locator('#btn-note').click();
   await page.locator('.page').first().click({ position: { x: 160, y: 175 } });
   const marker = page.locator('.note-marker');
+  await escribirNota(page, 'Nota alcanzable');
   await expect(marker).toHaveCount(1);
   await expect(marker).toHaveAttribute('aria-label', 'Nota alcanzable');
 

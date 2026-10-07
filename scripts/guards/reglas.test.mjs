@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen, analizarAvanceNaturalEnAgrupacion } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen, analizarAvanceNaturalEnAgrupacion, analizarPromptNativo } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -981,6 +981,29 @@ describe('pagegeometry-con-origen', () => {
 
   test('sobre el repo real no encuentra nada', () => {
     assert.ok(regla.comoArreglar.includes('desdePagina'));
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('sin-prompt-nativo', () => {
+  const regla = detectarEn('sin-prompt-nativo');
+
+  test('detecta window.prompt y prompt() sueltos en src/ (B4)', () => {
+    assert.equal(analizarPromptNativo('src/ui/App.ts', "    const t = window.prompt('Texto de la nota:');").length, 1);
+    assert.equal(analizarPromptNativo('src/ui/App.ts', "    const t = prompt('Texto');").length, 1);
+    assert.equal(analizarPromptNativo('src/ui/App.ts', "    const t = globalThis.prompt('x');").length, 1);
+  });
+
+  test('no señala identificadores parecidos, métodos propios ni comentarios', () => {
+    assert.deepEqual(analizarPromptNativo('src/x.ts', 'const p = pedirPrompt(a); this.prompt(b); const prompts = []; promptUser();'), []);
+    assert.deepEqual(analizarPromptNativo('src/x.ts', "// window.prompt('x') era el diálogo antiguo\n * prompt('y')"), []);
+  });
+
+  test('respeta el escape con razón', () => {
+    assert.deepEqual(analizarPromptNativo('src/x.ts', "// guard-disable-next-line sin-prompt-nativo: depuración local temporal\nwindow.prompt('x');"), []);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
     assert.deepEqual(regla.ejecutar(), []);
   });
 });

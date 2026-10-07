@@ -100,3 +100,23 @@ test('orden de lectura de anotaciones: de arriba abajo y, en la misma línea, de
   const hits = [mk(0, 40, 120), mk(1, 100, 180), mk(2, 40, 180), mk(3, 40, 150)];
   expect(ordenLecturaMarcados(hits, g0).map((h) => h.index)).toEqual([2, 1, 3, 0]);
 });
+
+test('B3: el texto de un marcado multilínea une las líneas con un espacio (no las pega)', () => {
+  const hit: MarcadoHit = {
+    index: 0, kind: 'highlight', rectPt: { xPt: 40, yPt: 120, wPt: 30, hPt: 72 },
+    quads: [[40, 192, 70, 192, 40, 180, 70, 180], [40, 162, 70, 162, 40, 150, 70, 150]] // "ABC" y "DEF"
+  };
+  expect(textoDeMarcado(chars, hit)).toBe('ABC DEF');
+});
+
+test('B3: sin salto sin caja entre dos líneas, el cambio de línea también separa; blancos normalizados', () => {
+  const sinSaltos: CharBox[] = [...linea('ABC', 40, 180), ...linea('DEF', 40, 150)];
+  const hit: MarcadoHit = {
+    index: 0, kind: 'highlight', rectPt: { xPt: 40, yPt: 150, wPt: 30, hPt: 42 },
+    quads: [[40, 192, 70, 192, 40, 180, 70, 180], [40, 162, 70, 162, 40, 150, 70, 150]]
+  };
+  expect(textoDeMarcado(sinSaltos, hit)).toBe('ABC DEF');
+  const conEspacios: CharBox[] = [...linea('AB ', 40, 180), sinCaja('\n'), ...linea(' CD', 40, 150)];
+  const hit2: MarcadoHit = { ...hit, quads: [[40, 192, 80, 192, 40, 180, 80, 180], [40, 162, 80, 162, 40, 150, 80, 150]] };
+  expect(textoDeMarcado(conEspacios, hit2)).toBe('AB CD');
+});

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { abrirPestana } from './_ayudas';
+import { abrirPestana, escribirNota } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const MARCADORES = path.resolve(AQUI, '../../fixtures/generados/marcadores.pdf'); // 3 páginas A4
@@ -11,9 +11,9 @@ async function anadirNota(page: Page, pagina: number, texto: string): Promise<vo
   await page.locator('#thumbs canvas').nth(pagina).click(); // navega y deja la página pintada
   await expect(page.locator('#page-indicator')).toHaveText(`${pagina + 1} / 3`);
   await abrirPestana(page, 'comentar');
-  page.once('dialog', (d) => d.accept(texto));
   await page.locator('#btn-note').click();
   await page.locator('.page').nth(pagina).click({ position: { x: 400, y: 600 } });
+  await escribirNota(page, texto);
   await expect(page.locator('#status')).toHaveText('Nota añadida.');
 }
 
@@ -50,9 +50,7 @@ test('comentarios: editar el texto, deshacer y rehacer; el visor lo refleja', as
   await abrirConDosNotas(page);
   await page.locator('.comentario-item').nth(0).click(); // deja la página 1 a la vista: el visor repinta solo lo visible
   await page.getByRole('button', { name: /Editar comentario de la página 1/ }).click();
-  const editor = page.locator('.comentario-editor');
-  await editor.fill('Texto corregido');
-  await page.getByRole('button', { name: 'Guardar comentario' }).click();
+  await escribirNota(page, 'Texto corregido');
   await expect(page.locator('.comentario-item').nth(0)).toContainText('Texto corregido');
   await expect(page.locator('.page').nth(0).locator('.note-marker')).toHaveAttribute('aria-label', 'Texto corregido');
 

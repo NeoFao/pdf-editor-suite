@@ -198,14 +198,31 @@ export function caretInicioDe(chars: readonly CharBox[], caja: { xPt: number; yP
   return donde === 'inicio' ? primero : ultimo + 1;
 }
 
-/** Texto bajo una anotación de marcado: los caracteres cuyo centro (pt de usuario) cae dentro de alguno de sus quads. */
+/**
+ * Texto bajo una anotación de marcado: los caracteres cuyo centro (pt de usuario) cae dentro de alguno de sus quads.
+ * B3: entre dos líneas se une con UN espacio. PDFium separa las líneas con CR+LF sin caja (que aquí se saltan) y,
+ * en algunos PDF, ni eso: por eso también separa un salto vertical mayor que una línea entre dos caracteres
+ * consecutivos. Los blancos se normalizan (`\s+` → un espacio) porque el resultado se anuncia y se muestra en una línea.
+ */
 export function textoDeMarcado(chars: readonly CharBox[], hit: { quads: readonly QuadPt[]; rectPt: { xPt: number; yPt: number; wPt: number; hPt: number } }): string {
   const quads = hit.quads.length > 0 ? hit.quads : [rectToQuad(hit.rectPt)];
   let s = '';
+  let separar = false;
+  let previo: CharBox | null = null;
   for (const c of chars) {
-    if (!tieneCaja(c)) continue;
+    if (!tieneCaja(c)) {
+      if (/\s/.test(c.ch)) separar = true; // CR, LF o espacio sin caja entre líneas
+      continue;
+    }
     const cx = c.boxPt.xPt + c.boxPt.wPt / 2, cy = c.boxPt.yPt + c.boxPt.hPt / 2;
-    if (quads.some((q) => puntoEnQuad(cx, cy, q))) s += c.ch;
+    if (!quads.some((q) => puntoEnQuad(cx, cy, q))) continue;
+    if (previo) {
+      const pcy = previo.boxPt.yPt + previo.boxPt.hPt / 2; // pt de usuario, mismo espacio que cy
+      if (separar || Math.abs(cy - pcy) > Math.max(previo.boxPt.hPt, c.boxPt.hPt)) s += ' ';
+    }
+    separar = false;
+    s += c.ch;
+    previo = c;
   }
-  return s.replace(/\r\n?/g, '\n');
+  return s.replace(/\s+/g, ' ').trim();
 }

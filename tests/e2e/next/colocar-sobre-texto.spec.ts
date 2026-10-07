@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { abrirPestana } from './_ayudas';
+import { abrirPestana, escribirNota } from './_ayudas';
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.resolve(AQUI, '../../fixtures/generados/nativo.pdf');
@@ -13,10 +13,10 @@ test('modo Nota: un clic sobre una línea de texto coloca la nota, no edita la l
   await expect(linea).toBeVisible();
 
   await abrirPestana(page, 'comentar');
-  page.once('dialog', (d) => d.accept('Nota sobre texto'));
   await page.locator('#btn-note').click();
   await linea.click(); // centro de la línea
 
+  await escribirNota(page, 'Nota sobre texto');
   await expect(page.locator('#status')).toHaveText('Nota añadida.');
   await expect(page.locator('.note-marker')).toHaveCount(1);
   await expect(page.locator('.run.editing')).toHaveCount(0);

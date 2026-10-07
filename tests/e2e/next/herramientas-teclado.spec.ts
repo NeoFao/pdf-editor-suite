@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { escribirNota } from './_ayudas';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
 
 // E-073 (WCAG 2.1.1): Nota y Rectángulo solo funcionaban con ratón. Este spec NO usa el ratón:
@@ -26,9 +27,9 @@ async function dentroDelVisor(page: Page, selector: string): Promise<boolean> {
 
 test('nota por teclado: N + Enter coloca la nota en la zona visible y abre el diálogo de texto', async ({ page }) => {
   await abrir(page);
-  page.once('dialog', (d) => d.accept('Nota por teclado'));
   await page.keyboard.press('n');
   await page.keyboard.press('Enter');
+  await escribirNota(page, 'Nota por teclado');
   await expect(page.locator('#status')).toHaveText('Nota añadida.');
   const marcador = page.locator('.note-marker');
   await expect(marcador).toHaveCount(1);
@@ -41,10 +42,10 @@ test('nota por teclado con una línea enfocada: la nota queda sobre esa línea, 
   const run = page.locator('.run').nth(3);
   await run.focus();
   const rb = (await run.boundingBox())!;
-  page.once('dialog', (d) => d.accept('Sobre la línea'));
   await page.keyboard.press('n');
   await page.keyboard.press('Enter');
   const marcador = page.locator('.note-marker');
+  await escribirNota(page, 'Sobre la línea');
   await expect(marcador).toHaveCount(1);
   const mb = (await marcador.boundingBox())!;
   expect(Math.abs(mb.y - rb.y)).toBeLessThan(rb.height + 24);
