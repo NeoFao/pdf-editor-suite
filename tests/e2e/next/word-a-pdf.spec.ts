@@ -223,6 +223,7 @@ const WORD_ENC_RICO = path.resolve(AQUI, '../../fixtures/generados/word-encabeza
 const WORD_AJUSTE = path.resolve(AQUI, '../../fixtures/generados/word-ajuste.docx');
 const WORD_TABS = path.resolve(AQUI, '../../fixtures/generados/word-tabs.docx');
 const WORD_NUM_TABS = path.resolve(AQUI, '../../fixtures/generados/word-numeracion-tabs.docx');
+const WORD_LISTAS_CELDA = path.resolve(AQUI, '../../fixtures/generados/word-listas-celda.docx');
 
 /** Abre el .docx en la app, espera la conversión, guarda el PDF resultante y lo abre con el motor para inspeccionarlo. */
 async function convertirYGuardar(page: Page, fixture: string, nombre: string) {
@@ -296,5 +297,24 @@ test('abrir word-numeracion-tabs.docx: marcadores romanos y de letra, y la tabul
   for (const esperada of ['iv. cuatro', 'B) beta', 'xii. doce']) expect(lineas).toContain(esperada);
   const valor = runs.find((r) => r.textoReal.trim() === 'Valor')!;
   expect(Math.abs(valor.boxPt.xPt - 277)).toBeLessThanOrEqual(1.5);
+  eng.close(doc);
+});
+
+test('abrir word-listas-celda.docx: la lista numerada sigue dentro de la celda (3., 4.) y vuelve al cuerpo (5.); viñetas ✓ y cuadradito, sin aviso (E-102)', async ({ page }) => {
+  const { eng, doc } = await convertirYGuardar(page, WORD_LISTAS_CELDA, 'word-listas-celda');
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
+  const runs = eng.getPageText(doc, 0);
+  const lineas = runs.map((r) => r.textoReal.trim());
+  for (const esperada of ['1. uno', '2. dos', '3. tres', '4. cuatro', '5. cinco', '• redonda']) expect(lineas).toContain(esperada);
+  for (const [vineta, texto] of [['■', 'cuadro'], ['✓', 'visto']] as const) {
+    const v = runs.find((r) => r.textoReal.trim() === vineta)!;
+    const t = runs.find((r) => r.textoReal.trim() === texto)!;
+    expect(v).toBeDefined();
+    expect(Math.abs(v.boxPt.yPt - t.boxPt.yPt)).toBeLessThan(6);
+    expect(v.boxPt.xPt).toBeLessThan(t.boxPt.xPt);
+  }
+  // Las celdas están a la derecha del margen: el "3." cuelga dentro de su celda, no en el margen del cuerpo.
+  const tres = runs.find((r) => r.textoReal.trim() === '3. tres')!;
+  expect(tres.boxPt.xPt).toBeGreaterThan(72 + 5);
   eng.close(doc);
 });

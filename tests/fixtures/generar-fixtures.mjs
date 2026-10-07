@@ -1073,6 +1073,44 @@ function docxNumeracionTabs() {
 }
 
 /**
+ * `word-listas-celda.docx` (E-102): una lista numerada que EMPIEZA en el cuerpo (1. 2.), sigue dentro de una celda (3. 4.) y
+ * vuelve al cuerpo (5.); en la otra celda, viñetas Wingdings (F0A7 cuadradito, F0FC visto) y Symbol (F0B7 redonda).
+ * Sin avisos: los cuatro glifos se dibujan (el cuadradito con el cuadrado de ZapfDingbats a escala reducida).
+ */
+export const DOCX_LISTAS_CELDA = { cuerpo: ['uno', 'dos'], celdaA: ['tres', 'cuatro'], cuerpoFinal: 'cinco', celdaB: ['cuadro', 'visto', 'redonda'] };
+function docxListasCelda() {
+  const item = (numId, t) => `<w:p><w:pPr>${ESP_EXACTO}<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${numId}"/></w:numPr></w:pPr><w:r>${RPR_10}<w:t>${t}</w:t></w:r></w:p>`;
+  const bullet = (id, fuente, car) => `<w:abstractNum w:abstractNumId="${id}"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="${car}"/><w:pPr><w:ind w:left="360" w:hanging="360"/></w:pPr><w:rPr><w:rFonts w:ascii="${fuente}" w:hAnsi="${fuente}" w:hint="default"/></w:rPr></w:lvl></w:abstractNum>`;
+  const numbering = `<?xml version="1.0" encoding="UTF-8"?>
+<w:numbering>
+  <w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>
+  ${bullet(1, 'Wingdings', '&#xF0A7;')}
+  ${bullet(2, 'Wingdings', '&#xF0FC;')}
+  ${bullet(3, 'Symbol', '&#xF0B7;')}
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+  <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
+  <w:num w:numId="3"><w:abstractNumId w:val="2"/></w:num>
+  <w:num w:numId="4"><w:abstractNumId w:val="3"/></w:num>
+</w:numbering>`;
+  const celda = (cuerpo) => `<w:tc>${cuerpo}</w:tc>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  ${DOCX_LISTAS_CELDA.cuerpo.map((t) => item(1, t)).join('')}
+  <w:tbl><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="4000"/></w:tblGrid><w:tr>
+    ${celda(DOCX_LISTAS_CELDA.celdaA.map((t) => item(1, t)).join(''))}
+    ${celda(item(2, DOCX_LISTAS_CELDA.celdaB[0]) + item(3, DOCX_LISTAS_CELDA.celdaB[1]) + item(4, DOCX_LISTAS_CELDA.celdaB[2]))}
+  </w:tr></w:tbl>
+  ${item(1, DOCX_LISTAS_CELDA.cuerpoFinal)}
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/numbering.xml', datos: Buffer.from(numbering, 'utf-8') }
+  ]);
+}
+
+/**
  * "Zip bomb" real: 8 MB de ceros comprimidos con deflate (que reduce a un
  * puñado de KB) en una única entrada — ejercita la defensa de ratio de
  * compresión de `src/convert/docx/zip.ts` con datos reales, no solo tamaños
@@ -1778,6 +1816,7 @@ async function main() {
     'word-ajuste.docx': docxAjuste(),
     'word-tabs.docx': docxTabs(),
     'word-numeracion-tabs.docx': docxNumeracionTabs(),
+    'word-listas-celda.docx': docxListasCelda(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {

@@ -1,5 +1,5 @@
 import { aproximado, type Advertencia } from '../advertencia';
-import { esParrafo, esTabla, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type Borde, type BordesTabla, type ParadaTab, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx } from './modelo';
+import { esParrafo, esTabla, type InfoLista, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type Borde, type BordesTabla, type ParadaTab, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx } from './modelo';
 import {
   wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona, parrafoFlex, lineasConTabs,
   type Atom, type Medir, type FlowItem, type FlowLine, type FlowTableRow, type RelLinea, type RelBarra, type ResultadoLayout, type PageGeometry, type RGB, type TabsConfig, type TabStopAbs
@@ -31,6 +31,11 @@ const OPC_BASE: OpcionesFlujo = { flex: false, tabDefectoPt: 36 };
 /** `w:ptab`: una parada ya resuelta contra una caja `x0`..`x1` (x absoluto, pt): su borde derecho, su centro o su borde izquierdo. */
 function paradaFija(x0: number, x1: number, al: 'left' | 'center' | 'right', leader: TabStopAbs['leader']): TabStopAbs {
   return al === 'right' ? { posPt: x1, tipo: 'right', leader } : al === 'center' ? { posPt: (x0 + x1) / 2, tipo: 'center', leader } : { posPt: x0, tipo: 'left', leader };
+}
+
+/** Átomo del marcador de una lista (cuerpo y celdas): su fuente y su escala vienen del nivel (viñetas de Wingdings/Symbol, E-102). */
+function atomoMarcador(lista: InfoLista, sizePt: number): Atom {
+  return { text: lista.textoMarcador, font: lista.fuenteMarcador ?? 'Helvetica', sizePt: sizePt * (lista.escalaMarcador ?? 1), color: [0, 0, 0] };
 }
 
 function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number, anchoPaginaPt: number, medir: Medir, campos: ValoresCampo | null = null, opc: OpcionesFlujo = OPC_BASE): FlowItem[] {
@@ -68,7 +73,7 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
     let atomosSegmento = bufferAtomos;
     bufferAtomos = [];
     if (primeraDeEsteVolcado && p.lista && p.lista.textoMarcador !== '') {
-      atomosSegmento = [{ text: p.lista.textoMarcador, font: 'Helvetica', sizePt: p.tamanoBasePt, color: [0, 0, 0] }, ...atomosSegmento];
+      atomosSegmento = [atomoMarcador(p.lista, p.tamanoBasePt), ...atomosSegmento];
     }
     if (atomosSegmento.length === 0) return; // nada que maquetar en este segmento (p. ej. justo antes/después de un salto)
     if (usaFlex) {
@@ -159,7 +164,7 @@ const TABLA_BASELINE_FRACTION = 0.28; // mismo valor que `paginar()` para el res
 const TABLA_SIZE_PT_DEFECTO = 10;
 
 /** Una línea DURA de una celda: sus átomos y, si lleva tabulaciones, las paradas de su párrafo (en x absoluto de página). */
-interface GrupoCelda { atoms: Atom[]; tabs: TabsConfig | null }
+interface GrupoCelda { atoms: Atom[]; tabs: TabsConfig | null; /** Sangría del párrafo de lista (pt, desde el borde interior de la celda); 0 sin lista. */ sangriaIzqPt: number; sangriaPrimeraLineaPt: number }
 
 /**
  * Aplana el contenido de una celda (`CeldaTabla.partes`) en GRUPOS de
@@ -179,13 +184,18 @@ function celdaAGrupos(celda: CeldaTabla, xIniPt: number, xFinPt: number, tabDefe
   let actual: Atom[] = [];
   let paradas: ParadaTab[] | null = null;
   let terminaEnEspacio = true;
+  let inicio: Extract<CeldaTabla['partes'][number], { tipo: 'inicioParrafo' }> | null = null;
   const cerrar = (): void => {
+    if (inicio?.lista && inicio.lista.textoMarcador !== '') actual.unshift(atomoMarcador(inicio.lista, actual.find((a) => !a.tab)?.sizePt ?? TABLA_SIZE_PT_DEFECTO));
     const tabs: TabsConfig | null = paradas ? { stops: paradas.map((t): TabStopAbs => ({ posPt: xIniPt + t.posPt, tipo: t.tipo, leader: t.leader })), defectoPt: tabDefectoPt, origenPt: xIniPt } : null;
-    grupos.push({ atoms: actual, tabs: tabs ?? (actual.some((a) => a.tab) ? { stops: [], defectoPt: tabDefectoPt, origenPt: xIniPt } : null) });
-    actual = []; paradas = null; terminaEnEspacio = true;
+    const izq = inicio?.sangriaIzqPt ?? 0;
+    grupos.push({ atoms: actual, tabs: tabs ?? (actual.some((a) => a.tab) ? { stops: [], defectoPt: tabDefectoPt, origenPt: xIniPt } : null), sangriaIzqPt: izq, sangriaPrimeraLineaPt: Math.max(-izq, inicio?.sangriaPrimeraLineaPt ?? 0) });
+    actual = []; paradas = null; terminaEnEspacio = true; inicio = null;
   };
   for (const parte of celda.partes) {
-    if (parte.tipo === 'texto') {
+    if (parte.tipo === 'inicioParrafo') {
+      inicio = parte;
+    } else if (parte.tipo === 'texto') {
       const empiezaConEspacio = parte.texto.length === 0 || /^\s/.test(parte.texto);
       let primerPalabra = true;
       for (const palabra of parte.texto.split(/\s+/)) {
@@ -292,16 +302,19 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
     if (p.esContinuacion) return [];
     const anchoTexto = Math.max(10, p.wPt - TABLA_PAD_X_PT * 2);
     const xIni = p.xStart + TABLA_PAD_X_PT;
-    return celdaAGrupos(p.celda, xIni, xIni + anchoTexto, opc.tabDefectoPt).flatMap(({ atoms, tabs }) => {
+    return celdaAGrupos(p.celda, xIni, xIni + anchoTexto, opc.tabDefectoPt).flatMap(({ atoms, tabs, sangriaIzqPt, sangriaPrimeraLineaPt }) => {
+      const xNormal = xIni + sangriaIzqPt;
+      const xPrimera = xNormal + sangriaPrimeraLineaPt;
+      const anchoLista = Math.max(10, anchoTexto - sangriaIzqPt);
       if (tabs) {
         // Con tabulaciones: el motor de párrafos (`lineasConTabs` → `lineaConTabs`) coloca cada tramo en su parada.
-        const ls = lineasConTabs({ atoms, xNormalPt: xIni, xPrimeraPt: xIni, wPt: anchoTexto, align: p.celda.alineacion, alturaLinea: (sz) => sz * TABLA_LINE_HEIGHT_FACTOR, tabs, medir });
-        return ls.length > 0 ? ls : [lineToFlowLine([], xIni, anchoTexto, p.celda.alineacion, true, TABLA_SIZE_PT_DEFECTO * TABLA_LINE_HEIGHT_FACTOR, medir)];
+        const ls = lineasConTabs({ atoms, xNormalPt: xNormal, xPrimeraPt: xPrimera, wPt: anchoLista, align: p.celda.alineacion, alturaLinea: (sz) => sz * TABLA_LINE_HEIGHT_FACTOR, tabs, medir });
+        return ls.length > 0 ? ls : [lineToFlowLine([], xNormal, anchoLista, p.celda.alineacion, true, TABLA_SIZE_PT_DEFECTO * TABLA_LINE_HEIGHT_FACTOR, medir)];
       }
-      const wrapped = atoms.length > 0 ? wrapAtoms(atoms, anchoTexto, medir) : [[]];
+      const wrapped = atoms.length > 0 ? wrapAtoms(atoms, anchoLista, medir) : [[]];
       return wrapped.map((linea, idx) => {
         const alto = (linea[0]?.sizePt ?? TABLA_SIZE_PT_DEFECTO) * TABLA_LINE_HEIGHT_FACTOR;
-        return lineToFlowLine(linea, p.xStart + TABLA_PAD_X_PT, anchoTexto, p.celda.alineacion, idx === wrapped.length - 1, alto, medir);
+        return lineToFlowLine(linea, idx === 0 ? xPrimera : xNormal, anchoLista, p.celda.alineacion, idx === wrapped.length - 1, alto, medir);
       });
     });
   };

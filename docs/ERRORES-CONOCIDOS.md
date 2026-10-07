@@ -3351,4 +3351,32 @@ celda (x de la celda + 5 pt de relleno) y `w:ptab` se alinea a su interior. Desa
 (lvlText, start, anidados, aviso), `docx-tabla-tabs.test.ts` (x de cada tramo en la celda), `flujo-layout-2c.test.ts` (`lineasConTabs`),
 `ConversorDocxNavegador-2c.test.ts` y el E2E de `word-a-pdf.spec.ts` con el fixture `word-numeracion-tabs.docx` ("iv.", "B)", "xii." y
 "Valor" a 277 pt). Sin regla guard: es funcionalidad con test. Límites que siguen: `numFmt` ordinales/cardinales en letras, listas
-dentro de celdas (el marcador no se dibuja), y el reparto de contadores entre `w:num` distintos que comparten `abstractNum`.
+dentro de celdas (resuelto en E-102), y el reparto de contadores entre `w:num` distintos que comparten `abstractNum`.
+
+### E-102 · Word → PDF: las listas dentro de celdas de tabla no dibujaban su marcador (ni avisaban) y toda viñeta salía como "•"
+
+**Síntoma.** Un ítem de lista (numerado o con viñeta) dentro de una celda salía sin marcador y sin sangría, sin ninguna advertencia, y
+la numeración del cuerpo no continuaba tras la tabla. Una viñeta `✓` o `▪` de Wingdings (o la de Symbol) salía siempre como "•".
+
+**Causa raíz.** (1) `procesarCelda` recorría los `w:p` de la celda directamente con `recorrerContenidoParrafo` y se saltaba el
+cálculo de lista y sangría que solo hacía `procesarParrafo`. (2) `siguienteMarcador` devolvía "•" para todo nivel `bullet`: el
+`w:lvlText` (un carácter de uso privado U+F0xx de una fuente de símbolos) y la `w:rFonts` del nivel se ignoraban. (3) Ninguna fuente
+estándar de PDF dibuja U+F0xx, y Helvetica solo tiene los glifos de WinAnsi (comprobado con el motor: ✓ ➢ ❖ ■ solo existen en
+ZapfDingbats; ▪ ◦ □ no existen en ninguna estándar).
+
+**Arreglo.** `pPrEfectivo` + `listaDeParrafo` (modelo.ts) son el camino ÚNICO del cuerpo y de las celdas; la celda añade una parte
+`inicioParrafo` (marcador + sangría del nivel) y `celdaAGrupos` (render.ts) la dibuja con `atomoMarcador`, el mismo átomo del cuerpo.
+Los contadores viven en `ctx.contadoresListas` (uno por documento, por `numId`), así que continúan entre celdas y cuerpo en orden de
+documento. `src/convert/docx/vinetas.ts`: `resolverVineta(lvlText, fuente)` traduce (Symbol B7 → •, Wingdings A7 → ▪, D8 → ➢, FC → ✓,
+76 → ❖, A8 → □, Courier New "o" → ◦; también el código Latin-1 de documentos antiguos) y elige la fuente estándar con el glifo. El
+cuadradito ▪ se dibuja con ■ de ZapfDingbats al 60 % (misma forma; el texto extraído es "■", no "▪"); la "o" de Courier New es el
+glifo original de Word. Sin glifo posible (□) o carácter/fuente desconocidos: "•" y aviso `aproximado` `vinetaFuente`. Las
+correspondencias oficiales (Alan Wood / Unicode) de D8, FC y A8 son U+2B9A, U+2714 y U+25FB; se usan las del dueño (➢ ✓ □), que son
+las que una estándar puede dibujar o avisar.
+
+**Cómo se detecta ahora.** `tests/unit/docx-vinetas.test.ts` (tabla y caída a aproximado), `docx-modelo-listas-celda.test.ts`
+(contadores 1-6 entre cuerpo y celdas, dos `numId`, sangría, posición x en el PDF, aviso), `ConversorDocxNavegador-2c.test.ts` y el
+E2E de `word-a-pdf.spec.ts` con el fixture `word-listas-celda.docx` ("3. tres" dentro de la celda, "5. cinco", ✓ y ■ en su línea).
+Sin regla guard: es funcionalidad con test. Límites: la sangría de párrafos SIN lista dentro de una celda sigue sin aplicarse; una
+viñeta con imagen (`w:lvlPicBulletId`) no se reproduce; el reparto de contadores entre `w:num` distintos con el mismo `abstractNum`
+sigue sin modelarse.
