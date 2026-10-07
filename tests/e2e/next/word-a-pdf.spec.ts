@@ -222,6 +222,7 @@ const WORD_SECCIONES = path.resolve(AQUI, '../../fixtures/generados/word-seccion
 const WORD_ENC_RICO = path.resolve(AQUI, '../../fixtures/generados/word-encabezado-rico.docx');
 const WORD_AJUSTE = path.resolve(AQUI, '../../fixtures/generados/word-ajuste.docx');
 const WORD_TABS = path.resolve(AQUI, '../../fixtures/generados/word-tabs.docx');
+const WORD_NUM_TABS = path.resolve(AQUI, '../../fixtures/generados/word-numeracion-tabs.docx');
 
 /** Abre el .docx en la app, espera la conversión, guarda el PDF resultante y lo abre con el motor para inspeccionarlo. */
 async function convertirYGuardar(page: Page, fixture: string, nombre: string) {
@@ -284,5 +285,16 @@ test('abrir word-tabs.docx: el número del índice y el "Página X de Y" del pie
   expect(runs.some((r) => /^\.{10,}$/.test(r.textoReal.trim()))).toBe(true);
   const pagina = runs.find((r) => r.textoReal.includes('Página 1 de 1'))!;
   expect(Math.abs(pagina.boxPt.xPt + eng.measureText(pagina.fontName, pagina.sizePt, pagina.textoReal.trim()) - 540)).toBeLessThanOrEqual(1);
+  eng.close(doc);
+});
+
+test('abrir word-numeracion-tabs.docx: marcadores romanos y de letra, y la tabulación de la celda en su parada, sin aviso (E-101)', async ({ page }) => {
+  const { eng, doc } = await convertirYGuardar(page, WORD_NUM_TABS, 'word-numeracion-tabs');
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
+  const runs = eng.getPageText(doc, 0);
+  const lineas = runs.map((r) => r.textoReal.trim());
+  for (const esperada of ['iv. cuatro', 'B) beta', 'xii. doce']) expect(lineas).toContain(esperada);
+  const valor = runs.find((r) => r.textoReal.trim() === 'Valor')!;
+  expect(Math.abs(valor.boxPt.xPt - 277)).toBeLessThanOrEqual(1.5);
   eng.close(doc);
 });

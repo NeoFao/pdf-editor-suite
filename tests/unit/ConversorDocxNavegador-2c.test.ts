@@ -129,3 +129,21 @@ test('word-tabs.docx: el número del índice acaba en el margen derecho tras el 
   expect(pagina.boxPt.yPt).toBeLessThan(72);
   engine.close(doc);
 });
+
+test('word-numeracion-tabs.docx (E-101): los marcadores "iv.", "B)" y "xii." salen en el PDF y la tabulación de la celda cae en su parada', async () => {
+  const { engine, doc, advertencias } = await convertir('word-numeracion-tabs.docx');
+  expect(advertencias).toEqual([]);
+  const runs = engine.getPageText(doc, 0);
+  // Marcador y texto del ítem salen en la misma línea de texto extraída: "iv. cuatro", "B) beta", "xii. doce".
+  const lineas = runs.map((r) => r.textoReal.trim());
+  expect(lineas).toContain('iv. cuatro');
+  expect(lineas).toContain('B) beta');
+  expect(lineas).toContain('xii. doce');
+  expect(lineas).toContain('i. uno');
+  // Celda de la 2.ª columna: empieza en x = 72 + 150; su interior (relleno de 5 pt) en 227; parada izquierda a 50 pt => "Valor" en 277.
+  const valor = runs.find((r) => r.textoReal.trim() === 'Valor')!;
+  const concepto = runs.find((r) => r.textoReal.trim() === 'Concepto')!;
+  expect(Math.abs(concepto.boxPt.xPt - 227)).toBeLessThanOrEqual(1.5);
+  expect(Math.abs(valor.boxPt.xPt - 277)).toBeLessThanOrEqual(1.5);
+  engine.close(doc);
+});

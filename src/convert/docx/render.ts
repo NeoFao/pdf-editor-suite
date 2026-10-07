@@ -1,7 +1,7 @@
 import { aproximado, type Advertencia } from '../advertencia';
-import { esParrafo, esTabla, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type Borde, type BordesTabla, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx } from './modelo';
+import { esParrafo, esTabla, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type Borde, type BordesTabla, type ParadaTab, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx } from './modelo';
 import {
-  wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona, parrafoFlex,
+  wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona, parrafoFlex, lineasConTabs,
   type Atom, type Medir, type FlowItem, type FlowLine, type FlowTableRow, type RelLinea, type RelBarra, type ResultadoLayout, type PageGeometry, type RGB, type TabsConfig, type TabStopAbs
 } from '../flujo/layout';
 
@@ -27,6 +27,11 @@ interface ValoresCampo { pagina: number; total: number }
 /** Opciones de maquetación de un párrafo (fase 2c). `flex`: maquetar línea a línea (hay flotantes con ajuste de texto en el documento); un párrafo con tabulaciones siempre va así. `tabDefectoPt`: intervalo de las paradas por defecto. */
 interface OpcionesFlujo { flex: boolean; tabDefectoPt: number }
 const OPC_BASE: OpcionesFlujo = { flex: false, tabDefectoPt: 36 };
+
+/** `w:ptab`: una parada ya resuelta contra una caja `x0`..`x1` (x absoluto, pt): su borde derecho, su centro o su borde izquierdo. */
+function paradaFija(x0: number, x1: number, al: 'left' | 'center' | 'right', leader: TabStopAbs['leader']): TabStopAbs {
+  return al === 'right' ? { posPt: x1, tipo: 'right', leader } : al === 'center' ? { posPt: (x0 + x1) / 2, tipo: 'center', leader } : { posPt: x0, tipo: 'left', leader };
+}
 
 function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number, anchoPaginaPt: number, medir: Medir, campos: ValoresCampo | null = null, opc: OpcionesFlujo = OPC_BASE): FlowItem[] {
   const salida: FlowItem[] = [];
@@ -55,18 +60,14 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
   const tabs: TabsConfig | null = tieneTabs
     ? { stops: (p.tabs ?? []).map((t): TabStopAbs => ({ posPt: margenIzqPt + t.posPt, tipo: t.tipo, leader: t.leader })), defectoPt: opc.tabDefectoPt, origenPt: margenIzqPt }
     : null;
-  /** `w:ptab`: una parada ya resuelta contra el margen (derecha del área de texto, centro o izquierda). */
-  const paradaPtab = (al: 'left' | 'center' | 'right', leader: TabStopAbs['leader']): TabStopAbs => {
-    const x0 = margenIzqPt, x1 = anchoPaginaPt - margenDerPt - p.sangriaDerPt;
-    return al === 'right' ? { posPt: x1, tipo: 'right', leader } : al === 'center' ? { posPt: (x0 + x1) / 2, tipo: 'center', leader } : { posPt: x0, tipo: 'left', leader };
-  };
+  const paradaPtab = (al: 'left' | 'center' | 'right', leader: TabStopAbs['leader']): TabStopAbs => paradaFija(margenIzqPt, anchoPaginaPt - margenDerPt - p.sangriaDerPt, al, leader);
 
   function volcar(): void {
     const primeraDeEsteVolcado = primeraLineaPendiente;
     primeraLineaPendiente = false;
     let atomosSegmento = bufferAtomos;
     bufferAtomos = [];
-    if (primeraDeEsteVolcado && p.lista) {
+    if (primeraDeEsteVolcado && p.lista && p.lista.textoMarcador !== '') {
       atomosSegmento = [{ text: p.lista.textoMarcador, font: 'Helvetica', sizePt: p.tamanoBasePt, color: [0, 0, 0] }, ...atomosSegmento];
     }
     if (atomosSegmento.length === 0) return; // nada que maquetar en este segmento (p. ej. justo antes/después de un salto)
@@ -157,21 +158,32 @@ const TABLA_LINE_HEIGHT_FACTOR = 1.2;
 const TABLA_BASELINE_FRACTION = 0.28; // mismo valor que `paginar()` para el resto del documento (ver más abajo)
 const TABLA_SIZE_PT_DEFECTO = 10;
 
+/** Una línea DURA de una celda: sus átomos y, si lleva tabulaciones, las paradas de su párrafo (en x absoluto de página). */
+interface GrupoCelda { atoms: Atom[]; tabs: TabsConfig | null }
+
 /**
  * Aplana el contenido de una celda (`CeldaTabla.partes`) en GRUPOS de
  * átomos, uno por línea DURA (`saltoLinea`, de unir varios `w:p` de la
  * celda — ver `CeldaTabla` en `modelo.ts`): cada grupo se ajusta de línea
- * (`wrapAtoms`) por separado, nunca junto con el grupo siguiente. Un
- * `w:tab` dentro de una celda se aproxima con un hueco fijo, igual que en
- * `renderizarParrafo`. Una `imagen` dentro de una celda queda fuera de
+ * por separado, nunca junto con el grupo siguiente. Un `w:tab` es un átomo
+ * `tab` que resuelve `lineaConTabs` (E-101, el MISMO motor que los
+ * párrafos normales): las paradas del párrafo se miden desde el borde
+ * interior de la celda (`xIniPt`; `xFinPt` es el interior derecho, al que
+ * se alinea un `w:ptab`). Una `imagen` dentro de una celda queda fuera de
  * alcance de esta fase (se ignora: no hay un "bloque" de altura propia
  * dentro de la línea de una celda en este maquetador) — caso raro en tablas
  * reales, no cubierto por los tests de este PR.
  */
-function celdaAGrupos(celda: CeldaTabla): Atom[][] {
-  const grupos: Atom[][] = [];
+function celdaAGrupos(celda: CeldaTabla, xIniPt: number, xFinPt: number, tabDefectoPt: number): GrupoCelda[] {
+  const grupos: GrupoCelda[] = [];
   let actual: Atom[] = [];
+  let paradas: ParadaTab[] | null = null;
   let terminaEnEspacio = true;
+  const cerrar = (): void => {
+    const tabs: TabsConfig | null = paradas ? { stops: paradas.map((t): TabStopAbs => ({ posPt: xIniPt + t.posPt, tipo: t.tipo, leader: t.leader })), defectoPt: tabDefectoPt, origenPt: xIniPt } : null;
+    grupos.push({ atoms: actual, tabs: tabs ?? (actual.some((a) => a.tab) ? { stops: [], defectoPt: tabDefectoPt, origenPt: xIniPt } : null) });
+    actual = []; paradas = null; terminaEnEspacio = true;
+  };
   for (const parte of celda.partes) {
     if (parte.tipo === 'texto') {
       const empiezaConEspacio = parte.texto.length === 0 || /^\s/.test(parte.texto);
@@ -184,16 +196,16 @@ function celdaAGrupos(celda: CeldaTabla): Atom[][] {
       }
       if (parte.texto.length > 0) terminaEnEspacio = /\s$/.test(parte.texto);
     } else if (parte.tipo === 'tab') {
-      actual.push({ text: '  ', font: 'Helvetica', sizePt: TABLA_SIZE_PT_DEFECTO, color: [0, 0, 0] });
+      if (parte.paradas && !paradas) paradas = parte.paradas;
+      const fijo = parte.ptab ? paradaFija(xIniPt, xFinPt, parte.ptab.alineacion, parte.ptab.leader) : undefined;
+      actual.push({ text: '', font: 'Helvetica', sizePt: TABLA_SIZE_PT_DEFECTO, color: [0, 0, 0], tab: fijo ? { fijo } : {} });
       terminaEnEspacio = true;
     } else if (parte.tipo === 'saltoLinea' || parte.tipo === 'saltoPagina') {
-      grupos.push(actual);
-      actual = [];
-      terminaEnEspacio = true;
+      cerrar();
     }
     // 'imagen': ver el comentario de la función.
   }
-  grupos.push(actual);
+  cerrar();
   return grupos;
 }
 
@@ -236,7 +248,7 @@ interface CeldaPos {
  *   la tabla se añade una vez tras la última fila y en cada trozo de una
  *   fila partida salvo el último.
  */
-function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anchoPaginaPt: number, alturaUtilPt: number, medir: Medir, av: AvisosTabla): FlowItem[] {
+function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anchoPaginaPt: number, alturaUtilPt: number, medir: Medir, av: AvisosTabla, opc: OpcionesFlujo = OPC_BASE): FlowItem[] {
   const anchosBase = [...t.anchosColPt];
   const colsNecesarias = t.filas.reduce((max, f) => Math.max(max, f.celdas.reduce((sum, c) => sum + c.gridSpan, 0)), 0);
   if (colsNecesarias > anchosBase.length) { av.gridAmpliado++; while (anchosBase.length < colsNecesarias) anchosBase.push(72); }
@@ -279,7 +291,13 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
   const lineasDe = (p: CeldaPos): FlowLine[] => {
     if (p.esContinuacion) return [];
     const anchoTexto = Math.max(10, p.wPt - TABLA_PAD_X_PT * 2);
-    return celdaAGrupos(p.celda).flatMap((atoms) => {
+    const xIni = p.xStart + TABLA_PAD_X_PT;
+    return celdaAGrupos(p.celda, xIni, xIni + anchoTexto, opc.tabDefectoPt).flatMap(({ atoms, tabs }) => {
+      if (tabs) {
+        // Con tabulaciones: el motor de párrafos (`lineasConTabs` → `lineaConTabs`) coloca cada tramo en su parada.
+        const ls = lineasConTabs({ atoms, xNormalPt: xIni, xPrimeraPt: xIni, wPt: anchoTexto, align: p.celda.alineacion, alturaLinea: (sz) => sz * TABLA_LINE_HEIGHT_FACTOR, tabs, medir });
+        return ls.length > 0 ? ls : [lineToFlowLine([], xIni, anchoTexto, p.celda.alineacion, true, TABLA_SIZE_PT_DEFECTO * TABLA_LINE_HEIGHT_FACTOR, medir)];
+      }
       const wrapped = atoms.length > 0 ? wrapAtoms(atoms, anchoTexto, medir) : [[]];
       return wrapped.map((linea, idx) => {
         const alto = (linea[0]?.sizePt ?? TABLA_SIZE_PT_DEFECTO) * TABLA_LINE_HEIGHT_FACTOR;
@@ -486,7 +504,7 @@ function itemsDeZona(bloques: BloqueDocx[], sec: SeccionDocx, medir: Medir, camp
   const items: FlowItem[] = [];
   for (const b of bloques) {
     if (esParrafo(b)) items.push(...renderizarParrafo(b, sec.margenIzqPt, sec.margenDerPt, sec.paginaAnchoPt, medir, campos, opc));
-    else if (esTabla(b)) items.push(...renderizarTabla(b, sec.margenIzqPt, sec.margenDerPt, sec.paginaAnchoPt, sec.paginaAltoPt * ZONA_FRACCION_MAXIMA, medir, av));
+    else if (esTabla(b)) items.push(...renderizarTabla(b, sec.margenIzqPt, sec.margenDerPt, sec.paginaAnchoPt, sec.paginaAltoPt * ZONA_FRACCION_MAXIMA, medir, av, opc));
   }
   const utiles = items.filter((it) => {
     if (it.kind === 'pagebreak') { av.saltoEnZona++; return false; }
@@ -563,7 +581,7 @@ export function renderizarModeloDocx(modelo: ModeloDocx, medir: Medir): Resultad
     const bloques: BloqueRenderizado[] = [];
     for (const bloque of modelo.bloques.slice(sec.inicioBloque, sec.finBloque)) {
       if (esParrafo(bloque)) bloques.push({ items: renderizarParrafo(bloque, sec.margenIzqPt, sec.margenDerPt, sec.paginaAnchoPt, medir, null, opcCuerpo), keepNext: bloque.mantenerConSiguiente, keepLines: bloque.mantenerLineasJuntas });
-      else if (esTabla(bloque)) bloques.push({ items: renderizarTabla(bloque, sec.margenIzqPt, sec.margenDerPt, sec.paginaAnchoPt, alturaUtilPt, medir, av), keepNext: false, keepLines: false });
+      else if (esTabla(bloque)) bloques.push({ items: renderizarTabla(bloque, sec.margenIzqPt, sec.margenDerPt, sec.paginaAnchoPt, alturaUtilPt, medir, av, opcCuerpo), keepNext: false, keepLines: false });
     }
     items.push(...agruparKeep(bloques));
   });

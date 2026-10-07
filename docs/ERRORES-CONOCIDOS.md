@@ -3325,3 +3325,30 @@ La selección por teclado (T16) sigue siendo de una página: Mayús+flecha sobre
 texto copiado exacto en arrastre directo e inverso, una anotación por página con quads sobre las líneas correctas, deshacer las quita
 todas y rehacer las devuelve, subrayar/tachar, una sola página sin cambios y autoscroll con la ventana baja). Sin regla guard: no hay
 patrón de código fiable.
+
+### E-101 · Word → PDF: las listas ignoraban `w:lvlText` y `w:start`, las letras pasaban de la z mal y las tabulaciones de una celda eran un hueco fijo
+
+**Síntoma.** Una lista `lowerRoman` con `w:lvlText="%1)"` salía como "i." (siempre punto), una lista con `w:start="12"` empezaba en 1,
+las listas anidadas "1.a." salían como "a.", la lista `lowerLetter` del 27 en adelante daba "ab" (Word da "bb"), un `numFmt` no
+soportado se numeraba con cifras SIN avisar, y una tabulación dentro de una celda de tabla era un hueco fijo de dos espacios
+(avisado como `aproximado`): ni paradas del párrafo, ni parada derecha, ni líder, ni decimal.
+
+**Causa raíz.** (1) `formatearNumero` ponía siempre `${valor}.` y descartaba `w:lvlText`/`w:start`; el contador era un entero que
+arrancaba en 0. (2) `letra()` era base 26, pero Word REPITE la letra (a..z, aa, bb, cc...). (3) El contenido de una celda se
+aplanaba a átomos de texto con `wrapAtoms`; los `w:tabs` del párrafo se perdían al unir los párrafos de la celda y la tabulación no
+pasaba por `lineaConTabs`, el motor de la fase 2c.
+
+**Arreglo.** `src/convert/docx/numeracion.ts` (funciones puras): `formatoNumero` (decimal, decimalZero, lower/upperLetter, lower/upperRoman,
+bullet, none) y `aplicarLvlText` (`%1`..`%9` con el formato de CADA nivel). Contadores por nivel con `null` = sin usar (el primero
+vale `w:start`; avanzar un nivel reinicia los más profundos). Convenciones documentadas: 0 en letras/romanos = sin cifra; romanos
+sin límite de 3999 (se repite la M) hasta 32767 y por encima cifras arábigas; viñeta siempre "•". Un `numFmt` no soportado se
+numera con cifras y avisa (`listaFormato`, aproximado). Las tabulaciones de celda: cada `w:tab` del modelo lleva las `paradas` de SU
+párrafo (estilo + propias) y la celda las coloca con `lineasConTabs` (nueva, en `flujo/layout.ts`), que es `parrafoFlex` →
+`lineaConTabs` sobre una franja fija: ni una segunda lógica de tabulaciones. Las posiciones se miden desde el borde INTERIOR de la
+celda (x de la celda + 5 pt de relleno) y `w:ptab` se alinea a su interior. Desaparece el aviso `tabEnCelda`.
+
+**Cómo se detecta ahora.** `tests/unit/docx-numeracion.test.ts` (límites 0, 1, 26, 27, 3999 y más allá), `docx-modelo-numeracion.test.ts`
+(lvlText, start, anidados, aviso), `docx-tabla-tabs.test.ts` (x de cada tramo en la celda), `flujo-layout-2c.test.ts` (`lineasConTabs`),
+`ConversorDocxNavegador-2c.test.ts` y el E2E de `word-a-pdf.spec.ts` con el fixture `word-numeracion-tabs.docx` ("iv.", "B)", "xii." y
+"Valor" a 277 pt). Sin regla guard: es funcionalidad con test. Límites que siguen: `numFmt` ordinales/cardinales en letras, listas
+dentro de celdas (el marcador no se dibuja), y el reparto de contadores entre `w:num` distintos que comparten `abstractNum`.

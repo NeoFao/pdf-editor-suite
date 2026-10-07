@@ -1,4 +1,5 @@
 import { DocxError } from './DocxError';
+import { formatoNumero, aplicarLvlText } from './numeracion';
 import { omitido, aproximado, type Advertencia, type TipoAdvertencia } from '../advertencia';
 import { parseXml, hijosElemento, primerHijo, textoDirecto, buscarDescendiente, type XmlElemento } from './xml';
 import { classifyFont } from '../../engine/fontClassify';
@@ -69,8 +70,8 @@ import type { PosFlotanteH, PosFlotanteV, AjusteFlotante } from '../flujo/layout
  *   (`decodificarPng.ts`) ni `createImageBitmap` entiendan se avisan.
  * - Encabezados y pies: `default`/`first` (`w:titlePg`)/`even`
  *   (`w:evenAndOddHeaders`), con `PAGE`/`NUMPAGES`, imágenes y tablas (2c).
- * - Tabulaciones (2c): fuera de una celda de tabla son reales; dentro de una
- *   celda se aproximan con un hueco fijo y se avisa.
+ * - Tabulaciones (2c): reales también dentro de una celda de tabla (E-101), con las
+ *   paradas de su párrafo medidas desde el borde interior de la celda.
  * - Enlaces: solo `w:hyperlink` EXTERNO (`r:id` con `TargetMode="External"`);
  *   un enlace interno a un marcador del propio documento (`w:anchor`) se
  *   trata como texto plano, sin aviso (navegación interna fuera de alcance).
@@ -98,8 +99,12 @@ export interface ParadaTab { posPt: number; tipo: 'left' | 'center' | 'right' | 
 export type ParteParrafo =
   /** `url`, cuando está presente, es la URL YA VALIDADA (`validarUrlEnlace`) de un `w:hyperlink` que envuelve este texto. */
   | { tipo: 'texto'; texto: string; formato: RunFormato; url?: string }
-  /** Tabulación. `ptab` (`w:ptab`, tabulación de posición): salta a una alineación respecto al margen en vez de a una parada. */
-  | { tipo: 'tab'; ptab?: { alineacion: 'left' | 'center' | 'right'; leader: LiderTab } }
+  /**
+   * Tabulación. `ptab` (`w:ptab`, tabulación de posición): salta a una alineación respecto al margen en vez de a una parada.
+   * `paradas` (solo dentro de una celda de tabla, E-101): las paradas efectivas de SU párrafo (estilo + directas), con `posPt`
+   * medido desde el borde interior de la celda; en un párrafo normal viven en `Parrafo.tabs`.
+   */
+  | { tipo: 'tab'; ptab?: { alineacion: 'left' | 'center' | 'right'; leader: LiderTab }; paradas?: ParadaTab[] }
   | { tipo: 'saltoLinea' }
   | { tipo: 'saltoPagina' }
   /** Imagen inline (`w:drawing > wp:inline`, fase 2a). `refId` es la ruta dentro del ZIP del .docx (p. ej. `word/media/image1.png`); `wPt`/`hPt` son el tamaño DECLARADO por Word (`wp:extent`, EMU → pt), sin clampar todavía al ancho útil de página — eso lo hace `render.ts`, que conoce la geometría. */
@@ -368,7 +373,8 @@ function leerEstilos(root: XmlElemento): {
 // Numeración (word/numbering.xml)
 // ---------------------------------------------------------------------------
 
-interface NivelListaDef { formato: string; sangriaIzqPt: number; sangriaColganteP: number }
+/** `inicio`: `w:start` (1 si falta); `lvlText`: plantilla del marcador (`%1.%2.`), `null` si el nivel no la declara. */
+interface NivelListaDef { formato: string; sangriaIzqPt: number; sangriaColganteP: number; inicio: number; lvlText: string | null }
 interface AbstractNumDef { niveles: Map<number, NivelListaDef> }
 
 function leerNumbering(root: XmlElemento): { numMap: Map<string, string>; abstractNums: Map<string, AbstractNumDef> } {
@@ -384,8 +390,11 @@ function leerNumbering(root: XmlElemento): { numMap: Map<string, string>; abstra
       const ind = pPr ? primerHijo(pPr, 'w:ind') : null;
       const left = ind?.atributos['w:left'] ?? ind?.atributos['w:start'];
       const hanging = ind?.atributos['w:hanging'];
+      const inicioAttr = Number(primerHijo(lvl, 'w:start')?.atributos['w:val']);
       niveles.set(ilvl, {
         formato: numFmt,
+        inicio: Number.isFinite(inicioAttr) ? inicioAttr : 1,
+        lvlText: primerHijo(lvl, 'w:lvlText')?.atributos['w:val'] ?? null,
         sangriaIzqPt: left !== undefined ? twipsAPt(Number(left)) : (ilvl + 1) * 18,
         sangriaColganteP: hanging !== undefined ? twipsAPt(Number(hanging)) : 18
       });
@@ -407,40 +416,29 @@ function obtenerNivelLista(numId: string, ilvl: number, ctx: Contexto): NivelLis
   return ctx.abstractNums.get(absId)?.niveles.get(ilvl) ?? null;
 }
 
-function letra(n: number, mayus: boolean): string {
-  let s = '';
-  let x = n;
-  while (x > 0) { x--; s = String.fromCharCode(97 + (x % 26)) + s; x = Math.floor(x / 26); }
-  return mayus ? s.toUpperCase() : s;
-}
-
-function romano(n: number): string {
-  const tabla: [number, string][] = [[1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'], [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I']];
-  let resto = n;
-  let out = '';
-  for (const [valor, simbolo] of tabla) { while (resto >= valor) { out += simbolo; resto -= valor; } }
-  return out || 'I';
-}
-
-function formatearNumero(valor: number, formato: string): string {
-  switch (formato) {
-    case 'bullet': return '•';
-    case 'decimal': return `${valor}.`;
-    case 'lowerLetter': return `${letra(valor, false)}.`;
-    case 'upperLetter': return `${letra(valor, true)}.`;
-    case 'lowerRoman': return `${romano(valor).toLowerCase()}.`;
-    case 'upperRoman': return `${romano(valor)}.`;
-    default: return `${valor}.`;
-  }
-}
-
-/** Numeración CORRELATIVA por lista y nivel: cada nivel lleva su propio contador, y avanzar un nivel más superficial reinicia los contadores de los niveles más profundos (igual que Word). Estado en `ctx.contadoresListas`, uno por documento. */
+/**
+ * Numeración CORRELATIVA por lista y nivel (E-101): cada nivel lleva su propio contador (`null` = aún sin usar, el primero
+ * vale `w:start`), y avanzar un nivel más superficial reinicia los más profundos (igual que Word). El marcador sale de
+ * `w:lvlText` sustituyendo `%N` por el contador del nivel N-1 con el formato de ESE nivel. Estado en
+ * `ctx.contadoresListas`, uno por documento. Un `numFmt` no soportado se numera con cifras y se avisa.
+ */
 function siguienteMarcador(numId: string, ilvl: number, nivel: NivelListaDef, ctx: Contexto): string {
   let contadores = ctx.contadoresListas.get(numId);
-  if (!contadores) { contadores = new Array(9).fill(0); ctx.contadoresListas.set(numId, contadores); }
-  contadores[ilvl] = (contadores[ilvl] ?? 0) + 1;
-  for (let i = ilvl + 1; i < contadores.length; i++) contadores[i] = 0;
-  return formatearNumero(contadores[ilvl]!, nivel.formato);
+  if (!contadores) { contadores = new Array<number | null>(9).fill(null); ctx.contadoresListas.set(numId, contadores); }
+  const previo = contadores[ilvl] ?? null;
+  contadores[ilvl] = previo === null ? nivel.inicio : previo + 1;
+  for (let i = ilvl + 1; i < contadores.length; i++) contadores[i] = null;
+  const niveles = ctx.abstractNums.get(ctx.numMap.get(numId) ?? '')?.niveles;
+  const formateado = (k: number): string => {
+    const def = k === ilvl ? nivel : niveles?.get(k);
+    const valor = contadores![k] ?? def?.inicio ?? 1;
+    const f = formatoNumero(valor, def?.formato ?? 'decimal');
+    if (f === null) { anotar(ctx, 'listaFormato'); return String(valor); }
+    return f;
+  };
+  if (nivel.formato === 'bullet') return '•';
+  const plantilla = nivel.lvlText ?? `%${ilvl + 1}.`;
+  return aplicarLvlText(plantilla, Array.from({ length: ilvl + 1 }, (_v, k) => formateado(k)));
 }
 
 function calcularInfoLista(numId: string, ilvl: number, ctx: Contexto): InfoLista | null {
@@ -566,7 +564,7 @@ interface Contexto {
   estiloParrafoPorDefecto: string | null;
   numMap: Map<string, string>;
   abstractNums: Map<string, AbstractNumDef>;
-  contadoresListas: Map<string, number[]>;
+  contadoresListas: Map<string, (number | null)[]>;
   /** `word/_rels/document.xml.rels` ya parseado (`null` si el .docx no lo trae, p. ej. sin imágenes ni enlaces). */
   rels: Map<string, Relacion> | null;
   /**
@@ -604,7 +602,7 @@ const MENSAJES_PERDIDAS: [string, TipoAdvertencia, (c: number) => string][] = [
   ['saltoPaginaEnCelda', 'aproximado', (c) => cuenta(c, 'Un salto de página dentro de una celda de tabla se trató como salto de línea.', '{n} saltos de página dentro de celdas de tabla se trataron como saltos de línea.')],
   ['flotante', 'aproximado', (c) => cuenta(c, 'Imagen flotante colocada sin ajuste de texto (el texto no la rodea y puede quedar debajo o encima de ella).', '{n} imágenes flotantes colocadas sin ajuste de texto (el texto no las rodea y puede quedar debajo o encima de ellas).')],
   ['flotanteAprox', 'aproximado', (c) => cuenta(c, 'El ajuste de texto de una imagen flotante con contorno (estrecho o a través, con polígono) se aproximó a un cuadrado.', 'El ajuste de texto de {n} imágenes flotantes con contorno (estrecho o a través, con polígono) se aproximó a un cuadrado.')],
-  ['tabEnCelda', 'aproximado', (c) => cuenta(c, 'Una tabulación dentro de una celda de tabla se aproximó con un hueco fijo (sin paradas reales).', '{n} tabulaciones dentro de celdas de tabla se aproximaron con un hueco fijo (sin paradas reales).')],
+  ['listaFormato', 'aproximado', (c) => cuenta(c, 'Un párrafo de lista usa un formato de numeración no soportado (p. ej. ordinales en letras) y se numeró con cifras.', '{n} párrafos de lista usan un formato de numeración no soportado (p. ej. ordinales en letras) y se numeraron con cifras.')],
   ['seccionParImpar', 'aproximado', (c) => cuenta(c, 'Un salto de sección de tipo página par, página impar o columna siguiente se trató como un salto a página nueva.', '{n} saltos de sección de tipo página par, página impar o columna siguiente se trataron como saltos a página nueva.')],
   ['numeroPaginaFormato', 'aproximado', (c) => cuenta(c, 'El formato de numeración de página de una sección (romano, letras...) no se reproduce: se numera con cifras arábigas.', 'El formato de numeración de página de {n} secciones (romano, letras...) no se reproduce: se numera con cifras arábigas.')],
   ['numeroPaginaContinua', 'aproximado', (c) => cuenta(c, 'El reinicio de numeración de página de una sección continua se ignoró (la numeración sigue por páginas).', 'El reinicio de numeración de página de {n} secciones continuas se ignoró (la numeración sigue por páginas).')],
@@ -875,6 +873,17 @@ function procesarHyperlink(h: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, par
   for (let i = antes; i < partes.length; i++) { const p = partes[i]!; if (p.tipo === 'texto') p.url = url; }
 }
 
+/** Paradas de tabulación efectivas de un `w:p` (docDefaults, estilo y propias, con `clear` aplicado), ordenadas por posición. */
+function paradasDeParrafo(el: XmlElemento, ctx: Contexto): ParadaTab[] {
+  const pPr = primerHijo(el, 'w:pPr');
+  const estiloId = (pPr ? primerHijo(pPr, 'w:pStyle')?.atributos['w:val'] : undefined) ?? ctx.estiloParrafoPorDefecto;
+  const acc = pPrPorDefecto();
+  if (ctx.docDefaultsPPr) aplicarPPr(acc, ctx.docDefaultsPPr);
+  for (const est of estiloId ? cadenaEstilo(estiloId, ctx.estilos) : []) if (est.pPr) aplicarPPr(acc, est.pPr);
+  if (pPr) aplicarPPr(acc, pPr);
+  return [...acc.tabs.values()].sort((a, b) => a.posPt - b.posPt);
+}
+
 function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
   const pPr = primerHijo(el, 'w:pPr');
   const pStyleIdPropio = pPr ? primerHijo(pPr, 'w:pStyle')?.atributos['w:val'] ?? null : null;
@@ -1014,7 +1023,11 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
       }
       const baseRuns = rPrPorDefecto();
       if (ctx.docDefaultsRPr) aplicarRPr(baseRuns, ctx.docDefaultsRPr);
+      const desde = partes.length;
       recorrerContenidoParrafo(hijo, baseRuns, ctx, partes);
+      // Tabulaciones reales (E-101): cada `w:tab` de la celda lleva las paradas de SU párrafo.
+      const paradas = partes.slice(desde).some((x) => x.tipo === 'tab') ? paradasDeParrafo(hijo, ctx) : [];
+      for (let k = desde; k < partes.length; k++) { const x = partes[k]!; if (x.tipo === 'tab' && !x.ptab) partes[k] = { ...x, paradas }; }
       bloquesVistos++;
     } else if (hijo.nombre === 'w:tbl') {
       // Tabla anidada: fuera de alcance como rejilla; su texto se conserva aplanado (una línea por fila, celdas separadas por tabulador) y se avisa.
@@ -1031,7 +1044,6 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
   }
 
   ctx.enCelda = enCeldaAntes;
-  if (partes.some((x) => x.tipo === 'tab')) anotar(ctx, 'tabEnCelda');
   // Lo que una celda no puede pintar en esta fase se degrada CON aviso, nunca en silencio.
   for (let k = partes.length - 1; k >= 0; k--) {
     const parte = partes[k]!;

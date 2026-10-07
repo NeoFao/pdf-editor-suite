@@ -1035,6 +1035,44 @@ function docxTabs() {
 }
 
 /**
+ * `word-numeracion-tabs.docx` (E-101): listas con formatos de numeración de Word y una tabulación dentro de una celda.
+ * Lista 1 `lowerRoman` "%1." (cuatro ítems: el cuarto es "iv."); lista 2 `upperLetter` "%1)" (el segundo es "B)"); lista 3
+ * `lowerRoman` con `w:start`=12 ("xii."). Una tabla de dos columnas (3000 y 4000 twips): en la celda de la segunda columna
+ * "Concepto TAB Valor" con parada izquierda a 1000 twips (50 pt) medida desde el borde INTERIOR de la celda: la celda empieza
+ * en x = 72 + 150 = 222 pt, su interior en 227 y "Valor" debe empezar en 277.
+ */
+export const DOCX_NUMERACION_TABS = { romanos: ['uno', 'dos', 'tres', 'cuatro'], letras: ['alfa', 'beta'], romano12: 'doce', celda: ['Concepto', 'Valor'], valorXPt: 277 };
+function docxNumeracionTabs() {
+  const item = (numId, t) => `<w:p><w:pPr>${ESP_EXACTO}<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${numId}"/></w:numPr></w:pPr><w:r>${RPR_10}<w:t>${t}</w:t></w:r></w:p>`;
+  const numbering = `<?xml version="1.0" encoding="UTF-8"?>
+<w:numbering>
+  <w:abstractNum w:abstractNumId="0"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="lowerRoman"/><w:lvlText w:val="%1."/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>
+  <w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/><w:numFmt w:val="upperLetter"/><w:lvlText w:val="%1)"/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>
+  <w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="12"/><w:numFmt w:val="lowerRoman"/><w:lvlText w:val="%1."/><w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>
+  <w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>
+  <w:num w:numId="2"><w:abstractNumId w:val="1"/></w:num>
+  <w:num w:numId="3"><w:abstractNumId w:val="2"/></w:num>
+</w:numbering>`;
+  const celda = (cuerpo) => `<w:tc>${cuerpo}</w:tc>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  ${DOCX_NUMERACION_TABS.romanos.map((t) => item(1, t)).join('\n  ')}
+  ${DOCX_NUMERACION_TABS.letras.map((t) => item(2, t)).join('\n  ')}
+  ${item(3, DOCX_NUMERACION_TABS.romano12)}
+  <w:tbl><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="4000"/></w:tblGrid><w:tr>
+    ${celda(`<w:p><w:pPr>${ESP_EXACTO}</w:pPr><w:r>${RPR_10}<w:t>Fila</w:t></w:r></w:p>`)}
+    ${celda(`<w:p><w:pPr>${ESP_EXACTO}<w:tabs><w:tab w:val="left" w:pos="1000"/></w:tabs></w:pPr><w:r>${RPR_10}<w:t>${DOCX_NUMERACION_TABS.celda[0]}</w:t></w:r><w:r>${RPR_10}<w:tab/></w:r><w:r>${RPR_10}<w:t>${DOCX_NUMERACION_TABS.celda[1]}</w:t></w:r></w:p>`)}
+  </w:tr></w:tbl>
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/numbering.xml', datos: Buffer.from(numbering, 'utf-8') }
+  ]);
+}
+
+/**
  * "Zip bomb" real: 8 MB de ceros comprimidos con deflate (que reduce a un
  * puñado de KB) en una única entrada — ejercita la defensa de ratio de
  * compresión de `src/convert/docx/zip.ts` con datos reales, no solo tamaños
@@ -1739,6 +1777,7 @@ async function main() {
     'word-encabezado-rico.docx': docxEncabezadoRico(),
     'word-ajuste.docx': docxAjuste(),
     'word-tabs.docx': docxTabs(),
+    'word-numeracion-tabs.docx': docxNumeracionTabs(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {
