@@ -6,6 +6,8 @@ export interface ComentariosHooks {
   totalPaginas(): number;
   /** Anotaciones con comentario de una página (lectura al motor). */
   leerPagina(pageIndex: number): CommentInfo[];
+  /** Texto de la página que cubre una anotación de marcado (QuadPoints); '' si no cubre ninguno. Lectura perezosa. */
+  textoMarcado(pageIndex: number, c: CommentInfo): string;
   /** Navega a la página (único punto de entrada de navegación, E-032). */
   irAPagina(pageIndex: number): void;
   /** Marca la nota en el visor. */
@@ -15,7 +17,7 @@ export interface ComentariosHooks {
   borrar(pageIndex: number, annotIndex: number): void;
 }
 
-type Fila = CommentInfo & { pageIndex: number };
+type Fila = CommentInfo & { pageIndex: number; marcado: string };
 
 const ETIQUETA: Record<CommentKind, string> = {
   note: 'Nota', highlight: 'Resaltado', underline: 'Subrayado', strikeout: 'Tachado', freetext: 'Texto libre', other: 'Anotación'
@@ -23,6 +25,10 @@ const ETIQUETA: Record<CommentKind, string> = {
 /** Páginas leídas por tanda antes de ceder el hilo (E-043: nunca 500 getComments seguidos). */
 const PAGINAS_POR_TANDA = 20;
 const EXTRACTO_MAX = 140;
+/** Un tramo de trabajo síncrono mayor que esto (ms) cede el hilo antes de seguir leyendo (E-043). */
+const TRAMO_MAX_MS = 25;
+const esMarcado = (k: CommentKind): boolean => k === 'highlight' || k === 'underline' || k === 'strikeout';
+const recortar = (t: string): string => (t.length > EXTRACTO_MAX ? `${t.slice(0, EXTRACTO_MAX)}…` : t);
 
 /**
  * Panel "Comentarios" (pestaña del panel lateral). Lectura PEREZOSA: no toca el
@@ -34,6 +40,8 @@ const EXTRACTO_MAX = 140;
  */
 export class ComentariosPanel {
   private porPagina = new Map<number, CommentInfo[]>();
+  /** Texto marcado por anotación (clave «página:índice»), calculado una vez al leer la página y vaciado con ella. */
+  private textos = new Map<string, string>();
   private visible = false;
   private sucio = true;
   private cargando = false;
@@ -73,6 +81,7 @@ export class ComentariosPanel {
     this.cargando = false;
     this.sucio = true;
     this.porPagina.clear();
+    this.textos.clear();
     if (this.visible) void this.cargar();
     else this.pintar();
   }
@@ -80,8 +89,17 @@ export class ComentariosPanel {
   /** Cambió UNA página (E-044: no se relee el documento entero). */
   invalidarPagina(pageIndex: number): void {
     if (!this.visible || this.sucio) { this.sucio = true; return; }
-    this.porPagina.set(pageIndex, this.hooks.leerPagina(pageIndex));
+    this.leerYGuardar(pageIndex);
     this.pintar();
+  }
+
+  /** Lee una página y (re)calcula el texto marcado de sus marcados; descarta lo cacheado de esa página. */
+  private leerYGuardar(pageIndex: number): void {
+    const prefijo = `${pageIndex}:`;
+    for (const k of [...this.textos.keys()]) if (k.startsWith(prefijo)) this.textos.delete(k);
+    const lista = this.hooks.leerPagina(pageIndex);
+    this.porPagina.set(pageIndex, lista);
+    for (const c of lista) if (esMarcado(c.kind)) this.textos.set(`${prefijo}${c.index}`, this.hooks.textoMarcado(pageIndex, c));
   }
 
   private async cargar(): Promise<void> {
@@ -90,13 +108,16 @@ export class ComentariosPanel {
     const gen = this.generacion;
     const total = this.hooks.totalPaginas();
     this.porPagina.clear();
+    this.textos.clear();
     this.sucio = false;
+    let desde = performance.now();
     for (let i = 0; i < total; i++) {
       if (gen !== this.generacion) return; // se invalidó a mitad: la carga nueva ya está en marcha
-      this.porPagina.set(i, this.hooks.leerPagina(i));
-      if ((i + 1) % PAGINAS_POR_TANDA === 0 && i + 1 < total) {
+      this.leerYGuardar(i);
+      if (i + 1 < total && ((i + 1) % PAGINAS_POR_TANDA === 0 || performance.now() - desde > TRAMO_MAX_MS)) {
         this.pintar(`Leyendo comentarios… ${i + 1} de ${total} páginas`);
         await new Promise<void>((r) => setTimeout(r, 0)); // cede el hilo
+        desde = performance.now();
       }
     }
     if (gen !== this.generacion) return;
@@ -107,7 +128,7 @@ export class ComentariosPanel {
   private todos(): Fila[] {
     const out: Fila[] = [];
     for (const [pageIndex, lista] of [...this.porPagina.entries()].sort((a, b) => a[0] - b[0])) {
-      for (const c of lista) out.push({ ...c, pageIndex });
+      for (const c of lista) out.push({ ...c, pageIndex, marcado: this.textos.get(`${pageIndex}:${c.index}`) ?? '' });
     }
     return out;
   }
@@ -115,7 +136,7 @@ export class ComentariosPanel {
   /** `progreso`: texto de estado mientras la lectura por tandas sigue en curso. */
   private pintar(progreso?: string): void {
     const todos = this.todos();
-    const vistos = todos.filter((c) => !this.filtro || `${c.text} ${c.author} ${ETIQUETA[c.kind]}`.toLowerCase().includes(this.filtro));
+    const vistos = todos.filter((c) => !this.filtro || `${c.text} ${c.marcado} ${c.author} ${ETIQUETA[c.kind]}`.toLowerCase().includes(this.filtro));
     this.listaEl.textContent = '';
     if (progreso) this.estadoEl.textContent = progreso;
     else if (this.hooks.totalPaginas() === 0) this.estadoEl.textContent = '';
@@ -142,17 +163,39 @@ export class ComentariosPanel {
     const abrir = document.createElement('button');
     abrir.type = 'button';
     abrir.className = 'comentario-item';
-    const extracto = c.text.length > EXTRACTO_MAX ? `${c.text.slice(0, EXTRACTO_MAX)}…` : c.text;
-    abrir.setAttribute('aria-label', `${ETIQUETA[c.kind]} en la página ${pagina}${c.author ? ` de ${c.author}` : ''}: ${extracto || 'sin texto'}`);
+    const marcado = esMarcado(c.kind);
+    const extracto = recortar(c.text);
+    const citado = marcado && c.marcado ? `«${recortar(c.marcado)}»` : '';
+    const partes = [`${ETIQUETA[c.kind]} en la página ${pagina}${c.author ? ` de ${c.author}` : ''}`];
+    if (marcado) partes.push(citado ? `texto marcado ${citado}` : 'sin texto marcado');
+    partes.push(marcado ? (extracto ? `comentario: ${extracto}` : 'sin comentario') : (extracto || 'sin texto'));
+    abrir.setAttribute('aria-label', partes.join('. '));
     const meta = document.createElement('span');
     meta.className = 'comentario-meta';
     meta.textContent = `${ETIQUETA[c.kind]} · Página ${pagina}${c.author ? ` · ${c.author}` : ''}`;
-    const txt = document.createElement('span');
-    txt.className = 'comentario-texto';
-    txt.textContent = extracto || '(sin texto)';
-    abrir.append(meta, txt);
+    abrir.append(meta);
+    if (marcado) {
+      const cita = document.createElement('span');
+      cita.className = 'comentario-marcado';
+      cita.textContent = citado || '(sin texto)';
+      abrir.append(cita);
+      if (extracto) {
+        const com = document.createElement('span');
+        com.className = 'comentario-texto';
+        com.textContent = extracto; // el CSS conserva los saltos de línea del comentario (pre-line)
+        abrir.append(com);
+      }
+    } else {
+      const txt = document.createElement('span');
+      txt.className = 'comentario-texto';
+      txt.textContent = extracto || '(sin texto)';
+      abrir.append(txt);
+    }
     abrir.addEventListener('click', () => { this.hooks.irAPagina(c.pageIndex); this.hooks.resaltar(c.pageIndex, c.index); });
-    const editar = this.btn('Editar', `Editar comentario de la página ${pagina}`, () => this.hooks.editar(c.pageIndex, c.index, c.text));
+    const anadir = marcado && c.text === '';
+    const editar = anadir
+      ? this.btn('Añadir comentario', `Añadir comentario al marcado de la página ${pagina}`, () => this.hooks.editar(c.pageIndex, c.index, c.text))
+      : this.btn(marcado ? 'Editar comentario' : 'Editar', `Editar comentario de la página ${pagina}`, () => this.hooks.editar(c.pageIndex, c.index, c.text));
     const borrar = this.btn('Borrar', `Borrar comentario de la página ${pagina}`, () => this.hooks.borrar(c.pageIndex, c.index));
     li.append(abrir, editar, borrar);
     return li;

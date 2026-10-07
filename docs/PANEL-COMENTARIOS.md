@@ -10,8 +10,11 @@ Código: `src/ui/ComentariosPanel.ts`; motor: `getComments` / `setNoteText`
   vacías) y cualquier otra de marcado (resaltado, subrayado, tachado, texto
   libre, sello...) que tenga `/Contents` no vacío. Excluye enlaces, popups y
   widgets de formulario.
-- Los resaltados, subrayados y tachados que crea ESTE editor son paths de
-  contenido, no anotaciones: no aparecen en el panel.
+- Los resaltados, subrayados y tachados (anotaciones reales desde T11) se
+  listan siempre. Muestran el TEXTO que cubren entre «», extraído con sus
+  QuadPoints (`src/texto/textoMarcado.ts`, E-094), y debajo su `/Contents` si
+  lo tienen. «Añadir/Editar comentario» abre el diálogo de nota (E-092). El
+  filtro busca también en el texto marcado.
 - Por elemento: página, tipo, extracto (140 car.) y autor (`/T`) si existe.
 - Clic: `goToPage` + resalta la nota en el visor (clase `.note-marker.activa`).
 - Editar (`/Contents` vía `FPDFAnnot_SetStringValue`, deshacer restaura el texto
