@@ -52,6 +52,12 @@ export interface Atom {
    * cuando `Seg.url` está presente).
    */
   url?: string;
+  /**
+   * Marca este átomo como una TABULACIÓN (fase 2c): no pinta texto (`text` = ''), salta a la siguiente parada. Solo
+   * lo entiende `lineaConTabs` (y por tanto `parrafoFlex` con `tabs`). `leader` fuerza el relleno de esta tabulación
+   * (si no, el de la parada); `fijo` es una parada ya resuelta (`w:ptab`: alineada al margen) que se usa tal cual.
+   */
+  tab?: { leader?: TabStopAbs['leader']; fijo?: TabStopAbs };
   /** `true` si este átomo lleva subrayado (`w:u` de DOCX, o un enlace sin estilo propio que lo fuerza a `true`). `paginar` dibuja una barra fina bajo la línea base por cada `Seg` con `underline: true`. */
   underline?: boolean;
 }
@@ -90,7 +96,11 @@ export interface ResultadoLayout {
   enlaces: EnlaceColocado[];
   /** Avisos generados al paginar (p. ej. una combinación vertical de celdas que cruza un salto de página). */
   advertencias: Advertencia[];
+  /** Una entrada por página (en orden): su geometría (puede cambiar entre secciones) y la sección que la abrió (índice de `FlowSectionStart.seccion`; 0 si el flujo no tiene secciones). */
+  paginas: PaginaInfo[];
 }
+
+export interface PaginaInfo { geo: PageGeometry; seccion: number }
 
 export interface Seg {
   xPt: number; text: string; font: string; sizePt: number; color: RGB;
@@ -170,9 +180,48 @@ export interface PosFlotanteV { rel: 'page' | 'margin' | 'topMargin' | 'bottomMa
  * coloca en la página del siguiente contenido, en su posición absoluta o
  * relativa al margen/párrafo.
  */
-export interface FlowFloatImage { kind: 'floatImage'; imgId: string; wPt: number; hPt: number; h: PosFlotanteH; v: PosFlotanteV }
+export interface FlowFloatImage { kind: 'floatImage'; imgId: string; wPt: number; hPt: number; h: PosFlotanteH; v: PosFlotanteV; /** Fase 2c: si está, el texto rodea la imagen. */ ajuste?: AjusteFlotante }
 
-export type FlowItem = FlowLine | FlowGap | FlowRule | FlowPageBreak | FlowImage | FlowTableRow | FlowTableStart | FlowTableEnd | FlowKeepStart | FlowKeepEnd | FlowFloatImage;
+/**
+ * Cómo el texto rodea una imagen flotante (fase 2c). `modo`: `square` = el texto se acorta a un lado de la caja;
+ * `topBottom` = el texto salta por debajo. Las distancias (`wp:distL/R/T/B`, EMU en el DOCX) ya vienen en PUNTOS PDF y
+ * ensanchan la caja en cada lado.
+ */
+export interface AjusteFlotante { modo: 'square' | 'topBottom'; distLPt: number; distRPt: number; distTPt: number; distBPt: number }
+
+/** Parada de tabulación ya en x ABSOLUTO de página (puntos PDF desde el borde izquierdo). */
+export interface TabStopAbs { posPt: number; tipo: 'left' | 'center' | 'right' | 'decimal'; leader: 'none' | 'dot' | 'hyphen' | 'underscore' }
+/** Paradas de un párrafo: `stops` propias, `defectoPt` = intervalo de las paradas por defecto, `origenPt` = x absoluto desde el que se cuentan (el margen izquierdo). */
+export interface TabsConfig { stops: TabStopAbs[]; defectoPt: number; origenPt: number }
+
+/** Franja horizontal libre para una línea, en puntos PDF: `xPt` es el borde izquierdo absoluto de página. */
+export interface Intervalo { xPt: number; wPt: number }
+
+/**
+ * Caja ocupada por una imagen flotante en una página, en puntos PDF (origen abajo-izquierda), YA ensanchada con sus
+ * distancias. `paginar` la recibe de fuera (`obstaculos`) o la deduce de un `FlowFloatImage` con `ajuste`.
+ */
+export interface Obstaculo { xPt: number; yPt: number; wPt: number; hPt: number; modo: 'square' | 'topBottom' }
+
+/**
+ * Marcador de SECCIÓN (fase 2c, `w:sectPr`): a partir de aquí rige `geo` (tamaño, orientación y márgenes). `continua`:
+ * la sección sigue en la misma página (si tiene el mismo tamaño); si no, abre página. `seccion` es el índice que
+ * `paginar` copia a `ResultadoLayout.paginas`. Una sección `nextPage` que empieza en una página todavía vacía la reutiliza.
+ */
+export interface FlowSectionStart { kind: 'section'; geo: PageGeometry; continua: boolean; seccion: number }
+
+/**
+ * Párrafo (o tramo de párrafo) que se maqueta LÍNEA A LÍNEA durante la paginación (fase 2c), porque el ancho de cada línea
+ * depende de dónde cae (obstáculos flotantes) o de su posición (tabulaciones). `paso` es PURO y reentrante: dada la
+ * posición `desde` (índice de átomo) y la franja libre, devuelve la línea y dónde sigue (`null` si no queda nada).
+ * `height` es la altura estimada SIN obstáculos (para "mantener junto" y para dimensionar zonas).
+ */
+export interface FlowParrafoFlex {
+  kind: 'flex'; height: number; alturaLinea: number; xPt: number; wPt: number; total: number;
+  paso(desde: number, libre: Intervalo, primeraLinea: boolean): { linea: FlowLine; siguiente: number } | null;
+}
+
+export type FlowItem = FlowLine | FlowGap | FlowRule | FlowPageBreak | FlowImage | FlowTableRow | FlowTableStart | FlowTableEnd | FlowKeepStart | FlowKeepEnd | FlowFloatImage | FlowSectionStart | FlowParrafoFlex;
 
 /** Tamaño y márgenes de una página, en puntos PDF. */
 export interface PageGeometry {
@@ -282,6 +331,156 @@ export function lineToFlowLine(
   return { kind: 'line', height, segs, bars: [] };
 }
 
+/** Una línea de `wrapAtoms` (mismo criterio) empezando en `desde`: los átomos que caben en `maxWidthPt` y el índice del siguiente. Siempre toma al menos uno. */
+function tomarLinea(atoms: Atom[], desde: number, maxWidthPt: number, medir: Medir): { linea: Atom[]; siguiente: number } {
+  const linea: Atom[] = [];
+  let width = 0;
+  let i = desde;
+  for (; i < atoms.length; i++) {
+    const atom = atoms[i]!;
+    const wordWidth = medir(atom.font, atom.sizePt, atom.text);
+    const spaceWidth = linea.length > 0 && !atom.pegado ? medir(atom.font, atom.sizePt, ' ') : 0;
+    if (linea.length > 0 && width + spaceWidth + wordWidth > maxWidthPt) break;
+    linea.push(atom);
+    width += spaceWidth + wordWidth;
+  }
+  return { linea, siguiente: i };
+}
+
+const CARACTER_LIDER: Record<Exclude<TabStopAbs['leader'], 'none'>, string> = { dot: '.', hyphen: '-', underscore: '_' };
+
+/**
+ * UNA línea con tabulaciones reales (fase 2c), empezando en el átomo `desde` (los átomos con `tab` son las
+ * tabulaciones). `xIniPt`/`xFinPt` son los bordes izquierdo y derecho de la franja, en x ABSOLUTO de página.
+ *
+ * Cada tabulación cierra el tramo anterior y abre uno nuevo anclado a la siguiente parada que quede a la derecha del
+ * contenido: `left` = el tramo empieza en la parada; `right` = acaba en ella; `center` = queda centrado en ella;
+ * `decimal` = su primer `.`/`,` cae en ella. Un tramo nunca se coloca a la izquierda de donde estaba el cursor al
+ * tabular (Word también lo empuja). Pasada la última parada propia valen las paradas por defecto (`defectoPt`,
+ * contadas desde `origenPt`); una parada fuera de la franja se recorta al borde derecho. `leader` rellena el hueco
+ * ENTRE el contenido previo y el tramo con puntos, guiones o rayas bajas. Devuelve los trazos con su x absoluta y el
+ * índice del primer átomo que NO cupo (`siguiente`; siempre avanza al menos un átomo).
+ */
+export function lineaConTabs(atoms: Atom[], desde: number, xIniPt: number, xFinPt: number, tabs: TabsConfig, medir: Medir): { segs: Seg[]; siguiente: number } {
+  const segs: Seg[] = [];
+  const EPS = 0.01;
+  let hayTab = false;
+  let modo: TabStopAbs['tipo'] = 'left';
+  let stopPos = xIniPt;
+  let lider: TabStopAbs['leader'] = 'none';
+  let xTab = xIniPt; // cursor (fin del contenido previo) en el momento de tabular
+  let atomoTab: Atom | null = null;
+  let grupo: Atom[] = [];
+  let ancho = 0;
+  let finPrevio = xIniPt;
+
+  const anchoAntesDelDecimal = (g: Atom[], total: number): number => {
+    let off = 0;
+    for (const [k, a] of g.entries()) {
+      if (k > 0 && !a.pegado) off += medir(a.font, a.sizePt, ' ');
+      // El ÚLTIMO separador del átomo es el decimal ("1.234,50" y "1,234.50" cuadran por la coma y por el punto respectivamente).
+      const idx = Math.max(a.text.lastIndexOf('.'), a.text.lastIndexOf(','));
+      if (idx >= 0) return off + medir(a.font, a.sizePt, a.text.slice(0, idx));
+      off += medir(a.font, a.sizePt, a.text);
+    }
+    return total;
+  };
+  const inicioDe = (g: Atom[], w: number): number => {
+    if (!hayTab) return xIniPt;
+    const ideal = modo === 'left' ? stopPos : modo === 'right' ? stopPos - w : modo === 'center' ? stopPos - w / 2 : stopPos - anchoAntesDelDecimal(g, w);
+    return Math.max(ideal, xTab);
+  };
+  const cerrar = (): void => {
+    const inicio = inicioDe(grupo, ancho);
+    if (hayTab && lider !== 'none' && atomoTab) {
+      const ch = CARACTER_LIDER[lider];
+      const wCh = medir(atomoTab.font, atomoTab.sizePt, ch);
+      const n = wCh > 0 ? Math.floor((inicio - xTab - 2) / wCh) : 0;
+      if (n > 0) segs.push({ xPt: inicio - 1 - n * wCh, text: ch.repeat(n), font: atomoTab.font, sizePt: atomoTab.sizePt, color: atomoTab.color, wPt: n * wCh });
+    }
+    if (grupo.length > 0) segs.push(...lineToFlowLine(grupo, inicio, 1e9, 'left', true, 0, medir).segs);
+    finPrevio = inicio + ancho;
+  };
+
+  let i = desde;
+  while (i < atoms.length) {
+    const a = atoms[i]!;
+    if (a.tab) {
+      cerrar();
+      const xEnd = finPrevio;
+      let parada: TabStopAbs;
+      if (a.tab.fijo) parada = a.tab.fijo;
+      else {
+        const propia = tabs.stops.filter((s) => s.posPt > xEnd + 0.5 && s.posPt <= xFinPt + 0.5).sort((p, q) => p.posPt - q.posPt)[0];
+        if (propia) parada = propia;
+        else {
+          const base = Math.max(xEnd, ...tabs.stops.map((s) => s.posPt));
+          let pos = tabs.origenPt + (Math.floor((base - tabs.origenPt) / tabs.defectoPt) + 1) * tabs.defectoPt;
+          while (pos <= base + 0.5) pos += tabs.defectoPt;
+          parada = { posPt: Math.min(pos, xFinPt), tipo: 'left', leader: 'none' };
+        }
+      }
+      hayTab = true; modo = parada.tipo; stopPos = parada.posPt; lider = a.tab.leader ?? parada.leader; xTab = xEnd; atomoTab = a;
+      grupo = []; ancho = 0;
+      i++;
+      continue;
+    }
+    const w = medir(a.font, a.sizePt, a.text);
+    const sp = grupo.length > 0 && !a.pegado ? medir(a.font, a.sizePt, ' ') : 0;
+    const ancho2 = ancho + sp + w;
+    const inicio2 = inicioDe([...grupo, a], ancho2);
+    if (i > desde && inicio2 + ancho2 > xFinPt + EPS) break;
+    grupo.push(a);
+    ancho = ancho2;
+    i++;
+  }
+  cerrar();
+  return { segs, siguiente: i };
+}
+
+export interface OpcionesParrafoFlex {
+  atoms: Atom[];
+  /** x absoluto de las líneas normales y de la primera (sangría), y ancho de la franja completa. */
+  xNormalPt: number; xPrimeraPt: number; wPt: number;
+  align: Align;
+  /** Altura de línea para un tamaño de fuente. */
+  alturaLinea: (sizePt: number) => number;
+  /** Paradas de tabulación; `null` = sin tabulaciones (ajuste de siempre). */
+  tabs: TabsConfig | null;
+  medir: Medir;
+  /** `false` en los tramos de un párrafo que siguen a un salto de línea: ninguna de sus líneas lleva la sangría de primera línea. Por defecto `true`. */
+  primeraDelParrafo?: boolean;
+}
+
+/**
+ * Construye el ítem `FlowParrafoFlex` de un tramo de párrafo. Con la franja completa produce EXACTAMENTE las líneas de
+ * `wrapAtoms` + `lineToFlowLine`; con una franja más estrecha (obstáculo) o con tabulaciones, las calcula al vuelo.
+ */
+export function parrafoFlex(o: OpcionesParrafoFlex): FlowParrafoFlex {
+  const { atoms, medir } = o;
+  const primeraDelParrafo = o.primeraDelParrafo ?? true;
+  const paso = (desde: number, libre: Intervalo, primera: boolean): { linea: FlowLine; siguiente: number } | null => {
+    if (desde >= atoms.length) return null;
+    const completa = Math.abs(libre.xPt - o.xNormalPt) < 0.01 && Math.abs(libre.wPt - o.wPt) < 0.01;
+    const xLinea = primera && primeraDelParrafo && completa ? o.xPrimeraPt : libre.xPt;
+    if (o.tabs) {
+      const r = lineaConTabs(atoms, desde, xLinea, libre.xPt + libre.wPt, o.tabs, medir);
+      return { linea: { kind: 'line', height: o.alturaLinea(atoms[desde]!.sizePt), segs: r.segs, bars: [] }, siguiente: r.siguiente };
+    }
+    const { linea, siguiente } = tomarLinea(atoms, desde, libre.wPt, medir);
+    const alto = o.alturaLinea(linea[0]?.sizePt ?? 11);
+    return { linea: lineToFlowLine(linea, xLinea, libre.wPt, o.align, siguiente >= atoms.length, alto, medir), siguiente };
+  };
+  let height = 0;
+  for (let d = 0; d < atoms.length;) {
+    const r = paso(d, { xPt: o.xNormalPt, wPt: o.wPt }, d === 0);
+    if (!r || r.siguiente <= d) break;
+    height += r.linea.height;
+    d = r.siguiente;
+  }
+  return { kind: 'flex', height, alturaLinea: o.alturaLinea(atoms[0]?.sizePt ?? 11), xPt: o.xNormalPt, wPt: o.wPt, total: atoms.length, paso };
+}
+
 /**
  * Reparte los ítems de flujo en páginas de tamaño `geo`, saltando de página
  * cuando un ítem (más su posible "no huérfano") no cabe en lo que queda, o
@@ -289,14 +488,22 @@ export function lineToFlowLine(
  * la página actual — un salto de página al principio del documento, sin
  * contenido previo, no genera una página en blanco de más).
  */
-export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: number): ResultadoLayout {
+export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: number, obstaculosExternos?: Map<number, Obstaculo[]>): ResultadoLayout {
   const trazos: Trazo[] = [];
   const barras: Barra[] = [];
   const imagenes: ImagenColocada[] = [];
   const enlaces: EnlaceColocado[] = [];
   let page = 0;
-  const topPt = geo.heightPt - geo.marginTopPt;
-  const bottomPt = geo.marginBottomPt;
+  // Geometría y sección vigentes (fase 2c: un marcador `section` las cambia). `topPt`/`bottomPt` son los límites de la
+  // página ACTUAL: una sección continua cambia el inferior (y los de las páginas nuevas) pero no el superior de esta.
+  let geoActual = geo;
+  let seccionActual = 0;
+  let topPt = geo.heightPt - geo.marginTopPt;
+  let bottomPt = geo.marginBottomPt;
+  const paginas: PaginaInfo[] = [{ geo, seccion: 0 }];
+  // Cajas de las flotantes con ajuste de texto, por página (índice 0-based), en pt PDF (origen abajo-izquierda).
+  const obstaculos = new Map<number, Obstaculo[]>();
+  for (const [pg, lista] of obstaculosExternos ?? []) obstaculos.set(pg, [...lista]);
   let cursor = topPt;
   let skipLeadingGaps = false;
   let pintadoEnPagina = false;
@@ -311,6 +518,9 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
 
   function nuevaPagina(): void {
     page++;
+    topPt = geoActual.heightPt - geoActual.marginTopPt;
+    bottomPt = geoActual.marginBottomPt;
+    paginas.push({ geo: geoActual, seccion: seccionActual });
     cursor = topPt;
     skipLeadingGaps = true;
     pintadoEnPagina = false;
@@ -350,13 +560,62 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     cursor -= row.height;
   }
 
+  /** Coloca una línea YA decidida en la página/cursor actuales y baja el cursor (no decide paginación). */
+  function colocarLinea(item: FlowLine): void {
+    const bottom = cursor - item.height;
+    const baseline = bottom + item.height * baselineFraction;
+    for (const seg of item.segs) {
+      trazos.push({ page, xPt: seg.xPt, yPt: baseline, text: seg.text, font: seg.font, sizePt: seg.sizePt, color: seg.color });
+      if (seg.url && seg.wPt) enlaces.push({ page, xPt: seg.xPt, yPt: baseline - seg.sizePt * 0.2, wPt: seg.wPt, hPt: seg.sizePt * 1.1, url: seg.url });
+      const subrayado = barraSubrayado(seg, baseline);
+      if (subrayado) barras.push(subrayado);
+      pintadoEnPagina = true;
+    }
+    if (item.bg) { barras.push({ page, xPt: item.bg.xPt, yPt: bottom, wPt: item.bg.wPt, hPt: item.height, color: item.bg.color }); pintadoEnPagina = true; }
+    for (const bar of item.bars) { barras.push({ page, xPt: bar.xPt, yPt: bottom, wPt: bar.wPt, hPt: item.height, color: bar.color }); pintadoEnPagina = true; }
+    cursor = bottom;
+  }
+
+  /** Obstáculos de la página actual que se cruzan verticalmente con una línea de alto `h` cuyo borde superior está en `cursor`. */
+  function obstaculosEnFranja(h: number): Obstaculo[] {
+    return (obstaculos.get(page) ?? []).filter((o) => o.yPt < cursor && o.yPt + o.hPt > cursor - h);
+  }
+
+  /** Franja libre más ancha dentro de [x0, x0+w] tras apartar los obstáculos que cruzan la línea; `null` si no queda hueco útil (hay que saltar por debajo). */
+  function franjaLibre(x0: number, w: number, h: number): Intervalo | null {
+    const cruzan = obstaculosEnFranja(h);
+    if (cruzan.length === 0) return { xPt: x0, wPt: w };
+    let libres: [number, number][] = [[x0, x0 + w]];
+    for (const o of cruzan) {
+      if (o.modo === 'topBottom') { libres = []; break; }
+      libres = libres.flatMap(([a, b]): [number, number][] => {
+        const partes: [number, number][] = [];
+        if (o.xPt > a) partes.push([a, Math.min(b, o.xPt)]);
+        if (o.xPt + o.wPt < b) partes.push([Math.max(a, o.xPt + o.wPt), b]);
+        return partes.filter(([p, q]) => q > p);
+      });
+    }
+    let mejor: [number, number] | null = null;
+    for (const l of libres) if (!mejor || l[1] - l[0] > mejor[1] - mejor[0]) mejor = l;
+    // Un hueco menor que 40 pt (o que la mitad del ancho si este es corto) no sirve para texto: la línea baja por debajo.
+    if (!mejor || mejor[1] - mejor[0] < Math.min(40, w * 0.5)) return null;
+    return { xPt: mejor[0], wPt: mejor[1] - mejor[0] };
+  }
+
   // Imágenes flotantes a la espera de la página y el cursor definitivos del siguiente contenido.
   const flotantesPendientes: FlowFloatImage[] = [];
   function colocarFlotantes(): void {
     for (const f of flotantesPendientes) {
-      const { x, yTop } = posicionFlotante(f, geo, cursor);
-      imagenes.push({ page, xPt: x, yPt: geo.heightPt - yTop - f.hPt, wPt: f.wPt, hPt: f.hPt, imgId: f.imgId });
+      const { x, yTop } = posicionFlotante(f, geoActual, cursor);
+      const yPt = geoActual.heightPt - yTop - f.hPt;
+      imagenes.push({ page, xPt: x, yPt, wPt: f.wPt, hPt: f.hPt, imgId: f.imgId });
       pintadoEnPagina = true;
+      if (f.ajuste) {
+        const a = f.ajuste;
+        const lista = obstaculos.get(page) ?? [];
+        lista.push({ xPt: x - a.distLPt, yPt: yPt - a.distBPt, wPt: f.wPt + a.distLPt + a.distRPt, hPt: f.hPt + a.distTPt + a.distBPt, modo: a.modo });
+        obstaculos.set(page, lista);
+      }
     }
     flotantesPendientes.length = 0;
   }
@@ -379,6 +638,24 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
       continue;
     }
 
+    if (item.kind === 'section') {
+      const mismaPagina = item.continua && item.geo.widthPt === geoActual.widthPt && item.geo.heightPt === geoActual.heightPt;
+      geoActual = item.geo;
+      seccionActual = item.seccion;
+      if (mismaPagina) { bottomPt = item.geo.marginBottomPt; continue; } // sección continua: sigue en la misma página
+      if (!pintadoEnPagina && cursor === topPt) {
+        // Página todavía vacía: se reutiliza con la geometría de la sección nueva (sin página en blanco).
+        topPt = item.geo.heightPt - item.geo.marginTopPt;
+        bottomPt = item.geo.marginBottomPt;
+        cursor = topPt;
+        paginas[page] = { geo: item.geo, seccion: item.seccion };
+      } else {
+        colocarFlotantes();
+        nuevaPagina();
+      }
+      continue;
+    }
+
     if (item.kind === 'pagebreak') {
       colocarFlotantes();
       if (pintadoEnPagina) nuevaPagina();
@@ -388,6 +665,29 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     if (skipLeadingGaps) {
       if (item.kind === 'gap') continue;
       skipLeadingGaps = false;
+    }
+
+    if (item.kind === 'flex') {
+      // Párrafo que se maqueta línea a línea: el ancho de cada una depende de los obstáculos de ESA página y de dónde cae.
+      let estado = 0;
+      for (let guardia = 0; estado < item.total && guardia < 100000; guardia++) {
+        const h = item.alturaLinea;
+        if (cursor - h < bottomPt && cursor < topPt) nuevaPagina();
+        skipLeadingGaps = false;
+        colocarFlotantes();
+        const libre = franjaLibre(item.xPt, item.wPt, h);
+        if (!libre) {
+          // Sin hueco útil a los lados: el texto salta por debajo de la(s) caja(s) que cruzan la línea.
+          const debajo = Math.min(...obstaculosEnFranja(h).map((o) => o.yPt));
+          if (debajo < cursor) { cursor = debajo; continue; }
+        }
+        const r = item.paso(estado, libre ?? { xPt: item.xPt, wPt: item.wPt }, estado === 0);
+        if (!r || r.siguiente <= estado) break;
+        if (cursor - r.linea.height < bottomPt && cursor < topPt) { nuevaPagina(); continue; }
+        colocarLinea(r.linea);
+        estado = r.siguiente;
+      }
+      continue;
     }
 
     if (item.kind === 'tableRow') {
@@ -425,16 +725,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     const bottom = cursor - item.height;
 
     if (item.kind === 'line') {
-      const baseline = bottom + item.height * baselineFraction;
-      for (const seg of item.segs) {
-        trazos.push({ page, xPt: seg.xPt, yPt: baseline, text: seg.text, font: seg.font, sizePt: seg.sizePt, color: seg.color });
-        if (seg.url && seg.wPt) enlaces.push({ page, xPt: seg.xPt, yPt: baseline - seg.sizePt * 0.2, wPt: seg.wPt, hPt: seg.sizePt * 1.1, url: seg.url });
-        const subrayado = barraSubrayado(seg, baseline);
-        if (subrayado) barras.push(subrayado);
-        pintadoEnPagina = true;
-      }
-      if (item.bg) { barras.push({ page, xPt: item.bg.xPt, yPt: bottom, wPt: item.bg.wPt, hPt: item.height, color: item.bg.color }); pintadoEnPagina = true; }
-      for (const bar of item.bars) { barras.push({ page, xPt: bar.xPt, yPt: bottom, wPt: bar.wPt, hPt: item.height, color: bar.color }); pintadoEnPagina = true; }
+      colocarLinea(item);
+      continue;
     } else if (item.kind === 'rule') {
       barras.push({ page, xPt: item.xPt, yPt: bottom + (item.height - 1) / 2, wPt: item.wPt, hPt: 1, color: item.color });
       for (const bar of item.bars) barras.push({ page, xPt: bar.xPt, yPt: bottom, wPt: bar.wPt, hPt: item.height, color: bar.color });
@@ -452,12 +744,12 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     const c = mergesPartidos.size;
     advertencias.push(aproximado(`${c === 1 ? 'Una celda combinada verticalmente cruza' : `${c} celdas combinadas verticalmente cruzan`} un salto de página: la celda se muestra cortada en el salto (el texto está en la primera página de la combinación).`));
   }
-  return { totalPaginas: page + 1, trazos, barras, imagenes, enlaces, advertencias };
+  return { totalPaginas: page + 1, trazos, barras, imagenes, enlaces, advertencias, paginas };
 }
 
 /** Altura que un ítem ocupa en el flujo, en puntos PDF (0 para marcadores y flotantes). */
 function alturaDeFlujo(item: FlowItem): number {
-  return item.kind === 'line' || item.kind === 'gap' || item.kind === 'rule' || item.kind === 'image' || item.kind === 'tableRow' ? item.height : 0;
+  return item.kind === 'line' || item.kind === 'gap' || item.kind === 'rule' || item.kind === 'image' || item.kind === 'tableRow' || item.kind === 'flex' ? item.height : 0;
 }
 
 /** Altura total, en puntos PDF, que ocuparían `items` apilados en una zona (encabezado/pie). */
@@ -505,13 +797,22 @@ export interface ZonaColocada { trazos: Trazo[]; barras: Barra[]; imagenes: Imag
  * virtual del alto exacto del contenido y traslada el resultado.
  */
 export function colocarZona(
-  items: FlowItem[], pagina: { widthPt: number; heightPt: number }, ancla: 'arriba' | 'abajo', distanciaPt: number, page: number, baselineFraction: number
+  items: FlowItem[], pagina: { widthPt: number; heightPt: number }, ancla: 'arriba' | 'abajo', distanciaPt: number, page: number, baselineFraction: number, geoPagina?: PageGeometry
 ): ZonaColocada {
   const alto = altoZona(items);
+  // Una imagen flotante de la zona (el logo anclado del encabezado) se posiciona respecto a la página REAL, no a la virtual.
+  const flotantes = geoPagina ? items.filter((it): it is FlowFloatImage => it.kind === 'floatImage') : [];
+  if (geoPagina) items = items.filter((it) => it.kind !== 'floatImage');
   const holgura = 1; // evita que el redondeo de coma flotante fuerce un salto de página dentro de la zona
   const virtual: PageGeometry = { widthPt: pagina.widthPt, heightPt: alto + holgura, marginTopPt: 0, marginBottomPt: 0, marginLeftPt: 0, marginRightPt: 0 };
   const res = paginar(items, virtual, baselineFraction);
   const dy = ancla === 'arriba' ? pagina.heightPt - distanciaPt - (alto + holgura) : distanciaPt - holgura;
   const mover = <T extends { page: number; yPt: number }>(xs: T[]): T[] => xs.filter((x) => x.page === 0).map((x) => ({ ...x, page, yPt: x.yPt + dy }));
-  return { trazos: mover(res.trazos), barras: mover(res.barras), imagenes: mover(res.imagenes), enlaces: mover(res.enlaces) };
+  const imagenes = mover(res.imagenes);
+  const topZona = ancla === 'arriba' ? pagina.heightPt - distanciaPt : distanciaPt + alto; // y PDF del borde superior de la zona (para rel paragraph)
+  for (const f of flotantes) {
+    const { x, yTop } = posicionFlotante(f, geoPagina!, topZona);
+    imagenes.push({ page, xPt: x, yPt: geoPagina!.heightPt - yTop - f.hPt, wPt: f.wPt, hPt: f.hPt, imgId: f.imgId });
+  }
+  return { trazos: mover(res.trazos), barras: mover(res.barras), imagenes, enlaces: mover(res.enlaces) };
 }

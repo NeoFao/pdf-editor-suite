@@ -4,7 +4,7 @@ import { parseXml, hijosElemento, primerHijo, textoDirecto, buscarDescendiente, 
 import { classifyFont } from '../../engine/fontClassify';
 import { leerRelaciones, rutaMediaDesdeWord, type Relacion } from './rels';
 import { validarUrlEnlace } from '../../engine/validarUrlEnlace';
-import type { PosFlotanteH, PosFlotanteV } from '../flujo/layout';
+import type { PosFlotanteH, PosFlotanteV, AjusteFlotante } from '../flujo/layout';
 
 /**
  * Modelo del documento DOCX (§9 fila #4): de `word/document.xml` +
@@ -27,11 +27,18 @@ import type { PosFlotanteH, PosFlotanteV } from '../flujo/layout';
  * - EMU (1/914400 de pulgada = 1/12700 de punto): `wp:extent` (tamaño de
  *   imagen inline). `EMU_POR_PUNTO`.
  *
- * Simplificaciones deliberadas de esta FASE 2a (documentadas también en el
+ * Fase 2c: VARIAS SECCIONES (`ModeloDocx.secciones`: cada `w:sectPr` con su
+ * tamaño/orientación, márgenes, encabezados y pies —heredados de la anterior
+ * si no los redefine—, `w:titlePg`, `w:type` y `w:pgNumType w:start`),
+ * imágenes y tablas dentro de encabezados y pies (con las relaciones del
+ * PROPIO encabezado), ajuste de texto alrededor de imágenes flotantes
+ * (`wp:wrapSquare`/`wp:wrapTopAndBottom`; el resto, a cuadrado con aviso) y
+ * paradas de tabulación (`w:tabs`, heredables del estilo, y `w:ptab`).
+ * Los campos de siempre (`paginaAnchoPt`, `encabezados`...) describen la
+ * ÚLTIMA sección (compatibilidad con modelos y tests anteriores).
+ *
+ * Simplificaciones deliberadas de las fases 2a/2b (documentadas también en el
  * spec y en la fila #4 de la tabla §9):
- * - Solo se usa la geometría de página de la ÚLTIMA sección del documento
- *   (`w:sectPr`) para TODO el documento — un .docx con secciones de tamaño
- *   distinto (algo raro) se aplana a una sola geometría.
  * - El ajuste de línea usa el ancho de sangría NORMAL del párrafo para
  *   TODAS sus líneas, incluida la primera — el efecto de
  *   `w:firstLine`/`w:hanging` se aplica solo a la posición X de la primera
@@ -60,10 +67,10 @@ import type { PosFlotanteH, PosFlotanteV } from '../flujo/layout';
  *   colocada en su posición de página/margen/párrafo SIN ajuste de texto y con
  *   aviso; EMF/WMF y cualquier formato que ni el decodificador PNG propio
  *   (`decodificarPng.ts`) ni `createImageBitmap` entiendan se avisan.
- * - Encabezados y pies (fase 2b): `default`/`first` (`w:titlePg`)/`even`
- *   (`w:evenAndOddHeaders`), solo párrafos con `PAGE`/`NUMPAGES`; sin imágenes,
- *   tablas ni enlaces dentro de la zona (avisan); una geometría para todo el
- *   documento (la última sección manda, hereda lo que no define).
+ * - Encabezados y pies: `default`/`first` (`w:titlePg`)/`even`
+ *   (`w:evenAndOddHeaders`), con `PAGE`/`NUMPAGES`, imágenes y tablas (2c).
+ * - Tabulaciones (2c): fuera de una celda de tabla son reales; dentro de una
+ *   celda se aproximan con un hueco fijo y se avisa.
  * - Enlaces: solo `w:hyperlink` EXTERNO (`r:id` con `TargetMode="External"`);
  *   un enlace interno a un marcador del propio documento (`w:anchor`) se
  *   trata como texto plano, sin aviso (navegación interna fuera de alcance).
@@ -80,13 +87,19 @@ export interface RunFormato {
   underline: boolean;
 }
 
-/** Posición de una imagen flotante (`wp:anchor`), ya convertida a pt: ver `PosFlotanteH/V` del maquetador (mismo tipo, mismas unidades). */
-export interface PosicionFlotante { h: PosFlotanteH; v: PosFlotanteV }
+/** Posición de una imagen flotante (`wp:anchor`), ya convertida a pt: ver `PosFlotanteH/V` del maquetador (mismo tipo, mismas unidades). `ajuste` (fase 2c): cómo la rodea el texto; sin él, el texto no se aparta. */
+export interface PosicionFlotante { h: PosFlotanteH; v: PosFlotanteV; ajuste?: AjusteFlotante }
+
+/** Relleno de una parada de tabulación (`w:leader`). */
+export type LiderTab = 'none' | 'dot' | 'hyphen' | 'underscore';
+/** Parada de tabulación de un párrafo (`w:tabs > w:tab`): `posPt` en puntos PDF desde el margen izquierdo de la página. */
+export interface ParadaTab { posPt: number; tipo: 'left' | 'center' | 'right' | 'decimal'; leader: LiderTab }
 
 export type ParteParrafo =
   /** `url`, cuando está presente, es la URL YA VALIDADA (`validarUrlEnlace`) de un `w:hyperlink` que envuelve este texto. */
   | { tipo: 'texto'; texto: string; formato: RunFormato; url?: string }
-  | { tipo: 'tab' }
+  /** Tabulación. `ptab` (`w:ptab`, tabulación de posición): salta a una alineación respecto al margen en vez de a una parada. */
+  | { tipo: 'tab'; ptab?: { alineacion: 'left' | 'center' | 'right'; leader: LiderTab } }
   | { tipo: 'saltoLinea' }
   | { tipo: 'saltoPagina' }
   /** Imagen inline (`w:drawing > wp:inline`, fase 2a). `refId` es la ruta dentro del ZIP del .docx (p. ej. `word/media/image1.png`); `wPt`/`hPt` son el tamaño DECLARADO por Word (`wp:extent`, EMU → pt), sin clampar todavía al ancho útil de página — eso lo hace `render.ts`, que conoce la geometría. */
@@ -122,6 +135,8 @@ export interface Parrafo {
   mantenerConSiguiente: boolean;
   /** `w:keepLines` (o un título sin `keepLines` explícito): todas las líneas del párrafo en la misma página. */
   mantenerLineasJuntas: boolean;
+  /** Paradas de tabulación efectivas (estilo + párrafo, con `clear` aplicado), ordenadas por posición. */
+  tabs: ParadaTab[];
 }
 
 /** Un borde: color + grosor en PUNTOS PDF (`w:sz` está en OCTAVOS de punto: 24 → 3 pt). */
@@ -171,11 +186,28 @@ export interface Tabla {
   bordesTabla?: BordesTabla;
 }
 
-/** Contenido de un encabezado o pie: párrafos (las tablas dentro de una zona se avisan y no se pintan). `null` = el tipo no está definido. */
-export interface ZonaPaginaModelo { default: Parrafo[] | null; first: Parrafo[] | null; even: Parrafo[] | null }
-
 /** Bloque de nivel superior del documento: párrafo o tabla, en el orden en que aparecen. */
 export type BloqueDocx = Parrafo | Tabla;
+
+/** Contenido de un encabezado o pie (fase 2c: párrafos con imágenes y tablas). `null` = el tipo no está definido. */
+export interface ZonaPaginaModelo { default: BloqueDocx[] | null; first: BloqueDocx[] | null; even: BloqueDocx[] | null }
+
+/**
+ * Una sección (`w:sectPr`), fase 2c: los bloques `[inicioBloque, finBloque)` de `ModeloDocx.bloques` le pertenecen.
+ * `tipo`: cómo EMPIEZA la sección (`w:type`); `evenPage`/`oddPage`/`nextColumn` ya vienen normalizados a `nextPage`
+ * (con aviso). `encabezados`/`pies` ya vienen resueltos con la herencia de la sección anterior.
+ * `numeroInicial`: `w:pgNumType w:start`, o `null` si la numeración continúa.
+ */
+export interface SeccionDocx {
+  paginaAnchoPt: number; paginaAltoPt: number;
+  margenSupPt: number; margenInfPt: number; margenIzqPt: number; margenDerPt: number;
+  margenEncabezadoPt: number; margenPiePt: number;
+  tipo: 'nextPage' | 'continuous';
+  tituloPagina: boolean;
+  encabezados: ZonaPaginaModelo; pies: ZonaPaginaModelo;
+  numeroInicial: number | null;
+  inicioBloque: number; finBloque: number;
+}
 
 export function esParrafo(b: BloqueDocx): b is Parrafo { return b.tipo === 'parrafo'; }
 export function esTabla(b: BloqueDocx): b is Tabla { return b.tipo === 'tabla'; }
@@ -199,10 +231,18 @@ export interface ModeloDocx {
   paresImpares: boolean;
   encabezados: ZonaPaginaModelo;
   pies: ZonaPaginaModelo;
+  /** Fase 2c: todas las secciones en orden. Opcional solo para modelos construidos a mano (sin él, `render` deduce UNA sección de los campos de arriba). */
+  secciones?: SeccionDocx[];
+  /** Intervalo de las paradas de tabulación por defecto (`w:defaultTabStop` de settings.xml), en pt. 36 (720 twips) si no está. */
+  tabPorDefectoPt: number;
 }
 
-/** Partes adicionales del paquete que `construirModeloDocx` necesita ya decodificadas: `partes` se indexa por ruta dentro del ZIP (`word/header1.xml`). */
-export interface ExtrasDocx { settingsXml?: string | null; partes?: Record<string, string> }
+/**
+ * Partes adicionales del paquete que `construirModeloDocx` necesita ya decodificadas: `partes` se indexa por ruta dentro del
+ * ZIP (`word/header1.xml`); `relsPartes`, por la ruta de la PARTE a la que pertenecen, con el XML de sus relaciones
+ * (`word/_rels/header1.xml.rels` → clave `word/header1.xml`): las imágenes de un encabezado se resuelven con ellas.
+ */
+export interface ExtrasDocx { settingsXml?: string | null; partes?: Record<string, string>; relsPartes?: Record<string, string> }
 
 function twipsAPt(v: number): number { return v / 20; }
 function mediosPuntosAPt(v: number): number { return v / 2; }
@@ -438,13 +478,15 @@ interface PPrAcum {
   outlineLvl: number | null;
   /** `null` = no declarado (un título lo activa por defecto, como los estilos Heading de Word). */
   keepNext: boolean | null; keepLines: boolean | null;
+  /** Paradas por posición (pt desde el margen izquierdo): una posterior sustituye a la anterior, `clear` la borra. */
+  tabs: Map<number, ParadaTab>;
 }
 
 function pPrPorDefecto(): PPrAcum {
   return {
     alineacion: 'left', sangriaIzqPt: 0, sangriaDerPt: 0, sangriaPrimeraLineaPt: 0,
     espacioAntesPt: 0, espacioDespuesPt: 8, interlineadoFactor: 1.15, interlineadoExactoPt: null,
-    saltoPaginaAntes: false, numId: null, ilvl: 0, outlineLvl: null, keepNext: null, keepLines: null
+    saltoPaginaAntes: false, numId: null, ilvl: 0, outlineLvl: null, keepNext: null, keepLines: null, tabs: new Map()
   };
 }
 
@@ -455,7 +497,28 @@ function mapAlineacion(v: string): Alineacion {
   return 'left';
 }
 
+function leerLider(v: string | undefined): LiderTab {
+  if (v === 'dot' || v === 'middleDot') return 'dot';
+  if (v === 'hyphen') return 'hyphen';
+  if (v === 'underscore' || v === 'heavy') return 'underscore';
+  return 'none';
+}
+
+function aplicarTabs(acc: PPrAcum, tabs: XmlElemento): void {
+  for (const t of hijosElemento(tabs, 'w:tab')) {
+    const pos = Number(t.atributos['w:pos']);
+    if (!Number.isFinite(pos)) continue;
+    const posPt = twipsAPt(pos);
+    const val = t.atributos['w:val'] ?? 'left';
+    if (val === 'clear') { acc.tabs.delete(posPt); continue; }
+    if (val === 'bar') continue; // la barra vertical no es una parada de texto
+    const tipo = val === 'center' ? 'center' : val === 'right' || val === 'end' ? 'right' : val === 'decimal' ? 'decimal' : 'left';
+    acc.tabs.set(posPt, { posPt, tipo, leader: leerLider(t.atributos['w:leader']) });
+  }
+}
+
 function aplicarPPr(acc: PPrAcum, el: XmlElemento): void {
+  const tabsEl = primerHijo(el, 'w:tabs'); if (tabsEl) aplicarTabs(acc, tabsEl);
   const jc = primerHijo(el, 'w:jc'); if (jc?.atributos['w:val'] !== undefined) acc.alineacion = mapAlineacion(jc.atributos['w:val']);
   const ind = primerHijo(el, 'w:ind');
   if (ind) {
@@ -540,13 +603,15 @@ const MENSAJES_PERDIDAS: [string, TipoAdvertencia, (c: number) => string][] = [
   ['imagenEnCelda', 'omitido', (c) => cuenta(c, 'Se omitió una imagen dentro de una celda de tabla (aún no soportado).', 'Se omitieron {n} imágenes dentro de celdas de tabla (aún no soportado).')],
   ['saltoPaginaEnCelda', 'aproximado', (c) => cuenta(c, 'Un salto de página dentro de una celda de tabla se trató como salto de línea.', '{n} saltos de página dentro de celdas de tabla se trataron como saltos de línea.')],
   ['flotante', 'aproximado', (c) => cuenta(c, 'Imagen flotante colocada sin ajuste de texto (el texto no la rodea y puede quedar debajo o encima de ella).', '{n} imágenes flotantes colocadas sin ajuste de texto (el texto no las rodea y puede quedar debajo o encima de ellas).')],
-  ['imagenEnZona', 'omitido', (c) => cuenta(c, 'Se omitió una imagen dentro de un encabezado o pie de página (aún no soportado).', 'Se omitieron {n} imágenes dentro de encabezados o pies de página (aún no soportado).')],
-  ['tablaEnZona', 'omitido', (c) => cuenta(c, 'Se omitió una tabla dentro de un encabezado o pie de página (aún no soportada).', 'Se omitieron {n} tablas dentro de encabezados o pies de página (aún no soportadas).')],
+  ['flotanteAprox', 'aproximado', (c) => cuenta(c, 'El ajuste de texto de una imagen flotante con contorno (estrecho o a través, con polígono) se aproximó a un cuadrado.', 'El ajuste de texto de {n} imágenes flotantes con contorno (estrecho o a través, con polígono) se aproximó a un cuadrado.')],
+  ['tabEnCelda', 'aproximado', (c) => cuenta(c, 'Una tabulación dentro de una celda de tabla se aproximó con un hueco fijo (sin paradas reales).', '{n} tabulaciones dentro de celdas de tabla se aproximaron con un hueco fijo (sin paradas reales).')],
+  ['seccionParImpar', 'aproximado', (c) => cuenta(c, 'Un salto de sección de tipo página par, página impar o columna siguiente se trató como un salto a página nueva.', '{n} saltos de sección de tipo página par, página impar o columna siguiente se trataron como saltos a página nueva.')],
+  ['numeroPaginaFormato', 'aproximado', (c) => cuenta(c, 'El formato de numeración de página de una sección (romano, letras...) no se reproduce: se numera con cifras arábigas.', 'El formato de numeración de página de {n} secciones (romano, letras...) no se reproduce: se numera con cifras arábigas.')],
+  ['numeroPaginaContinua', 'aproximado', (c) => cuenta(c, 'El reinicio de numeración de página de una sección continua se ignoró (la numeración sigue por páginas).', 'El reinicio de numeración de página de {n} secciones continuas se ignoró (la numeración sigue por páginas).')],
   ['campo', 'aproximado', (c) => cuenta(c, 'Un campo no soportado (fecha, índice, referencia...) se dejó con el último valor que Word guardó.', '{n} campos no soportados (fecha, índice, referencia...) se dejaron con el último valor que Word guardó.')],
   ['bordeEstilo', 'aproximado', (c) => cuenta(c, 'Un borde de tabla con estilo no continuo (doble, punteado...) se dibujó como línea continua.', '{n} bordes de tabla con estilo no continuo (doble, punteado...) se dibujaron como línea continua.')],
   ['encabezadoFaltante', 'omitido', (c) => cuenta(c, 'Se omitió un encabezado de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} encabezados de página (no se encontró o no se pudo leer su contenido en el paquete).')],
   ['pieFaltante', 'omitido', (c) => cuenta(c, 'Se omitió un pie de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} pies de página (no se encontró o no se pudo leer su contenido en el paquete).')],
-  ['zonaDeSeccionAnterior', 'omitido', (c) => cuenta(c, 'Se omitió un encabezado o pie de una sección anterior (se usan los de la última sección).', 'Se omitieron {n} encabezados o pies de secciones anteriores (se usan los de la última sección).')],
   ['vMergeConTexto', 'omitido', (c) => cuenta(c, 'Una celda de continuación de una combinación vertical traía texto propio, que no se muestra (como hace Word).', '{n} celdas de continuación de combinaciones verticales traían texto propio, que no se muestra (como hace Word).')]
 ];
 
@@ -598,7 +663,10 @@ function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, parte
       partes.push({ tipo: h.atributos['w:type'] === 'page' ? 'saltoPagina' : 'saltoLinea' });
     }
     else if (h.nombre === 'w:cr') partes.push({ tipo: 'saltoLinea' });
-    else if (h.nombre === 'w:ptab') partes.push({ tipo: 'tab' });
+    else if (h.nombre === 'w:ptab') {
+      const al = h.atributos['w:alignment'];
+      partes.push({ tipo: 'tab', ptab: { alineacion: al === 'right' ? 'right' : al === 'center' ? 'center' : 'left', leader: leerLider(h.atributos['w:leader']) } });
+    }
     else if (h.nombre === 'w:sym') anotar(ctx, 'sym');
     else if (h.nombre === 'w:noBreakHyphen') partes.push({ tipo: 'texto', texto: '-', formato });
     else if (h.nombre === 'w:drawing') { const parte = resolverImagenDrawing(h, ctx); if (parte) partes.push(parte); }
@@ -657,7 +725,6 @@ function procesarFldChar(el: XmlElemento, formato: RunFormato, ctx: Contexto, pa
  * omite con aviso (aún no soportado ahí).
  */
 function resolverImagenDrawing(drawing: XmlElemento, ctx: Contexto): ParteParrafo | null {
-  if (ctx.zona) { anotar(ctx, 'imagenEnZona'); return null; }
   const anchor = primerHijo(drawing, 'wp:anchor');
   const inline = anchor ?? primerHijo(drawing, 'wp:inline');
   if (!inline) {
@@ -684,8 +751,29 @@ function resolverImagenDrawing(drawing: XmlElemento, ctx: Contexto): ParteParraf
   }
   const base = { tipo: 'imagen' as const, refId: rutaMediaDesdeWord(rel.target), wPt: cx / EMU_POR_PUNTO, hPt: cy / EMU_POR_PUNTO };
   if (!anchor) return base;
-  if (!ctx.enCelda) anotar(ctx, 'flotante'); // dentro de una celda se omitirá con su propio aviso (`imagenEnCelda`)
-  return { ...base, flotante: leerPosicionAnchor(anchor) };
+  const ajuste = leerAjuste(anchor, ctx);
+  // Sin ajuste de texto (wrapNone o sin elemento de ajuste) se avisa; dentro de una celda se omitirá con su propio aviso (`imagenEnCelda`).
+  if (!ajuste && !ctx.enCelda) anotar(ctx, 'flotante');
+  return { ...base, flotante: { ...leerPosicionAnchor(anchor), ...(ajuste ? { ajuste } : {}) } };
+}
+
+/**
+ * Ajuste de texto de un `wp:anchor` (fase 2c). `wrapSquare` → `square`; `wrapTopAndBottom` → `topBottom`; `wrapTight`/`wrapThrough`
+ * (polígono) → `square` con aviso "aproximado"; `wrapNone` o ninguno → `undefined` (sin ajuste). Las distancias
+ * (`distT/B/L/R`, EMU → pt) salen del propio elemento de ajuste si las trae y, si no, de `wp:anchor`.
+ */
+function leerAjuste(anchor: XmlElemento, ctx: Contexto): AjusteFlotante | undefined {
+  const cuadrado = primerHijo(anchor, 'wp:wrapSquare');
+  const arribaAbajo = primerHijo(anchor, 'wp:wrapTopAndBottom');
+  const contorno = primerHijo(anchor, 'wp:wrapTight') ?? primerHijo(anchor, 'wp:wrapThrough');
+  const el = cuadrado ?? arribaAbajo ?? contorno;
+  if (!el) return undefined;
+  const dist = (n: string): number => {
+    const v = Number(el.atributos[n] ?? anchor.atributos[n] ?? '0');
+    return Number.isFinite(v) && v > 0 ? v / EMU_POR_PUNTO : 0;
+  };
+  if (contorno && !ctx.enCelda) anotar(ctx, 'flotanteAprox');
+  return { modo: arribaAbajo ? 'topBottom' : 'square', distLPt: dist('distL'), distRPt: dist('distR'), distTPt: dist('distT'), distBPt: dist('distB') };
 }
 
 /** Texto de un `wp:posOffset`/`wp:align`: EMU → pt. */
@@ -829,7 +917,8 @@ function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
     interlineadoFactor: acc.interlineadoFactor, interlineadoExactoPt: acc.interlineadoExactoPt,
     saltoPaginaAntes: acc.saltoPaginaAntes, nivelEncabezado, lista, tamanoBasePt,
     mantenerConSiguiente: acc.keepNext ?? nivelEncabezado !== null,
-    mantenerLineasJuntas: acc.keepLines ?? nivelEncabezado !== null
+    mantenerLineasJuntas: acc.keepLines ?? nivelEncabezado !== null,
+    tabs: [...acc.tabs.values()].sort((a, b) => a.posPt - b.posPt)
   };
 }
 
@@ -942,6 +1031,7 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
   }
 
   ctx.enCelda = enCeldaAntes;
+  if (partes.some((x) => x.tipo === 'tab')) anotar(ctx, 'tabEnCelda');
   // Lo que una celda no puede pintar en esta fase se degrada CON aviso, nunca en silencio.
   for (let k = partes.length - 1; k >= 0; k--) {
     const parte = partes[k]!;
@@ -1047,7 +1137,6 @@ function construirAdvertencias(docRoot: XmlElemento): Advertencia[] {
   const notas = contarElementos(docRoot, 'w:footnoteReference') + contarElementos(docRoot, 'w:endnoteReference');
   const comentarios = contarElementos(docRoot, 'w:commentReference');
   const cambios = contarElementos(docRoot, 'w:ins') + contarElementos(docRoot, 'w:del') + contarElementos(docRoot, 'w:moveFrom') + contarElementos(docRoot, 'w:moveTo');
-  const secciones = contarElementos(docRoot, 'w:sectPr');
   const conColumnas = contarColumnasMultiples(docRoot);
   const objetos = contarElementos(docRoot, 'w:object');
 
@@ -1058,7 +1147,6 @@ function construirAdvertencias(docRoot: XmlElemento): Advertencia[] {
   if (cambios > 0) advertencias.push(aproximado(`El documento tiene ${cambios} ${pluralizar(cambios, 'cambio', 'cambios')} de control de cambios sin resolver; se aceptaron las inserciones y se descartaron las eliminaciones.`));
 
   if (objetos > 0) advertencias.push(omitido(`Se omitieron ${objetos} ${pluralizar(objetos, 'objeto incrustado', 'objetos incrustados')} (OLE; aún no soportados).`));
-  if (secciones > 1) advertencias.push(aproximado(`El documento tiene ${secciones} secciones; se usa el tamaño de página y los márgenes de la última para todo el documento.`));
   if (conColumnas > 0) advertencias.push(aproximado(`Se omitió la distribución en columnas de ${conColumnas} ${pluralizar(conColumnas, 'sección', 'secciones')}; el texto se maqueta a una sola columna.`));
 
   return advertencias;
@@ -1066,57 +1154,65 @@ function construirAdvertencias(docRoot: XmlElemento): Advertencia[] {
 
 const TIPOS_ZONA = ['default', 'first', 'even'] as const;
 
+type ZonasResueltas = { encabezados: ZonaPaginaModelo; pies: ZonaPaginaModelo };
+const zonaVacia = (): ZonaPaginaModelo => ({ default: null, first: null, even: null });
+
 /**
- * Encabezados y pies (`w:headerReference`/`w:footerReference` de las secciones → `word/header*.xml`/`footer*.xml` vía rels).
- * Para cada tipo (default/first/even) manda la ÚLTIMA sección que lo define (una sección sin referencia hereda la de la
- * anterior, como en Word). Las referencias que no se usan (de secciones anteriores) y las que no se pueden resolver se
- * AVISAN. Solo párrafos: una tabla dentro de la zona se omite con aviso. Las imágenes y enlaces de una zona no se
- * resuelven (sus rels son los del propio header/footer): se avisa.
+ * Lector de las partes de encabezado/pie (`w:headerReference`/`w:footerReference` → `word/header*.xml`/`footer*.xml` vía
+ * rels): cada parte se procesa UNA vez aunque varias secciones la citen (así sus avisos no se duplican). Una referencia que
+ * no se puede resolver se AVISA y deja ese tipo sin zona. Cada parte se procesa con las relaciones de SU propio fichero
+ * (`relsPartes`), no con las del documento: ahí viven las imágenes del encabezado.
  */
-function leerZonasDePagina(
-  sectPrs: XmlElemento[], sectPrFinal: XmlElemento | null, rels: Map<string, Relacion> | null, partes: Record<string, string>, ctx: Contexto
-): { encabezados: ZonaPaginaModelo; pies: ZonaPaginaModelo } {
-  const vacia = (): ZonaPaginaModelo => ({ default: null, first: null, even: null });
-  const salida = { encabezados: vacia(), pies: vacia() };
-  const total = sectPrs.reduce((s, sp) => s + hijosElemento(sp, 'w:headerReference').length + hijosElemento(sp, 'w:footerReference').length, 0)
-    + (sectPrFinal && !sectPrs.includes(sectPrFinal) ? hijosElemento(sectPrFinal, 'w:headerReference').length + hijosElemento(sectPrFinal, 'w:footerReference').length : 0);
-  let usadas = 0;
+function crearLectorZonas(rels: Map<string, Relacion> | null, partes: Record<string, string>, relsPartes: Record<string, string>, ctx: Contexto): (rId: string, falta: 'encabezadoFaltante' | 'pieFaltante') => BloqueDocx[] | null {
+  const cache = new Map<string, BloqueDocx[] | null>();
+  return (rId, falta) => {
+    if (cache.has(rId)) return cache.get(rId)!;
+    const ruta = rels?.get(rId) ? rutaMediaDesdeWord(rels.get(rId)!.target) : null;
+    const xml = ruta ? partes[ruta] : undefined;
+    let zona: BloqueDocx[] | null = null;
+    if (xml === undefined) anotar(ctx, falta);
+    else {
+      try { zona = procesarZona(xml, ctx, relsPartes[ruta!] ?? null); } catch { anotar(ctx, falta); }
+    }
+    cache.set(rId, zona);
+    return zona;
+  };
+}
+
+/**
+ * Encabezados y pies de UNA sección: lo que su `w:sectPr` referencia (por tipo default/first/even); lo que no
+ * referencia lo HEREDA de la sección anterior, como en Word.
+ */
+function resolverZonasSeccion(sectPr: XmlElemento | null, previas: ZonasResueltas | null, leer: ReturnType<typeof crearLectorZonas>): ZonasResueltas {
+  const salida: ZonasResueltas = { encabezados: zonaVacia(), pies: zonaVacia() };
   for (const [refNombre, clave, falta] of [['w:headerReference', 'encabezados', 'encabezadoFaltante'], ['w:footerReference', 'pies', 'pieFaltante']] as const) {
     for (const tipo of TIPOS_ZONA) {
-      let rId: string | undefined;
-      for (const sp of sectPrs) {
-        const ref = hijosElemento(sp, refNombre).find((r) => (r.atributos['w:type'] ?? 'default') === tipo);
-        if (ref) rId = ref.atributos['r:id'];
-      }
-      if (rId === undefined) continue;
-      usadas++;
-      const ruta = rels?.get(rId) ? rutaMediaDesdeWord(rels.get(rId)!.target) : null;
-      const xml = ruta ? partes[ruta] : undefined;
-      if (xml === undefined) { anotar(ctx, falta); continue; }
-      try {
-        salida[clave][tipo] = procesarZona(xml, ctx);
-      } catch {
-        anotar(ctx, falta);
-      }
+      const ref = sectPr ? hijosElemento(sectPr, refNombre).find((r) => (r.atributos['w:type'] ?? 'default') === tipo) : undefined;
+      const rId = ref?.atributos['r:id'];
+      salida[clave][tipo] = rId !== undefined ? leer(rId, falta) : previas?.[clave][tipo] ?? null;
     }
   }
-  if (total > usadas) for (let i = 0; i < total - usadas; i++) anotar(ctx, 'zonaDeSeccionAnterior');
   return salida;
 }
 
-/** Párrafos de un `w:hdr`/`w:ftr`, con `ctx.zona` activo (ahí PAGE/NUMPAGES son campos y las imágenes se omiten con aviso). */
-function procesarZona(xml: string, ctx: Contexto): Parrafo[] {
+/**
+ * Bloques de un `w:hdr`/`w:ftr` (fase 2c: párrafos con imágenes, y tablas), con `ctx.zona` activo (ahí PAGE/NUMPAGES son
+ * campos). `relsXml` son las relaciones del propio encabezado: sustituyen a las del documento mientras se procesa.
+ */
+function procesarZona(xml: string, ctx: Contexto, relsXml: string | null): BloqueDocx[] {
   const raiz = parseXml(xml);
-  const ps: Parrafo[] = [];
+  const bloques: BloqueDocx[] = [];
+  const relsDoc = ctx.rels;
+  ctx.rels = relsXml ? leerRelaciones(relsXml) : null;
   ctx.zona = true;
   try {
     for (const hijo of aplanarCuerpo(raiz)) {
-      if (hijo.nombre === 'w:p') ps.push(procesarParrafo(hijo, ctx));
-      else if (hijo.nombre === 'w:tbl') anotar(ctx, 'tablaEnZona');
+      if (hijo.nombre === 'w:p') bloques.push(procesarParrafo(hijo, ctx));
+      else if (hijo.nombre === 'w:tbl') bloques.push(procesarTablaReal(hijo, ctx));
       else if (!['w:bookmarkStart', 'w:bookmarkEnd', 'w:proofErr', 'w:permStart', 'w:permEnd', 'w:sectPr'].includes(hijo.nombre) && buscarDescendiente(hijo, 'w:t')) anotar(ctx, 'desconocido');
     }
-  } finally { ctx.zona = false; ctx.camposAbiertos.length = 0; }
-  return ps;
+  } finally { ctx.zona = false; ctx.rels = relsDoc; ctx.camposAbiertos.length = 0; }
+  return bloques;
 }
 
 /**
@@ -1143,19 +1239,19 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
   const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, camposAbiertos: [] };
 
   const bloques: BloqueDocx[] = [];
-  let sectPrFinal: XmlElemento | null = null;
-  const sectPrs: XmlElemento[] = []; // todas las secciones, en orden de documento (la última es la que manda para geometría)
+  // Una marca por sección, en orden de documento: su `w:sectPr` y dónde acaba (índice en `bloques`, exclusivo).
+  const marcas: { sectPr: XmlElemento | null; fin: number }[] = [];
 
   for (const hijo of aplanarCuerpo(body)) {
     if (hijo.nombre === 'w:p') {
       const pPr = primerHijo(hijo, 'w:pPr');
       const sectPrParrafo = pPr ? primerHijo(pPr, 'w:sectPr') : null;
-      if (sectPrParrafo) { sectPrFinal = sectPrParrafo; sectPrs.push(sectPrParrafo); }
       bloques.push(procesarParrafo(hijo, ctx));
+      if (sectPrParrafo) marcas.push({ sectPr: sectPrParrafo, fin: bloques.length });
     } else if (hijo.nombre === 'w:tbl') {
       bloques.push(procesarTablaReal(hijo, ctx));
     } else if (hijo.nombre === 'w:sectPr') {
-      sectPrFinal = hijo; sectPrs.push(hijo);
+      marcas.push({ sectPr: hijo, fin: bloques.length });
     } else if (hijo.nombre === 'm:oMathPara' || hijo.nombre === 'm:oMath') {
       anotar(ctx, 'ecuacion');
     } else if (!['w:bookmarkStart', 'w:bookmarkEnd', 'w:proofErr', 'w:permStart', 'w:permEnd'].includes(hijo.nombre) && buscarDescendiente(hijo, 'w:t')) {
@@ -1163,22 +1259,61 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
     }
   }
 
-  const geo = leerGeometriaPagina(sectPrFinal);
-  const zonas = leerZonasDePagina(sectPrs, sectPrFinal, rels, extras.partes ?? {}, ctx);
+  // El contenido tras el último `w:sectPr` de párrafo (o todo, si no hay ninguno) forma una sección final con la geometría por defecto.
+  if (marcas.length === 0 || (marcas[marcas.length - 1]!.fin < bloques.length)) marcas.push({ sectPr: null, fin: bloques.length });
+
   let paresImpares = false;
+  let tabPorDefectoPt = 36; // 720 twips: el valor por defecto de Word
   if (extras.settingsXml) {
-    try { const ev = primerHijo(parseXml(extras.settingsXml), 'w:evenAndOddHeaders'); paresImpares = !!ev && leerToggle(ev); } catch { /* settings ilegible: sin encabezados pares/impares distintos */ }
+    try {
+      const raizSettings = parseXml(extras.settingsXml);
+      const ev = primerHijo(raizSettings, 'w:evenAndOddHeaders'); paresImpares = !!ev && leerToggle(ev);
+      const dt = Number(primerHijo(raizSettings, 'w:defaultTabStop')?.atributos['w:val']);
+      if (Number.isFinite(dt) && dt > 0) tabPorDefectoPt = twipsAPt(dt);
+    } catch { /* settings ilegible: sin encabezados pares/impares distintos ni tabulación por defecto propia */ }
   }
+
+  const leerZona = crearLectorZonas(rels, extras.partes ?? {}, extras.relsPartes ?? {}, ctx);
+  const secciones: SeccionDocx[] = [];
+  let previas: ZonasResueltas | null = null;
+  let inicioBloque = 0;
+  for (const { sectPr, fin } of marcas) {
+    const geo = leerGeometriaPagina(sectPr);
+    const zonas = resolverZonasSeccion(sectPr, previas, leerZona);
+    previas = zonas;
+    const tipoVal = sectPr ? primerHijo(sectPr, 'w:type')?.atributos['w:val'] : undefined;
+    if (tipoVal === 'evenPage' || tipoVal === 'oddPage' || tipoVal === 'nextColumn') anotar(ctx, 'seccionParImpar');
+    const pgNum = sectPr ? primerHijo(sectPr, 'w:pgNumType') : null;
+    const inicioNum = pgNum?.atributos['w:start'] !== undefined ? Number(pgNum.atributos['w:start']) : NaN;
+    const fmt = pgNum?.atributos['w:fmt'];
+    if (fmt !== undefined && fmt !== 'decimal') anotar(ctx, 'numeroPaginaFormato');
+    const tipo: SeccionDocx['tipo'] = tipoVal === 'continuous' ? 'continuous' : 'nextPage';
+    if (tipo === 'continuous' && Number.isFinite(inicioNum) && secciones.length > 0) anotar(ctx, 'numeroPaginaContinua');
+    secciones.push({
+      paginaAnchoPt: geo.anchoPt, paginaAltoPt: geo.altoPt,
+      margenSupPt: geo.margenSup, margenInfPt: geo.margenInf, margenIzqPt: geo.margenIzq, margenDerPt: geo.margenDer,
+      margenEncabezadoPt: geo.margenCab, margenPiePt: geo.margenPie,
+      tipo,
+      tituloPagina: !!sectPr && !!primerHijo(sectPr, 'w:titlePg') && leerToggle(primerHijo(sectPr, 'w:titlePg')!),
+      encabezados: zonas.encabezados, pies: zonas.pies,
+      numeroInicial: Number.isFinite(inicioNum) ? inicioNum : null,
+      inicioBloque, finBloque: fin
+    });
+    inicioBloque = fin;
+  }
+  const ultima = secciones[secciones.length - 1]!;
   const perdidas: Advertencia[] = MENSAJES_PERDIDAS.filter(([clave]) => (ctx.perdidas.get(clave) ?? 0) > 0).map(([clave, tipo, msg]) => ({ tipo, mensaje: msg(ctx.perdidas.get(clave)!) }));
   const advertencias = [...construirAdvertencias(docRoot), ...ctx.advertenciasExtra, ...perdidas];
 
+  // Los campos "de siempre" describen la ÚLTIMA sección (compatibilidad); `secciones` las trae todas.
   return {
-    paginaAnchoPt: geo.anchoPt, paginaAltoPt: geo.altoPt,
-    margenSupPt: geo.margenSup, margenInfPt: geo.margenInf, margenIzqPt: geo.margenIzq, margenDerPt: geo.margenDer,
+    paginaAnchoPt: ultima.paginaAnchoPt, paginaAltoPt: ultima.paginaAltoPt,
+    margenSupPt: ultima.margenSupPt, margenInfPt: ultima.margenInfPt, margenIzqPt: ultima.margenIzqPt, margenDerPt: ultima.margenDerPt,
     bloques, advertencias,
-    margenEncabezadoPt: geo.margenCab, margenPiePt: geo.margenPie,
-    tituloPagina: !!sectPrFinal && !!primerHijo(sectPrFinal, 'w:titlePg') && leerToggle(primerHijo(sectPrFinal, 'w:titlePg')!),
+    margenEncabezadoPt: ultima.margenEncabezadoPt, margenPiePt: ultima.margenPiePt,
+    tituloPagina: ultima.tituloPagina,
     paresImpares,
-    encabezados: zonas.encabezados, pies: zonas.pies
+    encabezados: ultima.encabezados, pies: ultima.pies,
+    secciones, tabPorDefectoPt
   };
 }

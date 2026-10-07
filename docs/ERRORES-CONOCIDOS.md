@@ -3201,3 +3201,31 @@ atajos y en la ayuda `?`.
 **Cómo se detecta ahora.** `tests/e2e/next/comentarios-marcado.spec.ts` (quitar desde el panel y deshacer, quitar desde el diálogo,
 en blanco que solo cancela, sin botón al crear, doble clic sin editar la línea, Alt+↓ y Enter) y `tests/unit/atajos.test.ts`. Sin
 regla guard: es funcionalidad de interacción con test.
+
+### E-096 · Word → PDF: un documento con varias secciones se aplanaba a la última, y los encabezados no admitían imágenes ni tablas (fase 2c)
+
+**Síntoma.** Un `.docx` con una sección vertical y otra apaisada salía con TODAS las páginas del tamaño de la última; los pies
+"Página X de Y" no reiniciaban la numeración (`w:pgNumType w:start`); un logo o una tabla dentro del encabezado se omitían con
+aviso; el texto atravesaba una imagen flotante con `wp:wrapSquare`; y un pie "izquierda TAB derecha" dejaba el número de página
+pegado al texto en vez de al margen derecho (tabulación aproximada con un hueco fijo de cuatro espacios).
+
+**Causa raíz.** El modelo guardaba UNA geometría de página para todo el documento y el maquetador común (`paginar`) recibía UNA
+`PageGeometry`; las zonas (encabezado/pie) eran `Parrafo[]` resueltos con las relaciones del DOCUMENTO (las del propio
+`header1.xml.rels` ni se leían: un `rId1` de un encabezado se habría resuelto contra el `rId1` del documento); el ancho de una
+línea se decidía ANTES de saber en qué página ni a qué altura caería, así que no podía apartarse de una caja flotante; y una
+tabulación era un átomo de texto más, sin noción de posición.
+
+**Arreglo.** `ModeloDocx.secciones` (una por `w:sectPr`, con los bloques `[inicioBloque, finBloque)`, sus zonas ya heredadas y su
+numeración); `paginar` acepta marcadores `section` (nextPage reutiliza la página si está vacía; continuous sigue en la misma si el
+tamaño coincide) y devuelve `paginas[]` con la geometría de cada una (el conversor crea una página en blanco por tamaño). Las zonas
+son `BloqueDocx[]` y se procesan con las relaciones de su parte (`relsPartes`), acotadas a un tercio de la página. Los párrafos con
+tabulaciones o con flotantes que el texto rodea pasan a ser `FlowParrafoFlex`: ítems que se maquetan LÍNEA A LÍNEA dentro de
+`paginar` con una función pura `paso(desde, franjaLibre)`, de modo que el ancho depende de los `Obstaculo` de ESA página (cajas ya
+ensanchadas por `distL/R/T/B`; sin obstáculos da exactamente las líneas de `wrapAtoms`). `lineaConTabs` coloca los tramos tras cada
+tabulación según la parada (izquierda/centro/derecha/decimal, líder de puntos) con las paradas de estilo y de párrafo.
+
+**Cómo se detecta ahora.** `tests/unit/flujo-layout-2c.test.ts` (secciones, obstáculos, tabulaciones), `docx-modelo-2c.test.ts`,
+`docx-render-2c.test.ts`, `ConversorDocxNavegador-2c.test.ts` (motor real: tamaños de página por sección, numeración reiniciada, logo
+en cada página, líneas sin solape con la flotante, el número de página a la derecha) y los E2E de `word-a-pdf.spec.ts` con los
+fixtures `word-secciones`, `word-encabezado-rico`, `word-ajuste` y `word-tabs`. Sin regla guard: es funcionalidad con test, no un
+patrón de código que pueda repetirse.

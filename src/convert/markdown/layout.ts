@@ -279,7 +279,7 @@ export function urlsRechazadas(blocks: Block[]): string[] {
 }
 
 export function layoutMarkdown(blocks: Block[], medir: Medir): ResultadoLayout {
-  if (blocks.length === 0) return { totalPaginas: 1, trazos: [], barras: [], imagenes: [], enlaces: [], advertencias: [] };
+  if (blocks.length === 0) return { totalPaginas: 1, trazos: [], barras: [], imagenes: [], enlaces: [], advertencias: [], paginas: [{ geo: PAGE_GEOMETRY, seccion: 0 }] };
   const items = renderBlocksFlat(blocks, 0, medir, true, BLACK);
   return paginarFlujo(items, PAGE_GEOMETRY, BASELINE_FRACTION);
 }

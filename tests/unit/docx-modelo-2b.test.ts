@@ -1,6 +1,6 @@
 import { textosAdvertencias } from '../../src/convert/advertencia';
 import { test, expect } from 'vitest';
-import { construirModeloDocx, esParrafo, esTabla, type Parrafo, type Tabla } from '../../src/convert/docx/modelo';
+import { construirModeloDocx, esParrafo, esTabla, type Parrafo, type Tabla, type BloqueDocx } from '../../src/convert/docx/modelo';
 
 /**
  * Word fase 2b (§9 fila #4): encabezados/pies (default/first/even), campos
@@ -12,7 +12,7 @@ const sect = (extra: string, mar = '<w:pgMar w:top="1440" w:right="1440" w:botto
   `<w:sectPr><w:headerReference w:type="default" r:id="rIdH1"/><w:headerReference w:type="first" r:id="rIdH2"/><w:footerReference w:type="default" r:id="rIdF1"/>${extra}<w:pgSz w:w="12240" w:h="15840"/>${mar}</w:sectPr>`;
 const cuerpo = (s: string) => `<w:document><w:body><w:p><w:r><w:t>cuerpo</w:t></w:r></w:p>${s}</w:body></w:document>`;
 const hdr = (t: string) => `<w:hdr><w:p><w:r><w:t>${t}</w:t></w:r></w:p></w:hdr>`;
-const textos = (ps: Parrafo[] | null) => (ps ?? []).flatMap((p) => p.partes).map((x) => (x.tipo === 'texto' ? x.texto : x.tipo === 'campo' ? `{${x.campo}}` : `<${x.tipo}>`));
+const textos = (ps: BloqueDocx[] | null) => (ps ?? []).filter(esParrafo).flatMap((p) => p.partes).map((x) => (x.tipo === 'texto' ? x.texto : x.tipo === 'campo' ? `{${x.campo}}` : `<${x.tipo}>`));
 function soloP(m: ReturnType<typeof construirModeloDocx>): Parrafo[] { return m.bloques.filter(esParrafo); }
 
 const PARTES = { 'word/header1.xml': hdr('cab general'), 'word/header2.xml': hdr('cab primera'), 'word/footer1.xml': '<w:ftr><w:p><w:r><w:t>pie general</w:t></w:r></w:p></w:ftr>' };
@@ -60,7 +60,7 @@ test('campos PAGE y NUMPAGES: en w:fldSimple y en w:fldChar/w:instrText, con el 
   </w:p></w:ftr>`;
   const m = construirModeloDocx(cuerpo(sect('')), null, null, REL_CAB, { partes: { ...PARTES, 'word/footer1.xml': pie } });
   expect(textos(m.pies.default)).toEqual(['Página ', '{PAGE}', ' de ', '{NUMPAGES}']);
-  const campoPage = m.pies.default![0]!.partes.find((x) => x.tipo === 'campo')!;
+  const campoPage = (m.pies.default![0] as Parrafo).partes.find((x) => x.tipo === 'campo')!;
   expect(campoPage.tipo === 'campo' && campoPage.formato.font).toBe('Helvetica-Bold');
   expect(textosAdvertencias(m.advertencias).join(' | ')).not.toMatch(/campo/i);
 });
@@ -76,7 +76,7 @@ test('un campo no soportado (DATE) deja su último valor guardado y se AVISA; en
   expect(textosAdvertencias(m.advertencias).join(' | ')).toMatch(/campo/i);
 });
 
-test('referencias de secciones anteriores que no se usan se avisan; la última sección hereda el tipo que no define', () => {
+test('la última sección manda en los campos de siempre y hereda el tipo que no define (fase 2c: ya no se avisa de secciones)', () => {
   const doc = `<w:document><w:body>
     <w:p><w:pPr><w:sectPr><w:headerReference w:type="default" r:id="rIdH1"/><w:headerReference w:type="even" r:id="rIdH2"/></w:sectPr></w:pPr><w:r><w:t>a</w:t></w:r></w:p>
     <w:p><w:r><w:t>b</w:t></w:r></w:p>
@@ -85,14 +85,14 @@ test('referencias de secciones anteriores que no se usan se avisan; la última s
   const m = construirModeloDocx(doc, null, null, REL_CAB, { partes: PARTES });
   expect(textos(m.encabezados.default)).toEqual(['cab primera']); // la última sección manda
   expect(textos(m.encabezados.even)).toEqual(['cab primera']); // no la define: hereda el `even` de la anterior (header2)
-  expect(textosAdvertencias(m.advertencias).join(' | ')).toMatch(/secciones/i);
+  expect(textosAdvertencias(m.advertencias).join(' | ')).not.toMatch(/secciones/i);
 });
 
-test('imagen dentro de un encabezado se omite con aviso (aún no soportada ahí)', () => {
+test('imagen dentro de un encabezado cuya relación no está en el paquete se omite con aviso (con relación se pinta: ver docx-modelo-2c)', () => {
   const cab = '<w:hdr><w:p><w:r><w:drawing><wp:inline><wp:extent cx="914400" cy="914400"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rIdI"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r><w:r><w:t>logo</w:t></w:r></w:p></w:hdr>';
   const m = construirModeloDocx(cuerpo(sect('')), null, null, REL_CAB, { partes: { ...PARTES, 'word/header1.xml': cab } });
   expect(textos(m.encabezados.default)).toEqual(['logo']);
-  expect(textosAdvertencias(m.advertencias).join(' | ')).toMatch(/imagen.*(encabezado|pie)/i);
+  expect(textosAdvertencias(m.advertencias).join(' | ')).toMatch(/imagen/i);
 });
 
 // ---------------------------------------------------------------------------
@@ -158,7 +158,7 @@ test('un estilo de borde que no es línea continua (doble, punteado) se dibuja c
 
 const RELS_IMG = '<Relationships><Relationship Id="rId1" Type="x/image" Target="media/image1.png"/></Relationships>';
 function ancla(h: string, v: string): string {
-  return `<w:drawing><wp:anchor><wp:positionH relativeFrom="${h.split('|')[0]}">${h.split('|')[1]}</wp:positionH><wp:positionV relativeFrom="${v.split('|')[0]}">${v.split('|')[1]}</wp:positionV><wp:extent cx="914400" cy="457200"/><wp:wrapSquare wrapText="bothSides"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing>`;
+  return `<w:drawing><wp:anchor><wp:positionH relativeFrom="${h.split('|')[0]}">${h.split('|')[1]}</wp:positionH><wp:positionV relativeFrom="${v.split('|')[0]}">${v.split('|')[1]}</wp:positionV><wp:extent cx="914400" cy="457200"/><wp:wrapNone/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing>`;
 }
 
 test('imagen flotante (wp:anchor): se coloca (posOffset EMU → pt) y se avisa "sin ajuste de texto"', () => {

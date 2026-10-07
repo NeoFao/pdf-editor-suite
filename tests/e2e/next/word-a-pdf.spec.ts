@@ -214,3 +214,75 @@ test('T13: word-completo.docx (enlace javascript:) lo lista en "Incluido con dif
   await expect(aprox).toContainText(/enlace/i);
   await expect(page.locator('#conversion-warnings section[data-tipo="omitido"]')).toBeHidden();
 });
+
+// ---------------------------------------------------------------------------
+// Fase 2c: secciones, encabezados ricos, ajuste de texto y tabulaciones (fixtures en tests/fixtures/generados).
+// ---------------------------------------------------------------------------
+const WORD_SECCIONES = path.resolve(AQUI, '../../fixtures/generados/word-secciones.docx');
+const WORD_ENC_RICO = path.resolve(AQUI, '../../fixtures/generados/word-encabezado-rico.docx');
+const WORD_AJUSTE = path.resolve(AQUI, '../../fixtures/generados/word-ajuste.docx');
+const WORD_TABS = path.resolve(AQUI, '../../fixtures/generados/word-tabs.docx');
+
+/** Abre el .docx en la app, espera la conversión, guarda el PDF resultante y lo abre con el motor para inspeccionarlo. */
+async function convertirYGuardar(page: Page, fixture: string, nombre: string) {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(fixture);
+  await expect(page.locator('.run').first()).toBeVisible();
+  const [download] = await Promise.all([page.waitForEvent('download'), page.locator('#btn-save').click()]);
+  const destino = path.join(test.info().outputDir, `${nombre}.pdf`);
+  await download.saveAs(destino);
+  const eng = await PdfiumEngine.create();
+  const doc = await eng.open(new Uint8Array(fs.readFileSync(destino)));
+  return { eng, doc };
+}
+
+test('abrir word-secciones.docx: la tercera página sale apaisada, con su encabezado y la numeración reiniciada, sin aviso (fase 2c)', async ({ page }) => {
+  const { eng, doc } = await convertirYGuardar(page, WORD_SECCIONES, 'word-secciones');
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
+  expect(eng.pageCount(doc)).toBe(3);
+  const tam = [0, 1, 2].map((p) => eng.pageSize(doc, p));
+  expect(tam.map((t) => [Math.round(t.widthPt), Math.round(t.heightPt)])).toEqual([[612, 792], [612, 792], [792, 612]]);
+  const texto = (p: number): string => eng.getPageText(doc, p).map((r) => r.text).join(' ');
+  expect(texto(1)).toContain('Página 2 de 3');
+  expect(texto(2)).toContain('Encabezado apaisado');
+  expect(texto(2)).toContain('Página 1 de 3');
+  eng.close(doc);
+});
+
+test('abrir word-encabezado-rico.docx: logo y tabla del encabezado en cada página, sin aviso (fase 2c)', async ({ page }) => {
+  const { eng, doc } = await convertirYGuardar(page, WORD_ENC_RICO, 'word-encabezado-rico');
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
+  expect(eng.pageCount(doc)).toBe(3);
+  for (let p = 0; p < 3; p++) {
+    expect(eng.listImageObjects(doc, p)).toHaveLength(1);
+    const texto = eng.getPageText(doc, p).map((r) => r.text).join(' ');
+    expect(texto).toContain('Empresa S.A.');
+    expect(texto).toContain('Informe mensual');
+  }
+  eng.close(doc);
+});
+
+test('abrir word-ajuste.docx: el texto rodea la imagen flotante (las líneas junto a ella quedan a su izquierda) y no hay aviso de "sin ajuste" (fase 2c)', async ({ page }) => {
+  const { eng, doc } = await convertirYGuardar(page, WORD_AJUSTE, 'word-ajuste');
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
+  const img = eng.listImageObjects(doc, 0)[0]!.rectPt;
+  const runs = eng.getPageText(doc, 0).filter((r) => r.text.includes('texto'));
+  const junto = runs.filter((r) => r.boxPt.yPt >= img.yPt - 0.5 && r.boxPt.yPt + r.boxPt.hPt <= img.yPt + img.hPt + 0.5);
+  expect(junto.length).toBeGreaterThanOrEqual(6);
+  for (const r of junto) expect(r.boxPt.xPt + r.boxPt.wPt).toBeLessThanOrEqual(img.xPt - 9 + 1);
+  expect(Math.max(...runs.map((r) => r.boxPt.xPt + r.boxPt.wPt))).toBeGreaterThan(img.xPt + 20); // debajo vuelve el ancho completo
+  eng.close(doc);
+});
+
+test('abrir word-tabs.docx: el número del índice y el "Página X de Y" del pie acaban en el margen derecho (fase 2c)', async ({ page }) => {
+  const { eng, doc } = await convertirYGuardar(page, WORD_TABS, 'word-tabs');
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
+  const runs = eng.getPageText(doc, 0);
+  const anexo = runs.find((r) => r.textoReal.trim() === 'Anexo')!;
+  const n120 = runs.find((r) => r.textoReal.trim() === '120' && Math.abs(r.boxPt.yPt - anexo.boxPt.yPt) < 4)!;
+  expect(Math.abs(n120.boxPt.xPt + n120.boxPt.wPt - 540)).toBeLessThanOrEqual(1.5);
+  expect(runs.some((r) => /^\.{10,}$/.test(r.textoReal.trim()))).toBe(true);
+  const pagina = runs.find((r) => r.textoReal.includes('Página 1 de 1'))!;
+  expect(Math.abs(pagina.boxPt.xPt + eng.measureText(pagina.fontName, pagina.sizePt, pagina.textoReal.trim()) - 540)).toBeLessThanOrEqual(1);
+  eng.close(doc);
+});
