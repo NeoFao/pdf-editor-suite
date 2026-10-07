@@ -1256,6 +1256,7 @@ export class App {
         this.viewer?.deselectImage();
         this.reflectPropsPanel();
       },
+      onEnlaceInterno: (destPageIndex, yPt) => this.goToPage(destPageIndex, yPt), // enlace interno del PDF (p. ej. índice de Word): página + altura
       onImageSelect: (pageIndex, objIndex) => {
         this.selectedImage = { pageIndex, objIndex };
         this.selection = null; // selección mutuamente excluyente con una línea de texto
@@ -2302,13 +2303,13 @@ export class App {
    * no haga scroll de verdad (rueda, gesto táctil, teclado) — ver el
    * comentario de `Viewer.observeVisible`.
    */
-  private goToPage(i: number): void {
+  private goToPage(i: number, yPt: number | null = null): void {
     const total = this.session?.model.pages.length ?? 0;
     if (i < 0 || i >= total) return;
     this.currentPage = i;
     this.updateIndicator();
     this.setActiveThumb(i);
-    this.viewer?.scrollToPage(i);
+    this.viewer?.scrollToPage(i, yPt);
     // Cajón móvil (§9 #35): "elegir una página" es una de las formas
     // explícitas de cerrarlo. Único punto de entrada para navegar (E-032,
     // regla `navegacion-por-gotopage`), así que cubre miniatura, marcador,

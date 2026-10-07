@@ -73,9 +73,9 @@ import type { PosFlotanteH, PosFlotanteV, AjusteFlotante } from '../flujo/layout
  *   (`w:evenAndOddHeaders`), con `PAGE`/`NUMPAGES`, imágenes y tablas (2c).
  * - Tabulaciones (2c): reales también dentro de una celda de tabla (E-101), con las
  *   paradas de su párrafo medidas desde el borde interior de la celda.
- * - Enlaces: solo `w:hyperlink` EXTERNO (`r:id` con `TargetMode="External"`);
- *   un enlace interno a un marcador del propio documento (`w:anchor`) se
- *   trata como texto plano, sin aviso (navegación interna fuera de alcance).
+ * - Enlaces: `w:hyperlink` EXTERNO (`r:id` con `TargetMode="External"`) e INTERNO a un
+ *   marcador del propio documento (`w:anchor` → `w:bookmarkStart`), que se resuelve tras
+ *   paginar a página + posición vertical (`render.ts`).
  */
 
 export type RGB = [number, number, number];
@@ -121,7 +121,11 @@ export interface ParadaTab { posPt: number; tipo: 'left' | 'center' | 'right' | 
 
 export type ParteParrafo =
   /** `url`, cuando está presente, es la URL YA VALIDADA (`validarUrlEnlace`) de un `w:hyperlink` que envuelve este texto. */
-  | { tipo: 'texto'; texto: string; formato: RunFormato; url?: string }
+  | { tipo: 'texto'; texto: string; formato: RunFormato; url?: string;
+    /** Nombre del `w:bookmarkStart` al que apunta el `w:hyperlink w:anchor` que envuelve este texto (enlace INTERNO). Se resuelve tras paginar: sin url. */
+    ancla?: string }
+  /** `w:bookmarkStart w:name`: dónde empieza el marcador `nombre` (no ocupa espacio). `paginar` registra la página y la y de su línea; `_GoBack` no se emite nunca. */
+  | { tipo: 'marcador'; nombre: string }
   /**
    * Tabulación. `ptab` (`w:ptab`, tabulación de posición): salta a una alineación respecto al margen en vez de a una parada.
    * `paradas` (solo dentro de una celda de tabla, E-101): las paradas efectivas de SU párrafo (estilo + directas), con `posPt`
@@ -735,12 +739,16 @@ interface Contexto {
 
 function anotar(ctx: Contexto, clave: string): void { ctx.perdidas.set(clave, (ctx.perdidas.get(clave) ?? 0) + 1); }
 
+/** Aviso (`omitido`) de enlaces cuyo destino no se pudo resolver (relación ausente, marcador inexistente o `_GoBack`): el texto se conserva sin enlace. Lo usan el modelo y la resolución tras paginar (`render.ts`). */
+export function mensajeEnlaceSinDestino(c: number): string {
+  return cuenta(c, 'Un enlace sin destino resoluble (marcador o relación inexistente) se dejó como texto sin enlace.', '{n} enlaces sin destino resoluble (marcador o relación inexistente) se dejaron como texto sin enlace.');
+}
+
 function cuenta(c: number, uno: string, varios: string): string { return c === 1 ? uno : varios.replace('{n}', String(c)); }
 
 /** Texto de cada tipo de pérdida (nada se descarta o degrada en silencio, AGENTS.md §3). Orden = orden de aparición en el aviso. */
 const MENSAJES_PERDIDAS: [string, TipoAdvertencia, (c: number) => string][] = [
-  ['enlaceInterno', 'aproximado', (c) => cuenta(c, 'Un enlace interno (a un marcador del documento) se dejó como texto sin enlace.', '{n} enlaces internos (a marcadores del documento) se dejaron como texto sin enlace.')],
-  ['enlaceSinDestino', 'aproximado', (c) => cuenta(c, 'Un enlace sin destino resoluble se dejó como texto sin enlace.', '{n} enlaces sin destino resoluble se dejaron como texto sin enlace.')],
+  ['enlaceSinDestino', 'omitido', mensajeEnlaceSinDestino],
   ['desconocido', 'omitido', (c) => cuenta(c, 'Se omitió el texto de un elemento no reconocido del documento.', 'Se omitió el texto de {n} elementos no reconocidos del documento.')],
   ['ecuacion', 'omitido', (c) => cuenta(c, 'Se omitió una ecuación (aún no soportada).', 'Se omitieron {n} ecuaciones (aún no soportadas).')],
   ['sym', 'omitido', (c) => cuenta(c, 'Se omitió un símbolo especial (w:sym).', 'Se omitieron {n} símbolos especiales (w:sym).')],
@@ -1011,6 +1019,7 @@ function recorrerContenidoParrafo(contenedor: XmlElemento, baseRuns: RPrAcum, ct
       case 'm:oMath': case 'm:oMathPara': anotar(ctx, 'ecuacion'); break;
       case 'w:del': case 'w:moveFrom': break; // eliminación de control de cambios: se descarta (advertencia aparte, `cambios`)
       case 'w:pPr': break; // procesado aparte
+      case 'w:bookmarkStart': { const nombre = h.atributos['w:name']; if (nombre && nombre !== '_GoBack') partes.push({ tipo: 'marcador', nombre }); break; } // `_GoBack` (cursor de Word) nunca es destino
       default: if (!RUIDO_PARRAFO.has(h.nombre) && buscarDescendiente(h, 'w:t')) anotar(ctx, 'desconocido'); break; // bookmarkStart/End, proofErr...: ruido estructural sin texto
     }
   }
@@ -1030,8 +1039,7 @@ function procesarFldSimple(h: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, par
  * `w:hyperlink r:id="rIdN"` (fase 2a). Solo enlaces EXTERNOS
  * (`TargetMode="External"`, siempre el caso de un hipervínculo a una URL —
  * un `w:anchor` en vez de `r:id` es un enlace INTERNO a un marcador del
- * propio documento, fuera de alcance de esta fase, se trata como texto
- * plano sin aviso). El esquema se valida con `validarUrlEnlace` (mismo
+ * propio documento: se anota como `ancla` y se resuelve tras paginar). El esquema se valida con `validarUrlEnlace` (mismo
  * criterio que el motor, E-0NN de esta fase): un esquema no permitido dentro
  * del propio `.docx` NO crea un enlace clicable y se avisa — nunca en
  * silencio. Con enlace válido, el texto adopta azul+subrayado por DEFECTO
@@ -1041,13 +1049,17 @@ function procesarFldSimple(h: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, par
 function procesarHyperlink(h: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, partes: ParteParrafo[]): void {
   const rId = h.atributos['r:id'];
   const rel = rId ? ctx.rels?.get(rId) : undefined;
-  if (!rId && h.atributos['w:anchor'] !== undefined) {
-    anotar(ctx, 'enlaceInterno'); // a un marcador del propio documento: el texto se conserva, el enlace no
+  const ancla = h.atributos['w:anchor'];
+  if (!rId && ancla) {
+    // Enlace INTERNO a un marcador del propio documento: el texto lleva su ancla y se resuelve tras paginar (`render.ts`),
+    // cuando se sabe en qué página y a qué altura cae el marcador. Sin estilo propio forzado (el de Word lo da el run).
+    const antes = partes.length;
     recorrerContenidoParrafo(h, baseRuns, ctx, partes);
+    for (let i = antes; i < partes.length; i++) { const x = partes[i]!; if (x.tipo === 'texto') x.ancla = ancla; }
     return;
   }
   if (!rId || !rel || rel.targetMode !== 'External') {
-    anotar(ctx, rel && rel.targetMode === 'Internal' ? 'enlaceInterno' : 'enlaceSinDestino');
+    anotar(ctx, 'enlaceSinDestino');
     recorrerContenidoParrafo(h, baseRuns, ctx, partes);
     return;
   }

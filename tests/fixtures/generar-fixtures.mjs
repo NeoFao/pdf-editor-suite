@@ -1204,6 +1204,38 @@ function docxParrafoCelda() {
 }
 
 /**
+ * `word-enlaces-internos.docx`: página 1 con dos enlaces internos (`w:hyperlink w:anchor`): uno al marcador `conclusion` (que cae en
+ * la 6.ª línea de la página 3, línea exacta de 12 pt, página Carta con margen de 72 pt: borde superior de esa línea en
+ * y = 792 - 72 - 5 x 12 = 660) y otro a un marcador que no existe. Cada página termina con un salto de página.
+ */
+export const DOCX_ENLACES_INTERNOS = {
+  textoEnlace: 'Ir a la conclusion', textoRoto: 'Enlace roto', textoDestino: 'Conclusion del documento',
+  paginaDestino: 3, yDestinoPt: 660, lineaPt: 12
+};
+function docxEnlacesInternos() {
+  const p = (contenido) => `<w:p><w:pPr>${ESP_EXACTO}</w:pPr>${contenido}</w:p>`;
+  const r = (t) => `<w:r>${RPR_10}<w:t>${t}</w:t></w:r>`;
+  const salto = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  ${p(`<w:hyperlink w:anchor="conclusion">${r(DOCX_ENLACES_INTERNOS.textoEnlace)}</w:hyperlink>`)}
+  ${p(`<w:hyperlink w:anchor="noExiste">${r(DOCX_ENLACES_INTERNOS.textoRoto)}</w:hyperlink>`)}
+  ${p(r('Fin de la pagina uno'))}
+  ${salto}
+  ${p(r('Pagina dos'))}
+  ${salto}
+  ${[1, 2, 3, 4, 5].map((i) => p(r(`Relleno ${i}`))).join('')}
+  ${p(`<w:bookmarkStart w:id="1" w:name="conclusion"/>${r(DOCX_ENLACES_INTERNOS.textoDestino)}<w:bookmarkEnd w:id="1"/>`)}
+  ${p(r('Despues del marcador'))}
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') }
+  ]);
+}
+
+/**
  * "Zip bomb" real: 8 MB de ceros comprimidos con deflate (que reduce a un
  * puñado de KB) en una única entrada — ejercita la defensa de ratio de
  * compresión de `src/convert/docx/zip.ts` con datos reales, no solo tamaños
@@ -1913,6 +1945,7 @@ async function main() {
     'word-parrafo-celda.docx': docxParrafoCelda(),
     'word-rpr-estilo.docx': docxRprEstilo(),
     'word-rpr-efectos.docx': docxRprEfectos(),
+    'word-enlaces-internos.docx': docxEnlacesInternos(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {

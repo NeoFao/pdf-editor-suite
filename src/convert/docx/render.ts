@@ -1,5 +1,5 @@
-import { aproximado, type Advertencia } from '../advertencia';
-import { esParrafo, esTabla, type InfoLista, type Alineacion, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type RunFormato, type Borde, type BordesTabla, type ParadaTab, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx } from './modelo';
+import { aproximado, omitido, type Advertencia } from '../advertencia';
+import { esParrafo, esTabla, mensajeEnlaceSinDestino, type InfoLista, type Alineacion, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type RunFormato, type Borde, type BordesTabla, type ParadaTab, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx } from './modelo';
 import {
   wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona, parrafoFlex, lineasConTabs, tamanoLinea,
   type Atom, type Medir, type FlowItem, type FlowLine, type FlowTableRow, type RelLinea, type RelBarra, type ResultadoLayout, type PageGeometry, type RGB, type TabsConfig, type TabStopAbs
@@ -39,9 +39,10 @@ function atomoMarcador(lista: InfoLista, sizePt: number): Atom {
 }
 
 /** Átomo de texto con el formato de un run, efectos de carácter incluidos (E-105: tachado, desplazamiento, tamaño nominal, fondo). */
-function atomoDeTexto(texto: string, f: RunFormato, pegado: boolean, url?: string): Atom {
+function atomoDeTexto(texto: string, f: RunFormato, pegado: boolean, url?: string, ancla?: string): Atom {
   const a: Atom = { text: texto, font: f.font, sizePt: f.sizePt, color: f.color, pegado, underline: f.underline };
   if (url !== undefined) a.url = url;
+  if (ancla !== undefined) a.ancla = ancla;
   if (f.strike) a.strike = f.strike;
   if (f.dyPt) a.dyPt = f.dyPt;
   if (f.sizeLineaPt !== undefined) a.sizeLineaPt = f.sizeLineaPt;
@@ -70,6 +71,12 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
   let bufferAtomos: Atom[] = [];
   let seEmitioAlgunaLinea = false;
   let huboImagen = false;
+  // Marcadores (`w:bookmarkStart`) vistos y aún sin átomo al que colgarse: se adhieren al PRIMER átomo que venga después.
+  let marcasPendientes: string[] = [];
+  const empujar = (a: Atom): void => {
+    if (marcasPendientes.length > 0) { a.marcas = marcasPendientes; marcasPendientes = []; }
+    bufferAtomos.push(a);
+  };
   // Un párrafo cuyo ÚNICO contenido es un salto de página (patrón habitual
   // en Word para forzar una página nueva) no debe dejar una línea en blanco
   // ni antes ni después del salto — solo el salto en sí. El "línea en
@@ -127,7 +134,7 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
       for (const palabra of parte.texto.split(/\s+/)) {
         if (palabra === '') continue;
         const pegado = primerPalabra && !empiezaConEspacio && !terminaEnEspacio && bufferAtomos.length > 0;
-        bufferAtomos.push(atomoDeTexto(palabra, parte.formato, pegado, parte.url));
+        empujar(atomoDeTexto(palabra, parte.formato, pegado, parte.url, parte.ancla));
         primerPalabra = false;
       }
       if (parte.texto.length > 0) terminaEnEspacio = /\s$/.test(parte.texto);
@@ -135,13 +142,15 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
       // Número de página/total: se pinta como un átomo de texto con el formato del campo (pegado a lo anterior si no hay espacio real).
       if (!campos) continue;
       const pegado = bufferAtomos.length > 0 && !terminaEnEspacio;
-      bufferAtomos.push(atomoDeTexto(String(parte.campo === 'PAGE' ? campos.pagina : campos.total), parte.formato, pegado));
+      empujar(atomoDeTexto(String(parte.campo === 'PAGE' ? campos.pagina : campos.total), parte.formato, pegado));
       terminaEnEspacio = false;
     } else if (parte.tipo === 'tab') {
       // Tabulación real (fase 2c): un átomo `tab` que `lineaConTabs` resuelve contra las paradas al colocar la línea.
       const fijo = parte.ptab ? paradaPtab(parte.ptab.alineacion, parte.ptab.leader) : undefined;
-      bufferAtomos.push({ text: '', font: 'Helvetica', sizePt: p.tamanoBasePt, color: [0, 0, 0], tab: fijo ? { fijo } : {} });
+      empujar({ text: '', font: 'Helvetica', sizePt: p.tamanoBasePt, color: [0, 0, 0], tab: fijo ? { fijo } : {} });
       terminaEnEspacio = true;
+    } else if (parte.tipo === 'marcador') {
+      marcasPendientes.push(parte.nombre);
     } else if (parte.tipo === 'saltoLinea') {
       volcar();
       terminaEnEspacio = true;
@@ -168,8 +177,11 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
   if (!seEmitioAlgunaLinea && !tieneSaltoPagina && !huboImagen) {
     // Párrafo realmente vacío (línea en blanco intencional del usuario): se
     // conserva su alto de línea aunque no tenga texto ni marcador.
-    salida.push({ kind: 'line', height: alturaLinea(p.tamanoBasePt), segs: [], bars: [] });
+    salida.push({ kind: 'line', height: alturaLinea(p.tamanoBasePt), segs: [], bars: [], ...(marcasPendientes.length > 0 ? { marcas: marcasPendientes } : {}) });
+    marcasPendientes = [];
   }
+  // Marcador sin texto detrás (al final del párrafo, o junto a una imagen): una línea de alto 0 lo fija en este punto.
+  if (marcasPendientes.length > 0) salida.push({ kind: 'line', height: 0, segs: [], bars: [], marcas: marcasPendientes });
 
   if (p.espacioDespuesPt > 0) salida.push({ kind: 'gap', height: p.espacioDespuesPt, bars: [] });
   return salida;
@@ -209,7 +221,11 @@ function celdaAGrupos(celda: CeldaTabla, xIniPt: number, xFinPt: number, tabDefe
   let paradas: ParadaTab[] | null = null;
   let terminaEnEspacio = true;
   let inicio: Extract<CeldaTabla['partes'][number], { tipo: 'inicioParrafo' }> | null = null;
+  let marcasPendientes: string[] = [];
   const cerrar = (): void => {
+    // Marcador sin texto detrás dentro del grupo: se cuelga del último átomo (misma línea) si lo hay.
+    if (marcasPendientes.length > 0 && actual.length > 0) { const u = actual[actual.length - 1]!; u.marcas = [...(u.marcas ?? []), ...marcasPendientes]; }
+    marcasPendientes = [];
     if (inicio?.lista && inicio.lista.textoMarcador !== '') actual.unshift(atomoMarcador(inicio.lista, tamanoLineaDe(actual.find((a) => !a.tab)) ?? TABLA_SIZE_PT_DEFECTO));
     const tabs: TabsConfig | null = paradas ? { stops: paradas.map((t): TabStopAbs => ({ posPt: xIniPt + t.posPt, tipo: t.tipo, leader: t.leader })), defectoPt: tabDefectoPt, origenPt: xIniPt } : null;
     const izq = inicio?.sangriaIzqPt ?? 0;
@@ -231,10 +247,14 @@ function celdaAGrupos(celda: CeldaTabla, xIniPt: number, xFinPt: number, tabDefe
       for (const palabra of parte.texto.split(/\s+/)) {
         if (palabra === '') continue;
         const pegado = primerPalabra && !empiezaConEspacio && !terminaEnEspacio && actual.length > 0;
-        actual.push(atomoDeTexto(palabra, parte.formato, pegado, parte.url));
+        const a = atomoDeTexto(palabra, parte.formato, pegado, parte.url, parte.ancla);
+        if (marcasPendientes.length > 0) { a.marcas = marcasPendientes; marcasPendientes = []; }
+        actual.push(a);
         primerPalabra = false;
       }
       if (parte.texto.length > 0) terminaEnEspacio = /\s$/.test(parte.texto);
+    } else if (parte.tipo === 'marcador') {
+      marcasPendientes.push(parte.nombre);
     } else if (parte.tipo === 'tab') {
       if (parte.paradas && !paradas) paradas = parte.paradas;
       const fijo = parte.ptab ? paradaFija(xIniPt, xFinPt, parte.ptab.alineacion, parte.ptab.leader) : undefined;
@@ -590,7 +610,11 @@ function geoDeclarada(sec: SeccionDocx): PageGeometry {
   return { widthPt: sec.paginaAnchoPt, heightPt: sec.paginaAltoPt, marginTopPt: sec.margenSupPt, marginBottomPt: sec.margenInfPt, marginLeftPt: sec.margenIzqPt, marginRightPt: sec.margenDerPt };
 }
 
-export function renderizarModeloDocx(modelo: ModeloDocx, medir: Medir): ResultadoLayout {
+/** Enlace interno YA resuelto: su caja en `page` (pt PDF, origen abajo-izquierda) y el destino (`destPage` 0-based, `destYPt` = borde superior de la línea del marcador, pt PDF origen abajo). */
+export interface EnlaceInterno { page: number; xPt: number; yPt: number; wPt: number; hPt: number; destPage: number; destYPt: number }
+export type ResultadoDocx = ResultadoLayout & { enlacesInternos: EnlaceInterno[] };
+
+export function renderizarModeloDocx(modelo: ModeloDocx, medir: Medir): ResultadoDocx {
   const av = nuevosAvisos();
   const secciones = seccionesDe(modelo);
   // Con alguna flotante que el texto rodea, TODOS los párrafos del cuerpo se maquetan línea a línea (cada uno puede cruzarse con la caja).
@@ -661,5 +685,16 @@ export function renderizarModeloDocx(modelo: ModeloDocx, medir: Medir): Resultad
       trazos.push(...zona.trazos); barras.push(...zona.barras); imagenes.push(...zona.imagenes); enlaces.push(...zona.enlaces);
     }
   }
-  return { totalPaginas: res.totalPaginas, trazos, barras, imagenes, enlaces, advertencias: [...mensajesTabla(av), ...res.advertencias], paginas: res.paginas };
+
+  // Tercera pasada: con los marcadores ya colocados, cada enlace interno se resuelve a su destino. Un marcador inexistente (o
+  // `_GoBack`, que el modelo no emite) deja el texto SIN enlace y se avisa (omitido), una vez por marcador roto.
+  const enlacesInternos: EnlaceInterno[] = [];
+  const rotos = new Set<string>();
+  for (const e of res.enlacesAncla) {
+    const m = res.marcadores.get(e.ancla);
+    if (m) enlacesInternos.push({ page: e.page, xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt, destPage: m.page, destYPt: m.yPt });
+    else rotos.add(e.ancla);
+  }
+  const avisoEnlaces = rotos.size > 0 ? [omitido(mensajeEnlaceSinDestino(rotos.size))] : [];
+  return { totalPaginas: res.totalPaginas, trazos, barras, imagenes, enlaces, enlacesAncla: res.enlacesAncla, marcadores: res.marcadores, enlacesInternos, advertencias: [...mensajesTabla(av), ...res.advertencias, ...avisoEnlaces], paginas: res.paginas };
 }
