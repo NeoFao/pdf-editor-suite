@@ -26,3 +26,15 @@ test('E-084 pageBox: sin CropBox es la MediaBox con origen (0,0)', async () => {
   expect(b.tamanoPt).toEqual(eng.pageSize(doc, 0));
   eng.close(doc);
 });
+
+/** E-098: PDFium no aplica /UserUnit: tamaño, caja, render y coordenadas del texto van sin escalar y son coherentes. */
+test('E-098 /UserUnit 2: pageSize, pageBox, render y coordenadas siguen en unidades de usuario sin escalar', async () => {
+  const eng = await PdfiumEngine.create();
+  const doc = await eng.open(fixture('userunit.pdf'));
+  expect(eng.pageSize(doc, 0)).toEqual({ widthPt: 300, heightPt: 200 });
+  expect(eng.pageBox(doc, 0).tamanoPt).toEqual({ widthPt: 300, heightPt: 200 });
+  const r = eng.renderPage(doc, 0, 1);
+  expect([r.width, r.height]).toEqual([300, 200]);
+  expect(eng.getPageText(doc, 0)[0]!.originPt).toEqual({ xPt: 40, yPt: 150 });
+  eng.close(doc);
+});

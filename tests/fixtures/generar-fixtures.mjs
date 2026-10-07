@@ -5,7 +5,7 @@
  * cada corrida (`npm run test:fixtures`). Así el repo no acumula binarios y
  * cualquier máquina obtiene exactamente el mismo documento.
  */
-import { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFHexString, PDFString } from 'pdf-lib';
+import { PDFDocument, StandardFonts, rgb, degrees, PDFName, PDFHexString, PDFString, PDFNumber } from 'pdf-lib';
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -1538,6 +1538,34 @@ async function pdfCropboxDesplazado() {
 }
 
 /**
+ * E-098: tres páginas con /UserUnit 2 (cada unidad de usuario mide 2/72"). Texto "USERUNIT-<p>-A/B".
+ *   1: MediaBox [0 0 300 200], sin girar.
+ *   2: igual con /Rotate 90.
+ *   3: CropBox [20 20 280 180] desplazado.
+ */
+async function pdfUserUnit() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const nuevaPagina = () => {
+    const p = doc.addPage([300, 200]);
+    p.node.set(PDFName.of('UserUnit'), PDFNumber.of(2));
+    return p;
+  };
+  const p1 = nuevaPagina();
+  p1.drawText('USERUNIT-1-A', { x: 40, y: 150, size: 20, font });
+  p1.drawText('USERUNIT-1-B', { x: 40, y: 60, size: 20, font });
+  const p2 = nuevaPagina();
+  p2.setRotation(degrees(90));
+  p2.drawText('USERUNIT-2-A', { x: 40, y: 150, size: 20, font });
+  p2.drawText('USERUNIT-2-B', { x: 40, y: 60, size: 20, font });
+  const p3 = nuevaPagina();
+  p3.setCropBox(20, 20, 260, 160);
+  p3.drawText('USERUNIT-3-A', { x: 40, y: 150, size: 20, font });
+  p3.drawText('USERUNIT-3-B', { x: 40, y: 60, size: 20, font });
+  return doc.save();
+}
+
+/**
  * Glifos de `ligaduras.pdf` (1000 unidades por em): la ligadura «fi» es UN glifo (gid 8, ToUnicode «fi») bastante más
  * estrecho que f + i (430 frente a 660), como en Calibri/Chrome: el avance natural de «fi» por caracteres sobrestima lo
  * que ocupa de verdad. `cp` es el punto de código del cmap (U+FB01).
@@ -1635,6 +1663,7 @@ async function main() {
     'rotada.pdf': await pdfRotada(),
     'rotada-lineas.pdf': await pdfRotadaLineas(),
     'cropbox-desplazado.pdf': await pdfCropboxDesplazado(),
+    'userunit.pdf': await pdfUserUnit(),
     'fuentes.pdf': await pdfFuentes(),
     'formulario.pdf': await pdfFormulario(),
     'subconjunto.pdf': await pdfSubconjunto(),
