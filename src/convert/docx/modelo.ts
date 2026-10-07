@@ -87,6 +87,14 @@ export interface RunFormato {
   sizePt: number;
   color: RGB;
   underline: boolean;
+  /** Tachado (E-105): 1 = `w:strike`, 2 = `w:dstrike`; ausente = sin tachado. */
+  strike?: 1 | 2;
+  /** Desplazamiento de la línea base en pt, positivo = arriba (superíndice > 0, subíndice < 0); ausente = 0. */
+  dyPt?: number;
+  /** Tamaño NOMINAL en pt cuando `sizePt` está reducido (superíndice, versalitas): con él se calcula el alto de la línea. */
+  sizeLineaPt?: number;
+  /** Fondo detrás del texto (`w:highlight` o, si no hay, `w:shd` del run); ausente = sin fondo. */
+  fondo?: RGB;
 }
 
 /** Posición de una imagen flotante (`wp:anchor`), ya convertida a pt: ver `PosFlotanteH/V` del maquetador (mismo tipo, mismas unidades). `ajuste` (fase 2c): cómo la rodea el texto; sin él, el texto no se aparta. */
@@ -503,14 +511,29 @@ function calcularInfoLista(numId: string, ilvl: number, ctx: Contexto): InfoList
  */
 interface RPrAcum {
   bold: boolean; italic: boolean; underline: boolean; sizePt: number; color: RGB; fontName: string | undefined;
-  tg: { b: TogNiveles; i: TogNiveles };
+  /** Efectos de carácter (E-105): `caps`, `smallCaps`, `strike`, `vanish` son conmutables (se derivan de `tg`); el resto sobrescribe. */
+  caps: boolean; smallCaps: boolean; strike: 0 | 1 | 2; vanish: boolean;
+  vertAlign: 'baseline' | 'superscript' | 'subscript';
+  /** `w:highlight` y `w:shd` del run: `undefined` = no dicho, `null` = quitado (`none`/`auto`/`nil`). */
+  resaltado: RGB | null | undefined; sombreado: RGB | null | undefined;
+  tg: Record<ToggleKey, TogNiveles>;
 }
+type ToggleKey = 'b' | 'i' | 'caps' | 'smallCaps' | 'strike' | 'dstrike' | 'vanish';
+const CLAVES_TOGGLE: [ToggleKey, string][] = [['b', 'w:b'], ['i', 'w:i'], ['caps', 'w:caps'], ['smallCaps', 'w:smallCaps'], ['strike', 'w:strike'], ['dstrike', 'w:dstrike'], ['vanish', 'w:vanish']];
 /** Valor de una propiedad conmutable en cada nivel (`null` = el nivel no la menciona): docDefaults, tabla, párrafo, carácter, directo. */
 interface TogNiveles { base: boolean; tabla: boolean | null; parrafo: boolean | null; caracter: boolean | null; directo: boolean | null }
 
 function togVacio(): TogNiveles { return { base: false, tabla: null, parrafo: null, caracter: null, directo: null }; }
-function rPrPorDefecto(): RPrAcum { return { bold: false, italic: false, underline: false, sizePt: 11, color: [0, 0, 0], fontName: undefined, tg: { b: togVacio(), i: togVacio() } }; }
-function clonarRPr(a: RPrAcum): RPrAcum { return { ...a, tg: { b: { ...a.tg.b }, i: { ...a.tg.i } } }; }
+function rPrPorDefecto(): RPrAcum {
+  const tg = {} as Record<ToggleKey, TogNiveles>;
+  for (const [k] of CLAVES_TOGGLE) tg[k] = togVacio();
+  return { bold: false, italic: false, underline: false, sizePt: 11, color: [0, 0, 0], fontName: undefined, caps: false, smallCaps: false, strike: 0, vanish: false, vertAlign: 'baseline', resaltado: undefined, sombreado: undefined, tg };
+}
+function clonarRPr(a: RPrAcum): RPrAcum {
+  const tg = {} as Record<ToggleKey, TogNiveles>;
+  for (const [k] of CLAVES_TOGGLE) tg[k] = { ...a.tg[k] };
+  return { ...a, tg };
+}
 function valorToggle(t: TogNiveles): boolean {
   if (t.directo !== null) return t.directo;
   return [t.tabla, t.parrafo, t.caracter].reduce<boolean>((x, n) => (n === null ? x : x !== n), t.base);
@@ -518,17 +541,36 @@ function valorToggle(t: TogNiveles): boolean {
 
 type NivelRPr = 'base' | 'tabla' | 'parrafo' | 'caracter' | 'directo';
 
-/** Aplica un `w:rPr` en un nivel de la jerarquía: lo no conmutable sobrescribe; b/i se apuntan en su nivel y se recalcula el XOR. */
-function aplicarRPr(acc: RPrAcum, el: XmlElemento, nivel: NivelRPr): void {
-  const b = primerHijo(el, 'w:b'); if (b) acc.tg.b[nivel] = leerToggle(b);
-  const i = primerHijo(el, 'w:i'); if (i) acc.tg.i[nivel] = leerToggle(i);
+/** Los 16 colores con nombre de `w:highlight` (ECMA-376 17.18.40, ST_HighlightColor); `none` lo quita. */
+const COLORES_RESALTADO: Record<string, RGB> = {
+  yellow: [255, 255, 0], green: [0, 255, 0], cyan: [0, 255, 255], magenta: [255, 0, 255], blue: [0, 0, 255], red: [255, 0, 0],
+  darkBlue: [0, 0, 128], darkCyan: [0, 128, 128], darkGreen: [0, 128, 0], darkMagenta: [128, 0, 128], darkRed: [128, 0, 0], darkYellow: [128, 128, 0],
+  darkGray: [128, 128, 128], lightGray: [192, 192, 192], black: [0, 0, 0], white: [255, 255, 255]
+};
+
+/** Aplica un `w:rPr` en un nivel de la jerarquía: lo no conmutable sobrescribe; las conmutables se apuntan en su nivel y se recalcula el XOR. */
+function aplicarRPr(acc: RPrAcum, el: XmlElemento, nivel: NivelRPr, ctx: Pick<Contexto, 'perdidas'>): void {
+  for (const [k, tag] of CLAVES_TOGGLE) { const e = primerHijo(el, tag); if (e) acc.tg[k][nivel] = leerToggle(e); }
   acc.bold = valorToggle(acc.tg.b); acc.italic = valorToggle(acc.tg.i);
+  acc.caps = valorToggle(acc.tg.caps); acc.smallCaps = valorToggle(acc.tg.smallCaps); acc.vanish = valorToggle(acc.tg.vanish);
+  acc.strike = valorToggle(acc.tg.dstrike) ? 2 : valorToggle(acc.tg.strike) ? 1 : 0;
   const u = primerHijo(el, 'w:u'); if (u) acc.underline = (u.atributos['w:val'] ?? 'single') !== 'none';
   const sz = primerHijo(el, 'w:sz'); if (sz?.atributos['w:val'] !== undefined) acc.sizePt = mediosPuntosAPt(Number(sz.atributos['w:val']));
   const color = primerHijo(el, 'w:color');
   if (color?.atributos['w:val'] !== undefined && color.atributos['w:val'] !== 'auto') acc.color = hexAColor(color.atributos['w:val']);
   const rFonts = primerHijo(el, 'w:rFonts');
   if (rFonts) { const nombre = rFonts.atributos['w:ascii'] ?? rFonts.atributos['w:hAnsi']; if (nombre) acc.fontName = nombre; }
+  const va = primerHijo(el, 'w:vertAlign')?.atributos['w:val'];
+  if (va !== undefined) acc.vertAlign = va === 'superscript' ? 'superscript' : va === 'subscript' ? 'subscript' : 'baseline';
+  const hl = primerHijo(el, 'w:highlight')?.atributos['w:val'];
+  if (hl !== undefined) acc.resaltado = COLORES_RESALTADO[hl] ?? null;
+  const shd = primerHijo(el, 'w:shd');
+  if (shd) {
+    const fill = shd.atributos['w:fill'];
+    acc.sombreado = shd.atributos['w:val'] === 'nil' || fill === undefined || fill === 'auto' ? null : hexAColor(fill);
+  }
+  // Propiedades de carácter que NO se reproducen (se avisa, no se pierde en silencio): espaciado, posición vertical y escala horizontal.
+  if (primerHijo(el, 'w:spacing') || primerHijo(el, 'w:position') || primerHijo(el, 'w:w')) ctx.perdidas.set('rPrEspaciado', 1);
 }
 
 /** Entradas de `rPrEfectivo`; todas opcionales (cada una es un nivel de la herencia). */
@@ -552,18 +594,18 @@ interface EntradaRPr {
  * celdas: docDefaults < estilo de tabla < estilo de párrafo (con basedOn) < estilo de carácter (con basedOn) < `rPr` directo.
  * Las conmutables (b, i) siguen la regla de toggle (`RPrAcum`). El `tblStylePr` condicional no se aplica (se avisa al abrir la tabla).
  */
-function rPrEfectivo(ctx: Pick<Contexto, 'estilos' | 'docDefaultsRPr'>, e: EntradaRPr): RPrAcum {
+function rPrEfectivo(ctx: Pick<Contexto, 'estilos' | 'docDefaultsRPr' | 'perdidas'>, e: EntradaRPr): RPrAcum {
   let acc: RPrAcum;
   if (e.base) acc = clonarRPr(e.base);
   else {
     acc = rPrPorDefecto();
-    if (ctx.docDefaultsRPr) aplicarRPr(acc, ctx.docDefaultsRPr, 'base');
+    if (ctx.docDefaultsRPr) aplicarRPr(acc, ctx.docDefaultsRPr, 'base', ctx);
   }
-  if (e.estiloTabla) for (const est of cadenaEstilo(e.estiloTabla, ctx.estilos)) if (est.rPr) aplicarRPr(acc, est.rPr, 'tabla');
-  if (e.estiloParrafo) for (const est of cadenaEstilo(e.estiloParrafo, ctx.estilos)) if (est.rPr) aplicarRPr(acc, est.rPr, 'parrafo');
-  if (e.marca) aplicarRPr(acc, e.marca, 'parrafo');
-  if (e.estiloCaracter) for (const est of cadenaEstilo(e.estiloCaracter, ctx.estilos)) if (est.rPr) aplicarRPr(acc, est.rPr, 'caracter');
-  if (e.directo) aplicarRPr(acc, e.directo, 'directo');
+  if (e.estiloTabla) for (const est of cadenaEstilo(e.estiloTabla, ctx.estilos)) if (est.rPr) aplicarRPr(acc, est.rPr, 'tabla', ctx);
+  if (e.estiloParrafo) for (const est of cadenaEstilo(e.estiloParrafo, ctx.estilos)) if (est.rPr) aplicarRPr(acc, est.rPr, 'parrafo', ctx);
+  if (e.marca) aplicarRPr(acc, e.marca, 'parrafo', ctx);
+  if (e.estiloCaracter) for (const est of cadenaEstilo(e.estiloCaracter, ctx.estilos)) if (est.rPr) aplicarRPr(acc, est.rPr, 'caracter', ctx);
+  if (e.directo) aplicarRPr(acc, e.directo, 'directo', ctx);
   return acc;
 }
 
@@ -718,6 +760,7 @@ const MENSAJES_PERDIDAS: [string, TipoAdvertencia, (c: number) => string][] = [
   ['encabezadoFaltante', 'omitido', (c) => cuenta(c, 'Se omitió un encabezado de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} encabezados de página (no se encontró o no se pudo leer su contenido en el paquete).')],
   ['pieFaltante', 'omitido', (c) => cuenta(c, 'Se omitió un pie de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} pies de página (no se encontró o no se pudo leer su contenido en el paquete).')],
   ['estiloTablaCondicional', 'aproximado', (c) => cuenta(c, 'Un estilo de tabla con formato de texto condicional (primera fila, bandas...) no se aplicó: solo se usa el formato base del estilo.', '{n} estilos de tabla con formato de texto condicional (primera fila, bandas...) no se aplicaron: solo se usa el formato base del estilo.')],
+  ['rPrEspaciado', 'aproximado', () => 'Se ignoró el espaciado, la posición vertical o la escala horizontal de carácter (w:spacing, w:position, w:w) de algún texto: se dibuja con su espaciado normal.'],
   ['vMergeConTexto', 'omitido', (c) => cuenta(c, 'Una celda de continuación de una combinación vertical traía texto propio, que no se muestra (como hace Word).', '{n} celdas de continuación de combinaciones verticales traían texto propio, que no se muestra (como hace Word).')]
 ];
 
@@ -755,9 +798,10 @@ function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, parte
     if (h.tipo !== 'elemento') continue;
     if (h.nombre === 'w:fldChar') { procesarFldChar(h, formato, ctx, partes); continue; }
     if (h.nombre === 'w:instrText') { const abierto = ctx.camposAbiertos[ctx.camposAbiertos.length - 1]; if (abierto && !abierto.separado) abierto.instr += textoDirecto(h); continue; }
+    if (acc.vanish) continue; // texto oculto (w:vanish): Word no lo dibuja al exportar a PDF
     // Resultado cacheado de un campo ya sustituido (PAGE/NUMPAGES): se descarta, el número real se pinta al maquetar.
     if (ctx.camposAbiertos.some((c) => c.suprimir) && (h.nombre === 'w:t' || h.nombre === 'w:tab' || h.nombre === 'w:br' || h.nombre === 'w:cr' || h.nombre === 'w:noBreakHyphen')) continue;
-    if (h.nombre === 'w:t') { const t = textoDirecto(h); if (t.length > 0) partes.push({ tipo: 'texto', texto: t, formato }); }
+    if (h.nombre === 'w:t') { const t = textoDirecto(h); if (t.length > 0) empujarTexto(t, acc, formato, partes); }
     else if (h.nombre === 'w:tab') partes.push({ tipo: 'tab' });
     else if (h.nombre === 'w:br') {
       if (h.atributos['w:type'] === 'column') anotar(ctx, 'saltoColumna');
@@ -784,8 +828,51 @@ function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, parte
   }
 }
 
-function formatoDeAcc(acc: RPrAcum): RunFormato {
-  return { font: fuenteEstandarPara(acc.fontName, acc.bold, acc.italic), sizePt: acc.sizePt, color: acc.color, underline: acc.underline };
+/**
+ * Factores de Word para superíndice/subíndice y versalitas (E-105):
+ * - tamaño de super/subíndice = 2/3 del nominal (Word reduce al ~65-66 %; LibreOffice usa 58 %, aquí se sigue a Word);
+ * - desplazamiento de la línea base: +33 % del tamaño nominal (superíndice) y −14 % (subíndice). Word lo saca de las métricas OS/2 de
+ *   la fuente (ySuperscriptYOffset/ySubscriptYOffset); para Helvetica/Arial equivale a estos valores (aproximación, no medida en Word);
+ * - versalitas (`w:smallCaps`): las minúsculas se dibujan en mayúsculas al 80 % del tamaño (Word y LibreOffice coinciden en el 80 %).
+ */
+const FACTOR_SUPER_SUB = 2 / 3;
+const DESPLAZ_SUPERINDICE = 0.33;
+const DESPLAZ_SUBINDICE = -0.14;
+const FACTOR_VERSALITAS = 0.8;
+
+function formatoDeAcc(acc: RPrAcum, versalita = false): RunFormato {
+  const nominal = acc.sizePt;
+  const f: RunFormato = { font: fuenteEstandarPara(acc.fontName, acc.bold, acc.italic), sizePt: nominal, color: acc.color, underline: acc.underline };
+  if (acc.vertAlign !== 'baseline') {
+    f.sizePt = nominal * FACTOR_SUPER_SUB;
+    f.dyPt = nominal * (acc.vertAlign === 'superscript' ? DESPLAZ_SUPERINDICE : DESPLAZ_SUBINDICE);
+  }
+  if (versalita) f.sizePt *= FACTOR_VERSALITAS;
+  if (f.sizePt !== nominal) f.sizeLineaPt = nominal;
+  if (acc.strike) f.strike = acc.strike;
+  const fondo = acc.resaltado !== undefined ? acc.resaltado : acc.sombreado;
+  if (fondo) f.fondo = fondo;
+  return f;
+}
+
+/**
+ * Añade el texto de un `w:t` con sus efectos de mayúsculas: `caps` lo pasa a mayúsculas (el texto extraído del PDF también, como al
+ * exportar desde Word); `smallCaps` (sin caps) lo parte en tramos: las minúsculas, en mayúsculas al tamaño reducido; lo demás, a tamaño
+ * pleno. Un espacio sigue al tramo anterior (no abre tramo propio).
+ */
+function empujarTexto(texto: string, acc: RPrAcum, formato: RunFormato, partes: ParteParrafo[]): void {
+  if (acc.caps) { partes.push({ tipo: 'texto', texto: texto.toUpperCase(), formato }); return; }
+  if (!acc.smallCaps) { partes.push({ tipo: 'texto', texto, formato }); return; }
+  const pequena = formatoDeAcc(acc, true);
+  let tramo = '', esPequeno = false;
+  const cerrar = (): void => { if (tramo !== '') partes.push({ tipo: 'texto', texto: tramo, formato: esPequeno ? pequena : formato }); tramo = ''; };
+  for (const ch of texto) {
+    const minuscula = ch !== ch.toUpperCase();
+    const pequeno: boolean = minuscula ? true : /\s/.test(ch) ? esPequeno : false;
+    if (pequeno !== esPequeno) { cerrar(); esPequeno = pequeno; }
+    tramo += pequeno && minuscula ? ch.toUpperCase() : ch;
+  }
+  cerrar();
 }
 
 /**
@@ -1035,7 +1122,7 @@ function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
   recorrerContenidoParrafo(el, baseRuns, ctx, partes);
 
   let tamanoBasePt = baseRuns.sizePt;
-  for (const p of partes) if (p.tipo === 'texto') { tamanoBasePt = p.formato.sizePt; break; }
+  for (const p of partes) if (p.tipo === 'texto') { tamanoBasePt = p.formato.sizeLineaPt ?? p.formato.sizePt; break; }
 
   const lista = listaDeParrafo(acc, ctx);
 

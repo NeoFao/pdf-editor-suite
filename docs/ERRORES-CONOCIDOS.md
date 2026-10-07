@@ -3429,3 +3429,28 @@ objeto de texto del PDF). Sin regla guard: es funcionalidad con test. Límites: 
 vertAlign... no se modelan); el formato condicional de estilos de tabla no se aplica (con aviso); `w:rPr` de la marca de párrafo se trata como
 nivel de párrafo (comportamiento heredado).
 
+
+### E-105 · Word → PDF: tachado, superíndice/subíndice, mayúsculas, versalitas, resaltado, sombreado y texto oculto del run se perdían en silencio
+
+**Síntoma.** Un texto con `w:strike`/`w:dstrike`, `w:vertAlign`, `w:caps`, `w:smallCaps`, `w:highlight`, `w:shd` o `w:vanish` salía del PDF como texto normal:
+sin línea de tachado, sin reducir ni elevar, en minúsculas, sin fondo y, el oculto, visible. Ni un aviso. Tampoco los avisaba `w:spacing`/`w:position`/`w:w`.
+
+**Causa raíz.** `rPrEfectivo` solo modelaba b, i, u, sz, color y rFonts (E-104); el resto de `w:rPr` no se leía y `RunFormato`/`Atom`/`Seg` no tenían dónde
+llevarlo hasta el maquetador.
+
+**Arreglo.** Todo entra por `rPrEfectivo` (`RPrAcum` + `aplicarRPr`): `caps`, `smallCaps`, `strike`, `dstrike`, `vanish` son conmutables (XOR por niveles, como b/i;
+`tg` pasa a ser un registro por clave); `vertAlign`, `highlight` y `shd` sobrescriben. `formatoDeAcc` produce `RunFormato.{strike, dyPt, sizeLineaPt, fondo}`;
+`empujarTexto` aplica `caps` (texto en mayúsculas, también el extraído) y parte `smallCaps` en tramos. El maquetador (`flujo/layout.ts`) lleva los efectos en `Atom`/`Seg`
+(no se funden trazos con efectos distintos) y `paginar` los dibuja con `barrasDeSeg` (todo relativo a la línea base efectiva `baseline + dyPt`, pt PDF, Y arriba):
+fondo 1,12 × tamaño de alto desde 0,21 × tamaño bajo la base; tachado de grosor max(0,6; 5 % del tamaño) centrado a 0,26 × tamaño sobre la base (mitad de la x de
+Helvetica, 0,523 em), el doble a ± un grosor. El alto de línea usa el tamaño NOMINAL (`sizeLineaPt`/`tamanoLinea`), de modo que un superíndice al inicio no cambia el interlineado.
+`w:vanish` no dibuja el texto (como Word al exportar). Aviso `rPrEspaciado` (aproximado) para `w:spacing`, `w:position` y `w:w` del run.
+
+**Factores** (constantes en `modelo.ts`): super/subíndice a 2/3 del tamaño (Word ~65-66 %; LibreOffice 58 %); línea base +0,33 / −0,14 del tamaño nominal (Word usa
+`ySuperscriptYOffset`/`ySubscriptYOffset` de OS/2 de la fuente; valores aproximados para Helvetica/Arial, no medidos en Word); versalitas al 80 % (Word y LibreOffice coinciden).
+
+**Cómo se detecta ahora.** `tests/unit/flujo-efectos-caracter.test.ts` (posiciones/tamaños con fórmula), `docx-rpr-efectos.test.ts` (modelo: toggle, herencia, celdas, aviso, interlineado)
+y `ConversorDocxNavegador-rpr-efectos.test.ts` (motor real sobre `word-rpr-efectos.docx`: tamaño efectivo y base del superíndice, paths del tachado en su banda, "TÍTULO", tramos de
+versalitas, fondo y ausencia del texto oculto). Sin regla guard: es funcionalidad con test. Límites: el resaltado/sombreado no cubre los huecos entre palabras de una línea
+justificada (igual que el subrayado); `w:shd` con patrón (no sólido) se pinta como relleno liso; el tachado/versalitas no se aplican a marcadores de lista ni a campos PAGE/NUMPAGES;
+no se modelan `w:spacing`/`w:position`/`w:w`/`w:kern`/`w:emboss`/`w:outline`/`w:shadow`/`w:bdr`/`w:em` (los tres primeros avisan; el resto sigue sin aviso).
