@@ -3120,3 +3120,40 @@ sin relajar lo que se comprueba y sin reintentos ni `waitForTimeout`. Se añade 
 (`Emulation.setCPUThrottlingRate`) con el salto cercano, el lejano con desalojo y la vuelta.
 
 **Cómo se detecta ahora.** `tests/e2e/next/busqueda-navegacion.spec.ts` (6 tests, uno con CPU x4).
+
+---
+
+### E-092 · Crear y editar una nota usaba el cuadro nativo del navegador (B4)
+
+**Síntoma.** Al colocar una nota (clic o Enter, E-073) salía un `window.prompt`: una sola línea, sin estilo, que bloquea la
+página, y el panel Comentarios editaba con otro editor distinto (un textarea en línea). No había forma de escribir una nota de
+varias líneas ni de editarla con doble clic sobre su marcador.
+
+**Causa raíz.** La nota nació como el camino más corto (`prompt`) y nunca se sustituyó cuando el resto de paneles pasaron a
+`<dialog>` con `mostrarModal` (A-04/A-05): quedó fuera del contrato de diálogos y duplicada con el editor del panel.
+
+**Arreglo.** `src/ui/NotaDialogo.ts` (`pedirTextoNota`) abre un `<dialog>` modal con un textarea «Texto de la nota», Guardar y
+Cancelar. Ctrl/Cmd+Enter guarda, Escape cancela, el foco entra en el textarea y `mostrarModal` lo devuelve al disparador. Lo usan
+crear (clic o Enter), el botón Editar del panel Comentarios (el editor en línea desaparece) y el doble clic sobre el marcador.
+`normalizarTextoNota` (CRLF a LF, recorte) deja el texto con sus saltos de línea en `/Contents`; un texto en blanco o Cancelar no
+crean nota. El panel muestra los saltos (`white-space: pre-line`) y el `title` del marcador también.
+
+**Cómo se detecta ahora.** Regla `sin-prompt-nativo` (`scripts/guards/reglas.mjs`, test en `reglas.test.mjs`): ningún `.ts` de
+`src/` llama a `prompt(`. `tests/e2e/next/nota-dialogo.spec.ts` (nota de 2 líneas solo con teclado que persiste tras guardar y
+reabrir, Escape y Cancelar no crean nada, doble clic, panel con foco devuelto) y `tests/unit/notaTexto.test.ts`.
+
+---
+
+### E-093 · El texto de un marcado multilínea perdía el espacio entre líneas (B3)
+
+**Síntoma.** Al recorrer anotaciones con Alt+↓ un resaltado de dos líneas se anunciaba «…ABCDEF» en lugar de «…ABC DEF»: las
+palabras de fin y de inicio de línea se leían como una sola.
+
+**Causa raíz.** `textoDeMarcado` salta los caracteres sin caja (los `\r\n` que PDFium mete entre líneas) y no ponía nada en su lugar;
+en PDF sin esos saltos, tampoco detectaba el cambio de línea. El panel Comentarios muestra el `/Contents` de cada anotación, no el
+texto marcado (un resaltado propio no lo trae: «(sin texto)»), así que el defecto afectaba al anuncio y a su extracto.
+
+**Arreglo.** Se separa con un espacio cuando se saltó un blanco sin caja o cuando el salto vertical entre dos caracteres supera una
+línea, y se normalizan los blancos (`\s+` a un espacio). Unidades: pt de usuario PDF.
+
+**Cómo se detecta ahora.** `tests/unit/seleccionTeclado.test.ts` («B3: …», dos casos). Sin regla guard: es una función pura con test.

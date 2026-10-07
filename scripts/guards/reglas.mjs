@@ -1453,6 +1453,36 @@ export const conPuertosE2eSincronizados = {
   }
 };
 
+/* ── B4 · nada pide texto con el cuadro nativo del navegador ── */
+/**
+ * Pura: hallazgos de `prompt(` / `window.prompt(` / `globalThis.prompt(` (fuera de comentarios). El cuadro nativo no
+ * admite varias líneas, bloquea la página, no se puede estilar ni asegurar su foco (B4, E-092): se usa el `<dialog>`
+ * propio de `src/ui/` (`pedirTextoNota`, que se apoya en `mostrarModal`).
+ */
+export function analizarPromptNativo(rel, contenido) {
+  const exentas = lineasExentas(contenido, 'sin-prompt-nativo');
+  const hallazgos = [];
+  contenido.split('\n').forEach((linea, i) => {
+    if (esComentario(linea) || exentas.has(i + 1)) return;
+    if (/(?<![\w$.])prompt\s*\(|\b(?:window|globalThis|self)\s*\.\s*prompt\s*\(/.test(linea)) {
+      hallazgos.push(hallazgo(rel, i + 1, 'prompt() nativo: usa un <dialog> propio (pedirTextoNota / mostrarModal)'));
+    }
+  });
+  return hallazgos;
+}
+
+export const sinPromptNativo = {
+  id: 'sin-prompt-nativo',
+  titulo: 'ningún fichero de src/ pide texto con prompt() nativo',
+  comoArreglar:
+    'El cuadro nativo no admite varias líneas, bloquea la página y no se puede estilar ni dejar con el foco ' +
+    'correcto (B4, E-092). Usa un <dialog> con mostrarModal (src/ui/dialogo.ts), como pedirTextoNota en ' +
+    'src/ui/NotaDialogo.ts.',
+  ejecutar() {
+    return recorrerFuentesTs((rel, contenido) => analizarPromptNativo(rel, contenido));
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -1490,5 +1520,6 @@ export const TODAS = [
   geometriaConOrigen,
   capaTextoSinRotacionPorRun,
   conRegistroSinDuplicados,
-  conPuertosE2eSincronizados
+  conPuertosE2eSincronizados,
+  sinPromptNativo
 ];
