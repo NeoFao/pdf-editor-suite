@@ -20,20 +20,34 @@ async function esperarFinBusqueda(page: Page) {
   await expect(page.locator('#status')).toContainText('coincidencia(s)');
 }
 
-/** La caja naranja de la coincidencia actual cae por completo dentro del recuadro del visor. */
+/**
+ * La caja naranja de la coincidencia actual cae por completo dentro del recuadro del visor.
+ * E-091: se mide con `expect.poll` (reintenta hasta que el scroll del salto se asienta y los resaltados
+ * se repintan tras un desalojo, E-045) en vez de leer `boundingBox()` una sola vez justo después de `toHaveCount(1)`:
+ * esa lectura única podía caer en pleno desplazamiento o sobre una capa de resaltados recién sustituida (null).
+ */
 async function actualDentroDelVisor(page: Page) {
   const actual = page.locator('.search-hl-current');
   await expect(actual).toHaveCount(1);
-  const b = (await actual.boundingBox())!;
-  const v = (await page.locator('#viewer').boundingBox())!;
-  expect(b.x).toBeGreaterThanOrEqual(v.x - 1);
-  expect(b.y).toBeGreaterThanOrEqual(v.y - 1);
-  expect(b.x + b.width).toBeLessThanOrEqual(v.x + v.width + 1);
-  expect(b.y + b.height).toBeLessThanOrEqual(v.y + v.height + 1);
+  await expect.poll(async () => {
+    const b = await actual.boundingBox();
+    const v = await page.locator('#viewer').boundingBox();
+    if (!b || !v) return 'sin caja';
+    const fuera = [
+      b.x >= v.x - 1 || 'izquierda',
+      b.y >= v.y - 1 || 'arriba',
+      b.x + b.width <= v.x + v.width + 1 || 'derecha',
+      b.y + b.height <= v.y + v.height + 1 || 'abajo'
+    ].filter((r) => r !== true);
+    return fuera.length === 0 ? 'dentro' : `fuera por ${fuera.join(',')}`;
+  }, { message: 'la caja de la coincidencia actual debe acabar dentro del visor' }).toBe('dentro');
 }
 
 const numeroActual = async (page: Page) => Number(((await page.locator('#search-count').textContent()) ?? '').match(/^(\d+) de/)?.[1] ?? 0);
+/** Lectura puntual del indicador; para comprobar un destino úsese `paginaEs` (espera). */
 const paginaActual = async (page: Page) => Number(((await page.locator('#page-indicator').textContent()) ?? '').split('/')[0]);
+const paginaEs = (page: Page, n: number) => expect.poll(() => paginaActual(page), { message: `el indicador debe llegar a la página ${n}` }).toBe(n);
+const paginaMayorQue = (page: Page, n: number) => expect.poll(() => paginaActual(page)).toBeGreaterThan(n);
 
 test.describe('navegación de resultados de búsqueda', () => {
   test('grande.pdf: contador con progreso, primera coincidencia visible, Enter/Mayús+Enter, vuelta y F3', async ({ page }) => {
@@ -52,8 +66,8 @@ test.describe('navegación de resultados de búsqueda', () => {
     await campo.press('Enter');
     await expect(page.locator('#search-count')).toContainText(`1 de ${total}`);
     await actualDentroDelVisor(page);
-    const pag1 = await paginaActual(page);
-    expect(pag1).toBe(4); // «Pagina 4» está en la página 4
+    await paginaEs(page, 4); // «Pagina 4» está en la página 4
+    const pag1 = 4;
 
     // Siguiente repetido acaba cambiando de página; el actual sigue visible y numerado.
     let n = 1;
@@ -72,7 +86,7 @@ test.describe('navegación de resultados de búsqueda', () => {
     n--;
     await expect(page.locator('#search-count')).toContainText(`${n} de ${total}`);
     await actualDentroDelVisor(page);
-    expect(await numeroActual(page)).toBe(n);
+    await expect.poll(() => numeroActual(page)).toBe(n);
 
     // Mayús+Enter desde la primera: da la vuelta al final, con aviso, y la última queda visible.
     while (n > 1) { await page.locator('#btn-search-prev').click(); n--; }
@@ -81,7 +95,7 @@ test.describe('navegación de resultados de búsqueda', () => {
     await expect(page.locator('#search-count')).toContainText(`${total} de ${total}`);
     await expect(page.locator('#search-count')).toContainText('Se volvió al final del documento');
     await actualDentroDelVisor(page);
-    expect(await paginaActual(page)).toBeGreaterThan(450);
+    await paginaMayorQue(page, 450);
 
     // Tras la última, Siguiente vuelve al principio con aviso.
     await campo.press('Enter');
@@ -89,7 +103,7 @@ test.describe('navegación de resultados de búsqueda', () => {
     await expect(page.locator('#search-count')).toContainText('Se volvió al principio del documento');
     await expect(page.locator('#status')).toContainText('Se volvió al principio del documento');
     await actualDentroDelVisor(page);
-    expect(await paginaActual(page)).toBe(4);
+    await paginaEs(page, 4);
 
     // F3 / Mayús+F3 (también con el foco en el visor, fuera del campo).
     await page.locator('#viewer').click({ position: { x: 5, y: 5 } });
@@ -110,7 +124,7 @@ test.describe('navegación de resultados de búsqueda', () => {
     await campo.press('Enter'); // aún sin resultados o con la búsqueda en marcha: queda pendiente
     await expect(page.locator('#search-count')).toContainText(/^1 de \d+/);
     await actualDentroDelVisor(page);
-    expect(await paginaActual(page)).toBe(4);
+    await paginaEs(page, 4);
   });
 
   test('páginas desalojadas: al volver a una página sus resaltados reaparecen', async ({ page }) => {
@@ -155,7 +169,8 @@ test.describe('navegación de resultados de búsqueda', () => {
     await expect(page.locator('#search-count')).toContainText(/^1 de 3/);
     await actualDentroDelVisor(page);
     const wrapper = page.locator('.page').nth(0);
-    const r = await wrapper.evaluate((w) => {
+    // E-091: el canvas se pinta de forma perezosa; se reintenta hasta que haya píxeles bajo la caja.
+    const medir = () => wrapper.evaluate((w) => {
       const canvas = w.querySelector('canvas') as HTMLCanvasElement;
       const ctx = canvas.getContext('2d')!;
       const wr = w.getBoundingClientRect();
@@ -168,8 +183,39 @@ test.describe('navegación de resultados de búsqueda', () => {
       for (let i = 0; i < d.length; i += 4) if (d[i]! < 110 && d[i + 1]! < 110 && d[i + 2]! < 110) oscuros++;
       return { oscuros, ancho, alto, dentro: b.left >= wr.left - 1 && b.right <= wr.right + 1 && b.top >= wr.top - 1 && b.bottom <= wr.bottom + 1 };
     });
-    expect(r.dentro).toBe(true);
+    await expect.poll(async () => (await medir()).dentro).toBe(true);
     // Texto negro de la línea bajo la caja: una caja mal colocada (sin /Rotate) caería sobre blanco.
-    expect(r.oscuros).toBeGreaterThan(30);
+    await expect.poll(async () => (await medir()).oscuros).toBeGreaterThan(30);
+  });
+});
+
+// E-091: la misma navegación programática con la CPU ralentizada (x4), siempre activa. Cubre la carrera entre
+// `goToPage`/pin de scroll (E-068), el centrado de la coincidencia (E-067) y el repintado de resaltados tras
+// desalojo (E-045) cuando cada paso tarda varias veces más; las aserciones esperan por posición, no por tiempo.
+test.describe('navegación de resultados con la CPU ralentizada', () => {
+  test.beforeEach(async ({ page }) => {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setCPUThrottlingRate', { rate: 4 });
+  });
+
+  test('salto a la primera, a otra página y vuelta: la actual acaba visible y en su página', async ({ page }) => {
+    test.setTimeout(120_000);
+    await abrir(page, GRANDE);
+    const campo = page.locator('#btn-search');
+    await campo.fill('Pagina 4');
+    await campo.press('Enter'); // con la búsqueda en marcha: queda pendiente
+    await expect(page.locator('#search-count')).toContainText(/^1 de \d+/);
+    await actualDentroDelVisor(page);
+    await paginaEs(page, 4);
+    await esperarFinBusqueda(page);
+    await campo.press('Shift+Enter'); // última: salto lejano, la página 4 se desaloja
+    await expect(page.locator('#search-count')).toContainText('Se volvió al final');
+    await actualDentroDelVisor(page);
+    await paginaMayorQue(page, 450);
+    await campo.press('Enter'); // de vuelta a la primera, página sin pintar
+    await expect(page.locator('#search-count')).toContainText(/^1 de/);
+    await actualDentroDelVisor(page);
+    await paginaEs(page, 4);
+    await expect(page.locator('.page').nth(3).locator('.search-hl-current')).toHaveCount(1);
   });
 });
