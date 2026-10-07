@@ -218,3 +218,14 @@ test('un tabulador dentro de una celda de tabla sigue aproximándose y AHORA lo 
   const m = construirModeloDocx(xml, null, null);
   expect(m.advertencias.find((a) => /tabulaci/i.test(a.mensaje))?.tipo).toBe('aproximado');
 });
+
+test('un enlace externo del encabezado se resuelve con las relaciones del PROPIO encabezado (no con las del documento)', () => {
+  const relsCab = '<Relationships><Relationship Id="rId1" Type="x/hyperlink" Target="https://example.com/cab" TargetMode="External"/></Relationships>';
+  // En las relaciones del documento "rId1" es OTRA cosa (una imagen): no debe confundirse.
+  const relsDoc = '<Relationships><Relationship Id="rH1" Type="x/header" Target="header1.xml"/><Relationship Id="rId1" Type="x/image" Target="media/x.png"/></Relationships>';
+  const xml = documento(p('cuerpo') + '<w:sectPr><w:headerReference w:type="default" r:id="rH1"/>' + A4V + '</w:sectPr>');
+  const cab = '<w:hdr><w:p><w:hyperlink r:id="rId1"><w:r><w:t>sitio</w:t></w:r></w:hyperlink></w:p></w:hdr>';
+  const m = construirModeloDocx(xml, null, null, relsDoc, { partes: { 'word/header1.xml': cab }, relsPartes: { 'word/header1.xml': relsCab } });
+  const parte = (m.encabezados.default![0] as Parrafo).partes[0]!;
+  expect(parte).toMatchObject({ tipo: 'texto', texto: 'sitio', url: 'https://example.com/cab' });
+});

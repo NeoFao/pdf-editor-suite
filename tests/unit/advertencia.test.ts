@@ -26,14 +26,14 @@ test('contenido que no llega al PDF se clasifica como omitido (notas, VML, cuadr
   }
 });
 
-test('contenido que aparece distinto se clasifica como aproximado (cambios, secciones, columnas, salto de columna)', () => {
+test('contenido que aparece distinto se clasifica como aproximado (cambios, salto de sección par/impar, columnas, salto de columna)', () => {
   const doc = `<w:document><w:body>
     <w:p><w:ins><w:r><w:t>a</w:t></w:r></w:ins></w:p>
     <w:p><w:pPr><w:sectPr><w:cols w:num="2"/></w:sectPr></w:pPr></w:p>
     <w:p><w:r><w:br w:type="column"/></w:r></w:p>
-    <w:sectPr/>
+    <w:sectPr><w:type w:val="evenPage"/></w:sectPr>
   </w:body></w:document>`;
-  for (const patron of [/control de cambios/i, /secciones/i, /distribución en columnas/i, /salto de columna/i]) {
+  for (const patron of [/control de cambios/i, /página par/i, /distribución en columnas/i, /salto de columna/i]) {
     expect(tipoDe(doc, patron), String(patron)).toEqual(['aproximado']);
   }
 });
