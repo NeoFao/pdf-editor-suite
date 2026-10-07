@@ -47,6 +47,8 @@ export interface ViewerCallbacks {
   onEdit: (req: EditRequest) => void;
   onSelect: (pageIndex: number, runId: number) => void;
   onBackgroundClick: (pageIndex: number, at: PtPoint) => void;
+  /** Doble clic en el marcador de una nota (B4): abre su editor con el texto actual. */
+  onEditarNota?: (pageIndex: number, annotIndex: number, texto: string) => void;
   /** `runIds`: todos los objetos de la línea que se mueve (una línea compuesta, N1). */
   onMove: (pageIndex: number, runId: number, dxPt: number, dyPt: number, runIds: readonly number[]) => void;
   onPageChange?: (pageIndex: number) => void;
@@ -879,6 +881,7 @@ export class Viewer {
       // incluye las anotaciones): este marcador queda transparente y solo sirve
       // de zona accesible/hover sobre ese icono, para no dibujar uno encima del otro.
       marker.textContent = '';
+      marker.addEventListener('dblclick', (e) => { e.preventDefault(); this.cb.onEditarNota?.(i, note.index, note.text); });
       Object.assign(marker.style, {
         position: 'absolute', left: `${c.left}px`, top: `${c.top}px`,
         width: `${c.width}px`, height: `${c.height}px`,

@@ -18,3 +18,11 @@ export type Pestana = 'editar' | 'comentar' | 'organizar' | 'firmar' | 'converti
 export async function abrirPestana(page: Page, pestana: Pestana): Promise<void> {
   await page.locator(`#tab-${pestana}`).click();
 }
+
+/** Escribe el texto en el diálogo de nota (B4) y lo guarda con el botón. `texto` puede tener saltos de línea. */
+export async function escribirNota(page: Page, texto: string): Promise<void> {
+  const dialogo = page.getByRole('dialog', { name: /nota/i });
+  await dialogo.getByLabel('Texto de la nota').fill(texto);
+  await dialogo.getByRole('button', { name: 'Guardar' }).click();
+  await dialogo.waitFor({ state: 'detached' });
+}

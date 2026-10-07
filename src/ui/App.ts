@@ -57,6 +57,7 @@ import { formatoBytes } from './formatoBytes';
 import { registrarGesto } from './gesto';
 import { resolverAtajo, resolverAtajoContextual, esCampoEditable, hayModalAbierto, type AccionAtajo } from './atajos';
 import { resumirParaAnunciar } from './anuncio';
+import { pedirTextoNota } from './NotaDialogo';
 import { AtajosPanel } from './AtajosPanel';
 import { parseRange } from './pageRange';
 import { Viewer, ETIQUETA_MARCADO, type ToolMode, type MarcadoKind } from './Viewer';
@@ -773,7 +774,7 @@ export class App {
       leerPagina: (i) => (this.session ? this.session.engine.getComments(this.session.doc, i) : []),
       irAPagina: (i) => this.goToPage(i),
       resaltar: (p, a) => this.viewer?.resaltarNota(p, a),
-      editar: (p, a, t) => { void this.bus?.execute(new SetNoteTextCmd(p, a, t)); this.setStatus('Comentario editado.'); },
+      editar: (p, a, t) => { void this.editarTextoNota(p, a, t); },
       borrar: (p, a) => { void this.bus?.execute(new RemoveNoteCmd(p, a)); this.setStatus('Comentario borrado.'); }
     });
 
@@ -1201,6 +1202,7 @@ export class App {
       },
       onBackgroundClick: (pageIndex, at) => { this.selectedImage = null; this.handleBackgroundClick(pageIndex, at); },
       onEraseMarcado: (pageIndex, annotIndex, kind) => { this.borrarMarcado(pageIndex, annotIndex, kind); },
+      onEditarNota: (pageIndex, annotIndex, texto) => { void this.editarTextoNota(pageIndex, annotIndex, texto); },
       onMarcadoSelect: (sel) => {
         if (!sel) return;
         this.selection = null; // la anotación sustituye a la selección de una línea o imagen
@@ -1438,10 +1440,19 @@ export class App {
     if (this.bloqueado()) return;
     if (this.tool !== 'note' || !this.bus) return;
     this.setTool('none'); // nota: un solo uso por activación, como antes de este refactor
-    const text = window.prompt('Texto de la nota:');
-    if (!text || !text.trim()) { this.setStatus('Modo nota desactivado.'); return; }
-    await this.bus.execute(new AddNoteCmd(pageIndex, at.xPt, at.yPt, text.trim()));
+    const text = await pedirTextoNota({ titulo: 'Nueva nota' });
+    if (text === null || !this.bus) { this.setStatus('Modo nota desactivado.'); return; }
+    await this.bus.execute(new AddNoteCmd(pageIndex, at.xPt, at.yPt, text));
     this.setStatus('Nota añadida.');
+  }
+
+  /** Edita el texto de una anotación con el diálogo de nota (panel Comentarios y doble clic en el marcador). */
+  private async editarTextoNota(pageIndex: number, annotIndex: number, actual: string): Promise<void> {
+    if (this.bloqueado()) return;
+    const text = await pedirTextoNota({ titulo: 'Editar nota', valorInicial: actual });
+    if (text === null || text === actual || !this.bus) return;
+    await this.bus.execute(new SetNoteTextCmd(pageIndex, annotIndex, text));
+    this.setStatus('Comentario editado.');
   }
 
   /** Deshace y lo anuncia en `#status` (B1: un lector de pantalla no recibía confirmación). */

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
-import { abrirPestana } from './_ayudas';
+import { abrirPestana, escribirNota } from './_ayudas';
 
 // T14: quitar anotaciones con el ratón y el teclado. Con la herramienta "ninguna", un clic sobre un
 // resaltado/subrayado/tachado/nota lo selecciona (contorno + aria-selected); Supr/Retroceso lo borra
@@ -118,9 +118,9 @@ test('un tachado también se selecciona y se borra con Supr', async ({ page }) =
 
 test('una nota se selecciona con un clic en su icono y Supr la borra', async ({ page }) => {
   await abrir(page);
-  page.once('dialog', (d) => d.accept('Una nota'));
   await page.locator('#btn-note').click(); // activa el modo nota
   await page.locator('.page').first().click({ position: { x: 160, y: 175 } });
+  await escribirNota(page, 'Una nota');
   await expect(page.locator('#status')).toHaveText('Nota añadida.');
   await expect(page.locator('.note-marker')).toHaveCount(1);
   await page.keyboard.press('Escape'); // sale del modo nota

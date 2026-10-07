@@ -10,7 +10,8 @@ export interface ComentariosHooks {
   irAPagina(pageIndex: number): void;
   /** Marca la nota en el visor. */
   resaltar(pageIndex: number, annotIndex: number): void;
-  editar(pageIndex: number, annotIndex: number, texto: string): void;
+  /** Abre el editor de nota (diálogo, B4) con el texto actual; quien lo implementa guarda el resultado. */
+  editar(pageIndex: number, annotIndex: number, textoActual: string): void;
   borrar(pageIndex: number, annotIndex: number): void;
 }
 
@@ -39,7 +40,6 @@ export class ComentariosPanel {
   /** Se incrementa al invalidar: una lectura en curso con un número viejo se descarta. */
   private generacion = 0;
   private filtro = '';
-  private editando: { pageIndex: number; annotIndex: number } | null = null;
   private readonly filtroEl: HTMLInputElement;
   private readonly listaEl: HTMLElement;
   private readonly estadoEl: HTMLElement;
@@ -73,7 +73,6 @@ export class ComentariosPanel {
     this.cargando = false;
     this.sucio = true;
     this.porPagina.clear();
-    this.editando = null;
     if (this.visible) void this.cargar();
     else this.pintar();
   }
@@ -140,21 +139,6 @@ export class ComentariosPanel {
     const li = document.createElement('li');
     li.className = 'comentario';
     const pagina = c.pageIndex + 1;
-    if (this.editando && this.editando.pageIndex === c.pageIndex && this.editando.annotIndex === c.index) {
-      const ta = document.createElement('textarea');
-      ta.className = 'comentario-editor';
-      ta.value = c.text;
-      ta.setAttribute('aria-label', `Texto del comentario de la página ${pagina}`);
-      const guardar = this.btn('Guardar', 'Guardar comentario', () => this.guardarEdicion(c, ta.value));
-      const cancelar = this.btn('Cancelar', 'Cancelar edición', () => { this.editando = null; this.pintar(); });
-      ta.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape') { e.stopPropagation(); this.editando = null; this.pintar(); }
-        else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); this.guardarEdicion(c, ta.value); }
-      });
-      li.append(ta, guardar, cancelar);
-      queueMicrotask(() => ta.focus());
-      return li;
-    }
     const abrir = document.createElement('button');
     abrir.type = 'button';
     abrir.className = 'comentario-item';
@@ -168,16 +152,10 @@ export class ComentariosPanel {
     txt.textContent = extracto || '(sin texto)';
     abrir.append(meta, txt);
     abrir.addEventListener('click', () => { this.hooks.irAPagina(c.pageIndex); this.hooks.resaltar(c.pageIndex, c.index); });
-    const editar = this.btn('Editar', `Editar comentario de la página ${pagina}`, () => { this.editando = { pageIndex: c.pageIndex, annotIndex: c.index }; this.pintar(); });
+    const editar = this.btn('Editar', `Editar comentario de la página ${pagina}`, () => this.hooks.editar(c.pageIndex, c.index, c.text));
     const borrar = this.btn('Borrar', `Borrar comentario de la página ${pagina}`, () => this.hooks.borrar(c.pageIndex, c.index));
     li.append(abrir, editar, borrar);
     return li;
-  }
-
-  private guardarEdicion(c: Fila, texto: string): void {
-    this.editando = null;
-    if (texto !== c.text) this.hooks.editar(c.pageIndex, c.index, texto); // el comando dispara invalidarPagina
-    this.pintar();
   }
 
   private btn(texto: string, aria: string, onClick: () => void): HTMLButtonElement {

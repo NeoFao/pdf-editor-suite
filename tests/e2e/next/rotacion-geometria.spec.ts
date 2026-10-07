@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PdfiumEngine } from '../../../src/engine/pdfium/PdfiumEngine';
-import { abrirPestana } from './_ayudas';
+import { abrirPestana, escribirNota } from './_ayudas';
 
 // E-053: en páginas con /Rotate 90/270 las capas (texto, inserción, notas...) se
 // descolocaban porque `PageGeometry` recibía el tamaño VISUAL del motor y no el
@@ -106,11 +106,11 @@ for (const { pagina, rot } of CASOS) {
     const wrapper = page.locator('.page').nth(pagina);
     await wrapper.scrollIntoViewIfNeeded();
     await abrirPestana(page, 'comentar');
-    page.once('dialog', (d) => d.accept('Nota rotada'));
     await page.locator('#btn-note').click();
     const caja = (await wrapper.boundingBox())!;
     const cx = caja.width * 0.5, cy = caja.height * 0.6; // px CSS de página
     await wrapper.click({ position: { x: cx, y: cy } });
+    await escribirNota(page, 'Nota rotada');
     await expect(page.locator('#status')).toHaveText('Nota añadida.');
     const marcador = wrapper.locator('.note-marker');
     await expect(marcador).toHaveCount(1);
