@@ -1566,6 +1566,27 @@ async function pdfUserUnit() {
 }
 
 /**
+ * E-099: páginas MIXTAS de 300x200 con /UserUnit distinto, para comprobar que la vista conserva la proporción física.
+ *   1: sin /UserUnit (1).  2: /UserUnit 2.  3: /UserUnit 0 (inválido: se trata como 1).  4: /UserUnit 2 con /Rotate 90.
+ */
+async function pdfUserUnitMixto() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const pagina = (n, uu, giro) => {
+    const p = doc.addPage([300, 200]);
+    if (uu !== null) p.node.set(PDFName.of('UserUnit'), PDFNumber.of(uu));
+    if (giro) p.setRotation(degrees(giro));
+    p.drawText(`MIXTO-${n}-A`, { x: 40, y: 150, size: 20, font });
+    p.drawText(`MIXTO-${n}-B`, { x: 40, y: 60, size: 20, font });
+  };
+  pagina(1, null, 0);
+  pagina(2, 2, 0);
+  pagina(3, 0, 0);
+  pagina(4, 2, 90);
+  return doc.save();
+}
+
+/**
  * Glifos de `ligaduras.pdf` (1000 unidades por em): la ligadura «fi» es UN glifo (gid 8, ToUnicode «fi») bastante más
  * estrecho que f + i (430 frente a 660), como en Calibri/Chrome: el avance natural de «fi» por caracteres sobrestima lo
  * que ocupa de verdad. `cp` es el punto de código del cmap (U+FB01).
@@ -1664,6 +1685,7 @@ async function main() {
     'rotada-lineas.pdf': await pdfRotadaLineas(),
     'cropbox-desplazado.pdf': await pdfCropboxDesplazado(),
     'userunit.pdf': await pdfUserUnit(),
+    'userunit-mixto.pdf': await pdfUserUnitMixto(),
     'fuentes.pdf': await pdfFuentes(),
     'formulario.pdf': await pdfFormulario(),
     'subconjunto.pdf': await pdfSubconjunto(),

@@ -294,6 +294,11 @@ export interface PdfEngine {
    * (cajas de carácter, `GetBounds`, matrices) están en espacio de usuario; el render y `pageSize` hablan de esta caja.
    */
   pageBox(doc: DocHandle, pageIndex: number): PageBox;
+  /**
+   * `/UserUnit` de la página (1 si falta o no es finito y > 0). SOLO para la vista (E-099): tamaño físico = unidades de
+   * usuario × `userUnit`. `pageSize`, `pageBox`, el render y todas las coordenadas siguen en unidades de usuario sin escalar.
+   */
+  userUnit(doc: DocHandle, pageIndex: number): number;
   /** Rotación de la página en grados: 0, 90, 180 o 270. */
   pageRotation(doc: DocHandle, pageIndex: number): 0 | 90 | 180 | 270;
   /** Renderiza la página a un bitmap RGBA a la escala dada. */

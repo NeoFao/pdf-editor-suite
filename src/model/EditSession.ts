@@ -50,6 +50,7 @@ export class EditSession {
         index: i,
         sizePt: engine.pageSize(doc, i),
         origenPt: engine.pageBox(doc, i).origenPt,
+        userUnit: engine.userUnit(doc, i),
         rotation: engine.pageRotation(doc, i),
         runs: []
       });
@@ -118,6 +119,7 @@ export class EditSession {
       index: pageIndex,
       sizePt: this.engine.pageSize(this.doc, pageIndex),
       origenPt: this.engine.pageBox(this.doc, pageIndex).origenPt,
+      userUnit: this.engine.userUnit(this.doc, pageIndex),
       rotation: this.engine.pageRotation(this.doc, pageIndex),
       runs: this.engine.getPageText(this.doc, pageIndex)
     };

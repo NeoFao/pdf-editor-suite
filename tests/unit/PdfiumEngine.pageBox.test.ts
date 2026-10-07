@@ -38,3 +38,15 @@ test('E-098 /UserUnit 2: pageSize, pageBox, render y coordenadas siguen en unida
   expect(eng.getPageText(doc, 0)[0]!.originPt).toEqual({ xPt: 40, yPt: 150 });
   eng.close(doc);
 });
+
+/** E-099: el motor expone `userUnit` por página (1 si falta o es inválido); no altera tamaño ni coordenadas. */
+test('E-099 userUnit: 2 declarado, 1 por defecto, 1 si es inválido (0) y sin alterar pageSize', async () => {
+  const eng = await PdfiumEngine.create();
+  const doc = await eng.open(fixture('userunit-mixto.pdf'));
+  expect([0, 1, 2, 3].map((i) => eng.userUnit(doc, i))).toEqual([1, 2, 1, 2]);
+  expect(eng.pageSize(doc, 1)).toEqual({ widthPt: 300, heightPt: 200 });
+  eng.close(doc);
+  const d2 = await eng.open(fixture('nativo.pdf'));
+  expect(eng.userUnit(d2, 0)).toBe(1);
+  eng.close(d2);
+});

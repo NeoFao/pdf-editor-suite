@@ -3043,7 +3043,8 @@ export class App {
     const disponible = this.viewerEl.clientWidth - paddingX;
     if (disponible <= 0) return;
     this.modoZoom = 'ancho';
-    this.scale = calcularEscalaAjusteAncho(disponible, page.sizePt.widthPt);
+    // E-099: el ancho físico de la página es su ancho en unidades de usuario × /UserUnit (el zoom 100 % lo muestra a tamaño real).
+    this.scale = calcularEscalaAjusteAncho(disponible, page.sizePt.widthPt * page.userUnit);
     this.viewer.setScale(this.scale);
     this.zoomPctEl.textContent = `${Math.round(this.scale * 100)}%`;
     this.setStatus(`Ajustado al ancho (${Math.round(this.scale * 100)}%).`);
