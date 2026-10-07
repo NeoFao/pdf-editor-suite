@@ -856,9 +856,9 @@ function docxEncabezados() {
   ]);
 }
 
-/** `w:drawing` flotante (`wp:anchor`), sin ajuste de texto real: posición en EMU respecto a la PÁGINA. */
+/** `w:drawing` flotante (`wp:anchor`) SIN ajuste de texto (`wp:wrapNone`): posición en EMU respecto a la PÁGINA. Para el ajuste, ver `word-ajuste.docx`. */
 function drawingAncla(rId, cxEmu, cyEmu, offHEmu, offVEmu) {
-  return `<w:drawing><wp:anchor behindDoc="0"><wp:positionH relativeFrom="page"><wp:posOffset>${offHEmu}</wp:posOffset></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>${offVEmu}</wp:posOffset></wp:positionV><wp:extent cx="${cxEmu}" cy="${cyEmu}"/><wp:wrapSquare wrapText="bothSides"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="${rId}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing>`;
+  return `<w:drawing><wp:anchor behindDoc="0"><wp:positionH relativeFrom="page"><wp:posOffset>${offHEmu}</wp:posOffset></wp:positionH><wp:positionV relativeFrom="page"><wp:posOffset>${offVEmu}</wp:posOffset></wp:positionV><wp:extent cx="${cxEmu}" cy="${cyEmu}"/><wp:wrapNone/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="${rId}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing>`;
 }
 
 /** Posición y tamaño de la imagen flotante de `word-flotante.docx`, en pt: 72 pt desde la izquierda y 144 pt desde arriba de la página Carta, 72x72 pt. */
