@@ -1,7 +1,7 @@
 import { aproximado, type Advertencia } from '../advertencia';
-import { esParrafo, esTabla, type InfoLista, type Alineacion, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type Borde, type BordesTabla, type ParadaTab, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx } from './modelo';
+import { esParrafo, esTabla, type InfoLista, type Alineacion, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type RunFormato, type Borde, type BordesTabla, type ParadaTab, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx } from './modelo';
 import {
-  wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona, parrafoFlex, lineasConTabs,
+  wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona, parrafoFlex, lineasConTabs, tamanoLinea,
   type Atom, type Medir, type FlowItem, type FlowLine, type FlowTableRow, type RelLinea, type RelBarra, type ResultadoLayout, type PageGeometry, type RGB, type TabsConfig, type TabStopAbs
 } from '../flujo/layout';
 
@@ -37,6 +37,19 @@ function paradaFija(x0: number, x1: number, al: 'left' | 'center' | 'right', lea
 function atomoMarcador(lista: InfoLista, sizePt: number): Atom {
   return { text: lista.textoMarcador, font: lista.fuenteMarcador ?? 'Helvetica', sizePt: sizePt * (lista.escalaMarcador ?? 1), color: [0, 0, 0] };
 }
+
+/** Átomo de texto con el formato de un run, efectos de carácter incluidos (E-105: tachado, desplazamiento, tamaño nominal, fondo). */
+function atomoDeTexto(texto: string, f: RunFormato, pegado: boolean, url?: string): Atom {
+  const a: Atom = { text: texto, font: f.font, sizePt: f.sizePt, color: f.color, pegado, underline: f.underline };
+  if (url !== undefined) a.url = url;
+  if (f.strike) a.strike = f.strike;
+  if (f.dyPt) a.dyPt = f.dyPt;
+  if (f.sizeLineaPt !== undefined) a.sizeLineaPt = f.sizeLineaPt;
+  if (f.fondo) a.fondo = f.fondo;
+  return a;
+}
+
+function tamanoLineaDe(a: Atom | undefined): number | undefined { return a ? tamanoLinea(a) : undefined; }
 
 /** Alto de una línea de tamaño `sizePt`: la altura fija del párrafo (`exact`/`atLeast`) o `tamaño × factor`. Cuerpo y celdas usan ESTA función (E-103). */
 function alturaDeLinea(p: { interlineadoFactor: number; interlineadoExactoPt: number | null }, sizePt: number): number {
@@ -91,7 +104,7 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
       const esPrimeraAbsoluta = primeraDeEsteVolcado && idx === 0;
       const esUltimaDelSegmento = idx === envueltas.length - 1;
       const x = esPrimeraAbsoluta ? xPrimeraLineaPt : xNormalPt;
-      const alto = alturaLinea(linea[0]?.sizePt ?? p.tamanoBasePt);
+      const alto = alturaLinea(linea[0] ? tamanoLinea(linea[0]) : p.tamanoBasePt);
       salida.push(lineToFlowLine(linea, x, anchoDisponible, p.alineacion, esUltimaDelSegmento, alto, medir));
       seEmitioAlgunaLinea = true;
     });
@@ -114,7 +127,7 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
       for (const palabra of parte.texto.split(/\s+/)) {
         if (palabra === '') continue;
         const pegado = primerPalabra && !empiezaConEspacio && !terminaEnEspacio && bufferAtomos.length > 0;
-        bufferAtomos.push({ text: palabra, font: parte.formato.font, sizePt: parte.formato.sizePt, color: parte.formato.color, pegado, url: parte.url, underline: parte.formato.underline });
+        bufferAtomos.push(atomoDeTexto(palabra, parte.formato, pegado, parte.url));
         primerPalabra = false;
       }
       if (parte.texto.length > 0) terminaEnEspacio = /\s$/.test(parte.texto);
@@ -122,7 +135,7 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
       // Número de página/total: se pinta como un átomo de texto con el formato del campo (pegado a lo anterior si no hay espacio real).
       if (!campos) continue;
       const pegado = bufferAtomos.length > 0 && !terminaEnEspacio;
-      bufferAtomos.push({ text: String(parte.campo === 'PAGE' ? campos.pagina : campos.total), font: parte.formato.font, sizePt: parte.formato.sizePt, color: parte.formato.color, pegado, underline: parte.formato.underline });
+      bufferAtomos.push(atomoDeTexto(String(parte.campo === 'PAGE' ? campos.pagina : campos.total), parte.formato, pegado));
       terminaEnEspacio = false;
     } else if (parte.tipo === 'tab') {
       // Tabulación real (fase 2c): un átomo `tab` que `lineaConTabs` resuelve contra las paradas al colocar la línea.
@@ -197,7 +210,7 @@ function celdaAGrupos(celda: CeldaTabla, xIniPt: number, xFinPt: number, tabDefe
   let terminaEnEspacio = true;
   let inicio: Extract<CeldaTabla['partes'][number], { tipo: 'inicioParrafo' }> | null = null;
   const cerrar = (): void => {
-    if (inicio?.lista && inicio.lista.textoMarcador !== '') actual.unshift(atomoMarcador(inicio.lista, actual.find((a) => !a.tab)?.sizePt ?? TABLA_SIZE_PT_DEFECTO));
+    if (inicio?.lista && inicio.lista.textoMarcador !== '') actual.unshift(atomoMarcador(inicio.lista, tamanoLineaDe(actual.find((a) => !a.tab)) ?? TABLA_SIZE_PT_DEFECTO));
     const tabs: TabsConfig | null = paradas ? { stops: paradas.map((t): TabStopAbs => ({ posPt: xIniPt + t.posPt, tipo: t.tipo, leader: t.leader })), defectoPt: tabDefectoPt, origenPt: xIniPt } : null;
     const izq = inicio?.sangriaIzqPt ?? 0;
     grupos.push({
@@ -218,7 +231,7 @@ function celdaAGrupos(celda: CeldaTabla, xIniPt: number, xFinPt: number, tabDefe
       for (const palabra of parte.texto.split(/\s+/)) {
         if (palabra === '') continue;
         const pegado = primerPalabra && !empiezaConEspacio && !terminaEnEspacio && actual.length > 0;
-        actual.push({ text: palabra, font: parte.formato.font, sizePt: parte.formato.sizePt, color: parte.formato.color, pegado, url: parte.url, underline: parte.formato.underline });
+        actual.push(atomoDeTexto(palabra, parte.formato, pegado, parte.url));
         primerPalabra = false;
       }
       if (parte.texto.length > 0) terminaEnEspacio = /\s$/.test(parte.texto);
@@ -334,7 +347,7 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
         lineasGrupo = ls.length > 0 ? ls : [lineToFlowLine([], xNormal, anchoLista, alineacion, true, alturaLinea(TABLA_SIZE_PT_DEFECTO), medir)];
       } else {
         const wrapped = atoms.length > 0 ? wrapAtoms(atoms, anchoLista, medir) : [[]];
-        lineasGrupo = wrapped.map((linea, idx) => lineToFlowLine(linea, idx === 0 ? xPrimera : xNormal, anchoLista, alineacion, idx === wrapped.length - 1, alturaLinea(linea[0]?.sizePt ?? TABLA_SIZE_PT_DEFECTO), medir));
+        lineasGrupo = wrapped.map((linea, idx) => lineToFlowLine(linea, idx === 0 ? xPrimera : xNormal, anchoLista, alineacion, idx === wrapped.length - 1, alturaLinea(linea[0] ? tamanoLinea(linea[0]) : TABLA_SIZE_PT_DEFECTO), medir));
       }
       // El espaciado del párrafo son huecos sin texto antes y después de sus líneas: la altura de la fila crece con ellos.
       return [...(g.espacioAntesPt > 0 ? [hueco(g.espacioAntesPt)] : []), ...lineasGrupo, ...(g.espacioDespuesPt > 0 ? [hueco(g.espacioDespuesPt)] : [])];

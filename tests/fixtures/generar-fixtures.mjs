@@ -1143,6 +1143,35 @@ function docxRprEstilo() {
 }
 
 /**
+ * `word-rpr-efectos.docx` (E-105): efectos de carácter, todos a 20 pt con interlineado exacto de 24 pt (un párrafo = una línea):
+ * (1) "Normal" + superíndice "Sup" + subíndice "Sub"; (2) "Tachado" (`w:strike`); (3) "Doble" (`w:dstrike`); (4) "título" con
+ * `w:caps`; (5) "Hola" con `w:smallCaps`; (6) "Resaltado" (`w:highlight` yellow); (7) "Sombreado" (`w:shd` fill 00FF00);
+ * (8) "Oculto" (`w:vanish`) + "Visible". Sin avisos. Ver `tests/unit/ConversorDocxNavegador-rpr-efectos.test.ts`.
+ */
+function docxRprEfectos() {
+  const sz = '<w:sz w:val="40"/>';
+  const esp = '<w:spacing w:before="0" w:after="0" w:line="480" w:lineRule="exact"/>';
+  const p = (...runs) => `<w:p><w:pPr>${esp}</w:pPr>${runs.join('')}</w:p>`;
+  const r = (t, rpr = '') => `<w:r><w:rPr>${sz}${rpr}</w:rPr><w:t>${t}</w:t></w:r>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  ${p(r('Normal'), r('Sup', '<w:vertAlign w:val="superscript"/>'), r('Sub', '<w:vertAlign w:val="subscript"/>'))}
+  ${p(r('Tachado', '<w:strike/>'))}
+  ${p(r('Doble', '<w:dstrike/>'))}
+  ${p(r('título', '<w:caps/>'))}
+  ${p(r('Hola', '<w:smallCaps/>'))}
+  ${p(r('Resaltado', '<w:highlight w:val="yellow"/>'))}
+  ${p(r('Sombreado', '<w:shd w:val="clear" w:color="auto" w:fill="00FF00"/>'))}
+  ${p(r('Oculto', '<w:vanish/>'), r(' Visible'))}
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') }
+  ]);
+}
+
+/**
  * `word-parrafo-celda.docx` (E-103): una tabla de UNA fila y 4 celdas de 115 pt (x = 72, 187, 302, 417; relleno 5 pt) que prueba el
  * formato de párrafo DENTRO de la celda: A centrada, B a la derecha, C justificada con sangría derecha de 36 pt y D a la
  * izquierda con espaciado 12 antes / 6 después e interlineado 1,5. Detrás, un párrafo del cuerpo para medir la altura de la fila.
@@ -1883,6 +1912,7 @@ async function main() {
     'word-listas-celda.docx': docxListasCelda(),
     'word-parrafo-celda.docx': docxParrafoCelda(),
     'word-rpr-estilo.docx': docxRprEstilo(),
+    'word-rpr-efectos.docx': docxRprEfectos(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {
