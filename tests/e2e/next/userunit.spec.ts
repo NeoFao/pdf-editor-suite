@@ -28,10 +28,17 @@ function esperadoUsuario(c: Caso, fx: number, fy: number): { x: number; y: numbe
   return { x: c.ox + fx * c.cw, y: c.oy + (1 - fy) * c.ch };
 }
 
-async function abrir(page: Page): Promise<void> {
+type ModoVista = 'ancho' | 'zoom-manual';
+
+/** `ancho`: el visor abre ajustado al ancho. `zoom-manual`: además se aleja una vez (la escala ya no es la del ajuste). */
+async function abrir(page: Page, modo: ModoVista = 'ancho', fixture = FIXTURE): Promise<void> {
   await page.goto('/index.next.html');
-  await page.locator('#file-input').setInputFiles(FIXTURE);
+  await page.locator('#file-input').setInputFiles(fixture);
   await expect(page.locator('.run').first()).toBeVisible();
+  if (modo === 'zoom-manual') {
+    await page.locator('#btn-zoom-out').click();
+    await page.waitForTimeout(300);
+  }
 }
 
 async function envolver(page: Page, pagina: number): Promise<Locator> {
@@ -89,11 +96,12 @@ async function descargar(page: Page, nombre: string): Promise<Uint8Array> {
 }
 
 
-for (const c of CASOS) {
+for (const modo of ['ancho', 'zoom-manual'] as const) for (const c of CASOS) {
+  const sufijo = modo === 'ancho' ? '' : ' (zoom manual)';
   const eje = c.rot === 90 ? 'x' : 'y';
 
-  test(`E-098 página ${c.pagina}: con UserUnit 2 las cajas .run caen sobre los píxeles de su texto`, async ({ page }) => {
-    await abrir(page);
+  test(`E-098 página ${c.pagina}${sufijo}: con UserUnit 2 las cajas .run caen sobre los píxeles de su texto`, async ({ page }) => {
+    await abrir(page, modo);
     const w = await envolver(page, c.pagina);
     const m = await medirPixeles(w, eje);
     const r = await w.evaluate((wrap) => {
@@ -112,8 +120,8 @@ for (const c of CASOS) {
     expect(Math.abs(r.bottom - m.total.bottom), msg).toBeLessThan(tol);
   });
 
-  test(`E-098 página ${c.pagina}: un clic sobre el texto visible edita ESA línea`, async ({ page }) => {
-    await abrir(page);
+  test(`E-098 página ${c.pagina}${sufijo}: un clic sobre el texto visible edita ESA línea`, async ({ page }) => {
+    await abrir(page, modo);
     const w = await envolver(page, c.pagina);
     const m = await medirPixeles(w, eje);
     const p = centro(lineaA(c, m));
@@ -123,8 +131,8 @@ for (const c of CASOS) {
     await expect(editando).toContainText(`USERUNIT-${c.pagina + 1}-A`);
   });
 
-  test(`E-098 página ${c.pagina}: insertar texto y nota caen donde se hace clic`, async ({ page }) => {
-    await abrir(page);
+  test(`E-098 página ${c.pagina}${sufijo}: insertar texto y nota caen donde se hace clic`, async ({ page }) => {
+    await abrir(page, modo);
     const w = await envolver(page, c.pagina);
     const caja = (await w.boundingBox())!;
     const fx = 0.3, fy = 0.8;
@@ -154,11 +162,69 @@ for (const c of CASOS) {
     expect(Math.abs(n.yPt + n.hPt / 2 - e.y), msgN).toBeLessThan(30);
   });
 
-  test(`E-098 página ${c.pagina}: el tamaño visible en pantalla es el de la caja sin escalar (1 pt = 1 px a zoom 1)`, async ({ page }) => {
-    await abrir(page);
+  test(`E-098 página ${c.pagina}${sufijo}: el tamaño visible en pantalla es el de la caja sin escalar (1 pt = 1 px a zoom 1)`, async ({ page }) => {
+    await abrir(page, modo);
     const w = await envolver(page, c.pagina);
     const caja = (await w.boundingBox())!;
     const visW = c.rot === 90 ? c.ch : c.cw, visH = c.rot === 90 ? c.cw : c.ch;
     expect(caja.width / caja.height, `página ${caja.width}x${caja.height}`).toBeCloseTo(visW / visH, 1);
   });
 }
+
+// ---- E-099: la vista aplica /UserUnit (tamaño físico) sin tocar las coordenadas del motor ----
+const FIXTURE_MIXTO = path.resolve(AQUI, '../../fixtures/generados/userunit-mixto.pdf');
+
+async function cajaPagina(page: Page, i: number): Promise<{ width: number; height: number }> {
+  const w = page.locator('.page').nth(i);
+  const b = await w.evaluate((e) => { const r = e.getBoundingClientRect(); return { width: r.width, height: r.height }; });
+  return b;
+}
+
+test('E-099 vista: con UserUnit 2 la página mide el doble en CSS que una igual con UserUnit 1; UserUnit inválido cuenta como 1', async ({ page }) => {
+  await abrir(page, 'zoom-manual', FIXTURE_MIXTO);
+  const [p1, p2, p3, p4] = [await cajaPagina(page, 0), await cajaPagina(page, 1), await cajaPagina(page, 2), await cajaPagina(page, 3)];
+  const msg = JSON.stringify({ p1, p2, p3, p4 });
+  expect(p2.width / p1.width, msg).toBeCloseTo(2, 2);
+  expect(p2.height / p1.height, msg).toBeCloseTo(2, 2);
+  expect(p3.width / p1.width, msg).toBeCloseTo(1, 2); // /UserUnit 0: inválido, se ve como 1
+  // /UserUnit 2 con /Rotate 90: el ancho visual es el alto sin girar (200 pt) × 2.
+  expect(p4.width / p1.height, msg).toBeCloseTo(2, 2);
+  expect(p4.height / p1.width, msg).toBeCloseTo(2, 2);
+});
+
+test('E-099 vista: el tamaño sigue la escala mostrada (ancho CSS = ancho × UserUnit × zoom %)', async ({ page }) => {
+  await abrir(page, 'zoom-manual', FIXTURE_MIXTO);
+  const pct = Number((await page.locator('#zoom-pct').textContent())!.replace('%', '')) / 100;
+  const uu = [1, 2, 1, 2];
+  const ancho = [300, 300, 300, 200];
+  for (let i = 0; i < 4; i++) {
+    const b = await cajaPagina(page, i);
+    expect(Math.abs(b.width - ancho[i]! * uu[i]! * pct), `página ${i + 1}: ${b.width} vs ${ancho[i]! * uu[i]! * pct}`).toBeLessThan(0.01 * b.width + 1);
+  }
+});
+
+test('E-099 vista: el modo "ancho" ajusta una página UserUnit 2 al ancho del panel (zoom % menor que con UserUnit 1)', async ({ page }) => {
+  await abrir(page, 'ancho'); // userunit.pdf: página 1 de 300x200 pt con UserUnit 2 = 600x400 pt físicos
+  const disponible = await page.locator('#viewer').evaluate((e) => {
+    const cs = getComputedStyle(e);
+    return e.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  });
+  const b = await cajaPagina(page, 0);
+  expect(Math.abs(b.width - disponible), `página ${b.width} panel ${disponible}`).toBeLessThanOrEqual(1);
+  expect(await page.locator('#zoom-pct').textContent()).toBe(`${Math.round((disponible / 600) * 100)}%`);
+});
+
+test('E-099 guardar no muta el documento: los bytes no dependen de la escala de la vista y /UserUnit se conserva', async ({ page }) => {
+  await abrir(page, 'ancho');
+  const base = await descargar(page, 'uu-base.pdf');
+  await abrir(page, 'zoom-manual');
+  const conZoom = await descargar(page, 'uu-a.pdf');
+  await page.locator('#btn-zoom-in').click();
+  const otraVez = await descargar(page, 'uu-b.pdf');
+  expect(Buffer.from(conZoom).equals(Buffer.from(base)), 'guardar con otra escala de vista da otros bytes').toBe(true);
+  expect(Buffer.from(otraVez).equals(Buffer.from(base)), 'guardar dos veces da bytes distintos').toBe(true);
+  const eng = await PdfiumEngine.create();
+  const re = await eng.open(base);
+  expect([0, 1, 2].map((i) => eng.userUnit(re, i))).toEqual([2, 2, 2]);
+  eng.close(re);
+});
