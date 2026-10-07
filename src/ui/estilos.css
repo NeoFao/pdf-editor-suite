@@ -825,3 +825,9 @@ dialog.encabezado-panel::backdrop { background: rgba(0, 0, 0, .12); }
     scroll-behavior: auto !important;
   }
 }
+
+/* Enlaces internos del PDF (Viewer.drawLinks): cajas invisibles sobre el enlace; solo se ven al enfocarlas con el teclado. */
+.link-box:focus-visible {
+  outline: 2px solid var(--ed-accent);
+  outline-offset: 1px;
+}

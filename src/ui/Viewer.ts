@@ -15,6 +15,8 @@ import { textoDeMarcado } from '../texto/seleccionTexto';
 import { lineaDeRun } from '../texto/lineasEditables';
 
 const GAP = 16;
+/** Margen (px CSS) que se deja sobre la línea de destino de un enlace interno al desplazar el visor. */
+const MARGEN_DESTINO_CSS = 12;
 /** E-068: espera máxima hasta el PRIMER evento de scroll de `scrollToPage` (con la CPU cargada tarda más de 150 ms). */
 const ESPERA_INICIO_SCROLL_MS = 1500;
 
@@ -77,6 +79,8 @@ export interface ViewerCallbacks {
   onMarcadoSelect?: (sel: { pageIndex: number; annotIndex: number; kind: MarcadoKind } | null) => void;
   /** Empieza un arrastre de selección de texto: la selección de línea/imagen vigente ya no vale. */
   onTextSelectionStart?: () => void;
+  /** Clic (o Intro) en un enlace interno del PDF (anotación `/Link` con destino en el propio documento): `yPt` = altura del destino (pt de usuario, origen abajo) o `null`. */
+  onEnlaceInterno?: (destPageIndex: number, yPt: number | null) => void;
 }
 
 /** Renderiza páginas visibles (canvas del motor) con su capa de texto encima. */
@@ -432,13 +436,16 @@ export class Viewer {
    * primer evento `scroll`): si `scrollIntoView` no dispara ningún `scroll`
    * porque el destino ya era visible, nada más va a cerrar la ventana.
    */
-  scrollToPage(i: number): void {
+  scrollToPage(i: number, yPt: number | null = null): void {
     this.currentPage = i;
     this.pinnedPage = i;
     const wrapper = this.wrappers[i];
     if (!wrapper) return;
+    // Con `yPt` (destino /XYZ de un enlace interno, pt de usuario con origen ABAJO) el destino baja hasta esa altura de la página,
+    // con un pequeño margen para que la línea no quede pegada al borde. px CSS de página = `ptToCss`, que ya aplica la escala y el origen.
+    const dentro = yPt !== null && this.geoms[i] ? Math.max(0, this.geoms[i]!.ptToCss(0, yPt).y - MARGEN_DESTINO_CSS) : 0;
     // Destino del scroll (px CSS de scroll de `root`), acotado como lo acota el navegador.
-    const bruto = this.root.scrollTop + wrapper.getBoundingClientRect().top - this.root.getBoundingClientRect().top - this.root.clientTop;
+    const bruto = this.root.scrollTop + wrapper.getBoundingClientRect().top - this.root.getBoundingClientRect().top - this.root.clientTop + dentro;
     this.pinTop = Math.max(0, Math.min(bruto, this.root.scrollHeight - this.root.clientHeight));
     if (this.llegoAlPin()) {
       // Ya estamos ahí: no habrá scroll ni `scrollend`; no hay nada que esperar.
@@ -449,7 +456,8 @@ export class Viewer {
     // que llegue, el respaldo es largo; después se reinicia con los 150 ms de siempre en cada evento.
     this.programmaticScroll = true;
     this.armScrollEndFallback(ESPERA_INICIO_SCROLL_MS);
-    wrapper.scrollIntoView({ block: 'start', behavior: 'smooth' });
+    if (dentro > 0) this.root.scrollTo({ top: this.pinTop, behavior: 'smooth' });
+    else wrapper.scrollIntoView({ block: 'start', behavior: 'smooth' });
   }
 
   /**
@@ -1085,6 +1093,40 @@ export class Viewer {
     wrapper.appendChild(layer);
   }
 
+  /**
+   * Enlaces INTERNOS del PDF (anotación `/Link` con destino en el propio documento, p. ej. los de Word → PDF): una caja invisible
+   * sobre cada uno, navegable con clic o Intro (`role="link"`). Se leen del motor, no del modelo (como notas e imágenes). Solo
+   * actúan con la herramienta "ninguna" (con otra, la capa de captura de la herramienta queda encima). Los enlaces externos (URI) no
+   * se pintan aquí: abrir una URL desde el visor es otra decisión (permiso de navegación) que no toma esta capa.
+   */
+  private drawLinks(i: number): void {
+    const wrapper = this.wrappers[i];
+    if (!wrapper) return;
+    wrapper.querySelector('.link-layer')?.remove();
+    const internos = this.session.engine.getLinks(this.session.doc, i).filter((e) => e.destino.tipo === 'pagina');
+    if (internos.length === 0) return;
+    const geom = this.geoms[i]!;
+    const layer = document.createElement('div');
+    layer.className = 'link-layer';
+    Object.assign(layer.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
+    for (const e of internos) {
+      const d = e.destino;
+      if (d.tipo !== 'pagina') continue;
+      const css = geom.rectPtToCss(e.rectPt);
+      const caja = document.createElement('div');
+      caja.className = 'link-box';
+      caja.setAttribute('role', 'link');
+      caja.setAttribute('tabindex', '0');
+      caja.setAttribute('aria-label', `Ir a la página ${d.pageIndex + 1}`);
+      Object.assign(caja.style, { position: 'absolute', left: `${css.left}px`, top: `${css.top}px`, width: `${css.width}px`, height: `${css.height}px`, pointerEvents: 'auto', cursor: 'pointer' });
+      const ir = (): void => { if (this.tool === 'none') this.cb.onEnlaceInterno?.(d.pageIndex, d.yPt); };
+      caja.addEventListener('click', ir);
+      caja.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); ir(); } });
+      layer.appendChild(caja);
+    }
+    wrapper.appendChild(layer);
+  }
+
   private rebuild(): void {
     this.root.textContent = '';
     this.wrappers = [];
@@ -1289,6 +1331,7 @@ export class Viewer {
     this.drawNotes(i);
     this.drawFormFields(i);
     this.drawImages(i);
+    this.drawLinks(i);
 
     // Capa de captura de herramienta (encima de todo; solo activa en pluma/rectángulo/borrador).
     const toolLayer = document.createElement('div');

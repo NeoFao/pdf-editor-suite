@@ -21,6 +21,7 @@ const WORD_JPEG = path.resolve(AQUI, '../../fixtures/generados/word-jpeg.docx');
 const WORD_COMBINADA = path.resolve(AQUI, '../../fixtures/generados/word-combinada.docx');
 const WORD_COMPLETO = path.resolve(AQUI, '../../fixtures/generados/word-completo.docx');
 const WORD_ENCABEZADOS = path.resolve(AQUI, '../../fixtures/generados/word-encabezados.docx');
+const WORD_ENLACES_INTERNOS = path.resolve(AQUI, '../../fixtures/generados/word-enlaces-internos.docx');
 const WORD_FLOTANTE = path.resolve(AQUI, '../../fixtures/generados/word-flotante.docx');
 
 async function dataTransferConFichero(page: Page, bytes: number[], fileName: string, mime: string) {
@@ -341,4 +342,21 @@ test('abrir word-parrafo-celda.docx: alineación, sangría derecha y espaciado d
   // (La medida exacta de la altura está en ConversorDocxNavegador-parrafo-celda.test.ts; aquí, el mínimo con 2 líneas de 15 pt.)
   expect(run('Centro').boxPt.yPt - run('Despues').boxPt.yPt).toBeGreaterThan(10 + 12 + 2 * 15 + 6 - 5);
   eng.close(doc);
+});
+
+test('enlace interno de Word: un clic en el enlace del PDF convertido lleva a la página 3 (donde cae el marcador)', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(WORD_ENLACES_INTERNOS);
+  await expect(page.locator('.run').first()).toBeVisible();
+  await expect(page.locator('#page-indicator')).toHaveText('1 / 3');
+
+  // Un solo enlace navegable: el del marcador existente (el roto no crea anotación).
+  const enlace = page.getByRole('link', { name: /página 3/i });
+  await expect(enlace).toHaveCount(1);
+  await enlace.click();
+  await expect.poll(async () => ((await page.locator('#page-indicator').textContent()) ?? '').trim()).toBe('3 / 3');
+
+  // El enlace roto deja su texto y avisa como omitido (no se pierde en silencio).
+  await expect(page.locator('#conversion-warnings')).toBeVisible();
+  await expect(page.locator('#conversion-warnings')).toContainText(/sin destino/i);
 });

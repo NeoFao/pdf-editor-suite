@@ -6,7 +6,7 @@ import { leerUserUnits } from '../userUnit';
 import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
 import { BEARING_EM } from '../../texto/lineasEditables';
 import type { QuadPt } from '../../coords/quads';
-import type { PdfEngine, CharBox, DocHandle, SizePt, PageBox, TextRun, EditResult, EditLineResult, LineaParaEditar, SetLinePropsResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
+import type { PdfEngine, CharBox, DocHandle, SizePt, PageBox, TextRun, EditResult, EditLineResult, LineaParaEditar, SetLinePropsResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, EnlaceLeido, DestinoEnlace, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
 const FPDF_PAGEOBJ_TEXT = 1;
 const FPDF_PAGEOBJ_PATH = 2;
@@ -2060,6 +2060,102 @@ export class PdfiumEngine implements PdfEngine {
   addLink(doc: DocHandle, pageIndex: number, rectPt: RectPt, url: string): boolean {
     const [res] = this.applyPageOps(doc, pageIndex, [{ type: 'addLink', rect: rectPt, url }]);
     return (res as Extract<PageOpResult, { type: 'addLink' }>).ok;
+  }
+
+  addInternalLink(doc: DocHandle, pageIndex: number, rectPt: RectPt, destPageIndex: number, destYPt: number): boolean {
+    // Validar ANTES de crear nada: un destino roto dejaría una /Link muerta en el PDF.
+    if (!Number.isInteger(destPageIndex) || destPageIndex < 0 || destPageIndex >= this.p.FPDF_GetPageCount(doc) || !Number.isFinite(destYPt)) return false;
+    const destPage = this.p.FPDF_LoadPage(doc, destPageIndex);
+    if (!destPage) return false;
+    let accion = 0;
+    try {
+      // [página /XYZ null destYPt null]: solo fija la altura (pt de usuario, origen ABAJO); x y zoom se dejan como están.
+      const dest = this.p.EPDFDest_CreateXYZ(destPage, false, 0, true, destYPt, false, 0);
+      accion = dest ? this.p.EPDFAction_CreateGoTo(doc, dest) : 0;
+    } finally {
+      this.p.FPDF_ClosePage(destPage);
+    }
+    if (!accion) return false;
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    try {
+      const annot = this.p.FPDFPage_CreateAnnot(page, FPDF_ANNOT_LINK);
+      if (!annot) return false;
+      try {
+        // FS_RECTF = {left, top, right, bottom} en pt PDF (igual que `addLink`).
+        const rectPtr = this.mem.malloc(16);
+        this.mem.setValue(rectPtr, rectPt.xPt, 'float');
+        this.mem.setValue(rectPtr + 4, rectPt.yPt + rectPt.hPt, 'float');
+        this.mem.setValue(rectPtr + 8, rectPt.xPt + rectPt.wPt, 'float');
+        this.mem.setValue(rectPtr + 12, rectPt.yPt, 'float');
+        this.p.FPDFAnnot_SetRect(annot, rectPtr);
+        this.mem.free(rectPtr);
+        this.p.FPDFAnnot_SetBorder(annot, 0, 0, 0); // sin recuadro visible (ver `addLink`)
+        return this.p.EPDFAnnot_SetAction(annot, accion);
+      } finally {
+        this.p.FPDFPage_CloseAnnot(annot);
+      }
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  getLinks(doc: DocHandle, pageIndex: number): EnlaceLeido[] {
+    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
+    const out: EnlaceLeido[] = [];
+    try {
+      const n = this.p.FPDFPage_GetAnnotCount(page);
+      for (let i = 0; i < n; i++) {
+        const annot = this.p.FPDFPage_GetAnnot(page, i);
+        if (!annot) continue;
+        try {
+          if (this.p.FPDFAnnot_GetSubtype(annot) !== FPDF_ANNOT_LINK) continue;
+          const rectPtr = this.mem.malloc(16);
+          this.p.FPDFAnnot_GetRect(annot, rectPtr);
+          const left = this.mem.getValue(rectPtr, 'float'), top = this.mem.getValue(rectPtr + 4, 'float');
+          const right = this.mem.getValue(rectPtr + 8, 'float'), bottom = this.mem.getValue(rectPtr + 12, 'float');
+          this.mem.free(rectPtr);
+          out.push({ rectPt: { xPt: left, yPt: bottom, wPt: right - left, hPt: top - bottom }, destino: this.destinoDeLink(doc, annot) });
+        } finally {
+          this.p.FPDFPage_CloseAnnot(annot);
+        }
+      }
+    } finally {
+      this.p.FPDF_ClosePage(page);
+    }
+    return out;
+  }
+
+  /** Destino de una anotación `/Link`: acción GoTo (o `/Dest` directo) → página + y; URI permitida → `uri`; el resto → `otro`. Solo lectura. */
+  private destinoDeLink(doc: DocHandle, annot: number): DestinoEnlace {
+    const link = this.p.FPDFAnnot_GetLink(annot);
+    if (!link) return { tipo: 'otro' };
+    const dePagina = (dest: number): DestinoEnlace => {
+      const i = this.p.FPDFDest_GetDestPageIndex(doc, dest);
+      if (i < 0) return { tipo: 'otro' };
+      const buf = this.mem.malloc(24); // hasX, hasY, hasZoom (int) + x, y, zoom (float)
+      try {
+        const ok = this.p.FPDFDest_GetLocationInPage(dest, buf, buf + 4, buf + 8, buf + 12, buf + 16, buf + 20);
+        const hasY = ok && this.mem.getValue(buf + 4, 'i32') !== 0;
+        return { tipo: 'pagina', pageIndex: i, yPt: hasY ? this.mem.getValue(buf + 16, 'float') : null };
+      } finally {
+        this.mem.free(buf);
+      }
+    };
+    const action = this.p.FPDFLink_GetAction(link);
+    if (!action) {
+      const dest = this.p.FPDFLink_GetDest(doc, link);
+      return dest ? dePagina(dest) : { tipo: 'otro' };
+    }
+    switch (this.p.FPDFAction_GetType(action)) {
+      case PDFACTION_GOTO: { const dest = this.p.FPDFAction_GetDest(doc, action); return dest ? dePagina(dest) : { tipo: 'otro' }; }
+      case PDFACTION_URI: {
+        const uri = leerCadenaPdfium(this.mem, (buf, len) => this.p.FPDFAction_GetURIPath(doc, action, buf, len), (ptr) => this.mem.UTF8ToString(ptr));
+        return validarUrlEnlace(uri) !== null ? { tipo: 'uri', uri } : { tipo: 'otro' };
+      }
+      default: return { tipo: 'otro' };
+    }
   }
 
   addNote(doc: DocHandle, pageIndex: number, spec: { xPt: number; yPt: number; text: string }): number {
