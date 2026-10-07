@@ -1111,6 +1111,38 @@ function docxListasCelda() {
 }
 
 /**
+ * `word-rpr-estilo.docx` (E-104): formato de carácter heredado de ESTILOS. Una tabla de una fila con 3 celdas y, debajo, los mismos
+ * tres textos en el cuerpo: (1) estilo de párrafo "Negro" (negrita, 20 pt, hereda de "Base" de 12 pt), (2) run con `rStyle`
+ * "Enfasis" (cursiva, 16 pt) sobre texto normal, (3) estilo "Negro" + run con `w:b` directo (toggle: la negrita se apaga).
+ * Sin avisos. Ver `tests/unit/ConversorDocxNavegador-rpr-estilo.test.ts`.
+ */
+export const DOCX_RPR_ESTILO = { negro: 'EstiloNegro', enfasis: 'RunEnfasis', toggle: 'Conmuta' };
+function docxRprEstilo() {
+  const styles = `<?xml version="1.0" encoding="UTF-8"?>
+<w:styles>
+  <w:style w:type="paragraph" w:styleId="Base"><w:name w:val="Base"/><w:rPr><w:sz w:val="24"/></w:rPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Negro"><w:name w:val="Negro"/><w:basedOn w:val="Base"/><w:rPr><w:b/><w:sz w:val="40"/></w:rPr></w:style>
+  <w:style w:type="character" w:styleId="Enfasis"><w:name w:val="Enfasis"/><w:rPr><w:i/><w:sz w:val="32"/></w:rPr></w:style>
+</w:styles>`;
+  const pEstilo = (t) => `<w:p><w:pPr><w:pStyle w:val="Negro"/>${ESP_EXACTO}</w:pPr><w:r><w:t>${t}</w:t></w:r></w:p>`;
+  const pRun = (t) => `<w:p><w:pPr>${ESP_EXACTO}</w:pPr><w:r><w:rPr><w:rStyle w:val="Enfasis"/></w:rPr><w:t>${t}</w:t></w:r></w:p>`;
+  const pConmuta = (t) => `<w:p><w:pPr><w:pStyle w:val="Negro"/>${ESP_EXACTO}</w:pPr><w:r><w:rPr><w:b w:val="0"/></w:rPr><w:t>${t}</w:t></w:r></w:p>`;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:tbl><w:tblGrid>${'<w:gridCol w:w="3000"/>'.repeat(3)}</w:tblGrid><w:tr>
+    <w:tc>${pEstilo(DOCX_RPR_ESTILO.negro)}</w:tc><w:tc>${pRun(DOCX_RPR_ESTILO.enfasis)}</w:tc><w:tc>${pConmuta(DOCX_RPR_ESTILO.toggle)}</w:tc>
+  </w:tr></w:tbl>
+  ${pEstilo(DOCX_RPR_ESTILO.negro + 'C')}${pRun(DOCX_RPR_ESTILO.enfasis + 'C')}${pConmuta(DOCX_RPR_ESTILO.toggle + 'C')}
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/styles.xml', datos: Buffer.from(styles, 'utf-8') }
+  ]);
+}
+
+/**
  * `word-parrafo-celda.docx` (E-103): una tabla de UNA fila y 4 celdas de 115 pt (x = 72, 187, 302, 417; relleno 5 pt) que prueba el
  * formato de párrafo DENTRO de la celda: A centrada, B a la derecha, C justificada con sangría derecha de 36 pt y D a la
  * izquierda con espaciado 12 antes / 6 después e interlineado 1,5. Detrás, un párrafo del cuerpo para medir la altura de la fila.
@@ -1850,6 +1882,7 @@ async function main() {
     'word-numeracion-tabs.docx': docxNumeracionTabs(),
     'word-listas-celda.docx': docxListasCelda(),
     'word-parrafo-celda.docx': docxParrafoCelda(),
+    'word-rpr-estilo.docx': docxRprEstilo(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {

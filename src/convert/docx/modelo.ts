@@ -324,6 +324,8 @@ interface EstiloDef {
   rPr: XmlElemento | null;
   /** `w:tblPr` del estilo (estilos de TABLA: de ahí vienen los bordes de "Table Grid"). */
   tblPr: XmlElemento | null;
+  /** El estilo de tabla trae `w:tblStylePr` (formato condicional: primera fila, bandas...) con `w:rPr`: no se aplica (E-104). */
+  condicionalRPr: boolean;
 }
 
 /** Cadena de estilos de RAÍZ (más base) a HOJA (`styleId`), siguiendo `w:basedOn`. Cota anti-ciclo: 50 saltos. */
@@ -384,7 +386,8 @@ function leerEstilos(root: XmlElemento): {
     estilos.set(styleId, {
       styleId, name: nameEl?.atributos['w:val'] ?? null, type,
       basedOn: basedOnEl?.atributos['w:val'] ?? null,
-      pPr: primerHijo(est, 'w:pPr'), rPr: primerHijo(est, 'w:rPr'), tblPr: primerHijo(est, 'w:tblPr')
+      pPr: primerHijo(est, 'w:pPr'), rPr: primerHijo(est, 'w:rPr'), tblPr: primerHijo(est, 'w:tblPr'),
+      condicionalRPr: hijosElemento(est, 'w:tblStylePr').some((x) => primerHijo(x, 'w:rPr') !== null)
     });
     if (type === 'paragraph' && (est.atributos['w:default'] === '1' || est.atributos['w:default'] === 'true')) {
       estiloParrafoPorDefecto = styleId;
@@ -493,19 +496,75 @@ function calcularInfoLista(numId: string, ilvl: number, ctx: Contexto): InfoList
 // Propiedades de párrafo (w:pPr) y de run (w:rPr)
 // ---------------------------------------------------------------------------
 
-interface RPrAcum { bold: boolean; italic: boolean; underline: boolean; sizePt: number; color: RGB; fontName: string | undefined }
+/**
+ * Formato de carácter acumulado. `b`/`i` son propiedades CONMUTABLES (OOXML 17.7.3): su valor efectivo no es "el último que
+ * hable" sino el XOR de lo que dicen los niveles tabla / párrafo / carácter (dentro de un mismo nivel, la cadena `basedOn`
+ * se sobrescribe), partiendo de docDefaults; un valor DIRECTO del run manda por encima de todo. `tg` guarda cada nivel.
+ */
+interface RPrAcum {
+  bold: boolean; italic: boolean; underline: boolean; sizePt: number; color: RGB; fontName: string | undefined;
+  tg: { b: TogNiveles; i: TogNiveles };
+}
+/** Valor de una propiedad conmutable en cada nivel (`null` = el nivel no la menciona): docDefaults, tabla, párrafo, carácter, directo. */
+interface TogNiveles { base: boolean; tabla: boolean | null; parrafo: boolean | null; caracter: boolean | null; directo: boolean | null }
 
-function rPrPorDefecto(): RPrAcum { return { bold: false, italic: false, underline: false, sizePt: 11, color: [0, 0, 0], fontName: undefined }; }
+function togVacio(): TogNiveles { return { base: false, tabla: null, parrafo: null, caracter: null, directo: null }; }
+function rPrPorDefecto(): RPrAcum { return { bold: false, italic: false, underline: false, sizePt: 11, color: [0, 0, 0], fontName: undefined, tg: { b: togVacio(), i: togVacio() } }; }
+function clonarRPr(a: RPrAcum): RPrAcum { return { ...a, tg: { b: { ...a.tg.b }, i: { ...a.tg.i } } }; }
+function valorToggle(t: TogNiveles): boolean {
+  if (t.directo !== null) return t.directo;
+  return [t.tabla, t.parrafo, t.caracter].reduce<boolean>((x, n) => (n === null ? x : x !== n), t.base);
+}
 
-function aplicarRPr(acc: RPrAcum, el: XmlElemento): void {
-  const b = primerHijo(el, 'w:b'); if (b) acc.bold = leerToggle(b);
-  const i = primerHijo(el, 'w:i'); if (i) acc.italic = leerToggle(i);
+type NivelRPr = 'base' | 'tabla' | 'parrafo' | 'caracter' | 'directo';
+
+/** Aplica un `w:rPr` en un nivel de la jerarquía: lo no conmutable sobrescribe; b/i se apuntan en su nivel y se recalcula el XOR. */
+function aplicarRPr(acc: RPrAcum, el: XmlElemento, nivel: NivelRPr): void {
+  const b = primerHijo(el, 'w:b'); if (b) acc.tg.b[nivel] = leerToggle(b);
+  const i = primerHijo(el, 'w:i'); if (i) acc.tg.i[nivel] = leerToggle(i);
+  acc.bold = valorToggle(acc.tg.b); acc.italic = valorToggle(acc.tg.i);
   const u = primerHijo(el, 'w:u'); if (u) acc.underline = (u.atributos['w:val'] ?? 'single') !== 'none';
   const sz = primerHijo(el, 'w:sz'); if (sz?.atributos['w:val'] !== undefined) acc.sizePt = mediosPuntosAPt(Number(sz.atributos['w:val']));
   const color = primerHijo(el, 'w:color');
   if (color?.atributos['w:val'] !== undefined && color.atributos['w:val'] !== 'auto') acc.color = hexAColor(color.atributos['w:val']);
   const rFonts = primerHijo(el, 'w:rFonts');
   if (rFonts) { const nombre = rFonts.atributos['w:ascii'] ?? rFonts.atributos['w:hAnsi']; if (nombre) acc.fontName = nombre; }
+}
+
+/** Entradas de `rPrEfectivo`; todas opcionales (cada una es un nivel de la herencia). */
+interface EntradaRPr {
+  /** Resultado previo (p. ej. el formato base del párrafo): se sigue desde él en lugar de empezar en docDefaults. */
+  base?: RPrAcum;
+  /** Estilo de tabla (solo dentro de una celda): su `w:rPr` y el de su cadena `basedOn`. */
+  estiloTabla?: string | null;
+  /** Estilo de párrafo EFECTIVO (el declarado o el por defecto), con su cadena `basedOn`. */
+  estiloParrafo?: string | null;
+  /** Marca de párrafo (`w:pPr/w:rPr`): línea base razonable para runs sin formato propio. */
+  marca?: XmlElemento | null;
+  /** Estilo de carácter del run (`w:rStyle`), con su cadena `basedOn`. */
+  estiloCaracter?: string | null;
+  /** `w:rPr` directo del run. */
+  directo?: XmlElemento | null;
+}
+
+/**
+ * ÚNICA fuente del formato de carácter efectivo (OOXML 17.7.2), igual que `pPrEfectivo` lo es del párrafo, para el cuerpo Y las
+ * celdas: docDefaults < estilo de tabla < estilo de párrafo (con basedOn) < estilo de carácter (con basedOn) < `rPr` directo.
+ * Las conmutables (b, i) siguen la regla de toggle (`RPrAcum`). El `tblStylePr` condicional no se aplica (se avisa al abrir la tabla).
+ */
+function rPrEfectivo(ctx: Pick<Contexto, 'estilos' | 'docDefaultsRPr'>, e: EntradaRPr): RPrAcum {
+  let acc: RPrAcum;
+  if (e.base) acc = clonarRPr(e.base);
+  else {
+    acc = rPrPorDefecto();
+    if (ctx.docDefaultsRPr) aplicarRPr(acc, ctx.docDefaultsRPr, 'base');
+  }
+  if (e.estiloTabla) for (const est of cadenaEstilo(e.estiloTabla, ctx.estilos)) if (est.rPr) aplicarRPr(acc, est.rPr, 'tabla');
+  if (e.estiloParrafo) for (const est of cadenaEstilo(e.estiloParrafo, ctx.estilos)) if (est.rPr) aplicarRPr(acc, est.rPr, 'parrafo');
+  if (e.marca) aplicarRPr(acc, e.marca, 'parrafo');
+  if (e.estiloCaracter) for (const est of cadenaEstilo(e.estiloCaracter, ctx.estilos)) if (est.rPr) aplicarRPr(acc, est.rPr, 'caracter');
+  if (e.directo) aplicarRPr(acc, e.directo, 'directo');
+  return acc;
 }
 
 interface PPrAcum {
@@ -626,6 +685,8 @@ interface Contexto {
   enCelda: boolean;
   /** `w:pPr` de la cadena del estilo de la tabla en curso (de la raíz a la hoja): base de los párrafos de sus celdas, entre docDefaults y el estilo de párrafo (E-103). */
   pPrTabla: XmlElemento[];
+  /** `w:tblStyle` de la tabla en curso (base del formato de carácter de sus celdas, E-104); `null` fuera de tablas o sin estilo. */
+  estiloTabla: string | null;
   /** Campos complejos (`w:fldChar`) abiertos, el más interno al final. `suprimir`: el resultado cacheado se descarta porque ya se emitió un `campo`. */
   camposAbiertos: { instr: string; separado: boolean; suprimir: boolean; emitido: boolean }[];
 }
@@ -656,6 +717,7 @@ const MENSAJES_PERDIDAS: [string, TipoAdvertencia, (c: number) => string][] = [
   ['bordeEstilo', 'aproximado', (c) => cuenta(c, 'Un borde de tabla con estilo no continuo (doble, punteado...) se dibujó como línea continua.', '{n} bordes de tabla con estilo no continuo (doble, punteado...) se dibujaron como línea continua.')],
   ['encabezadoFaltante', 'omitido', (c) => cuenta(c, 'Se omitió un encabezado de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} encabezados de página (no se encontró o no se pudo leer su contenido en el paquete).')],
   ['pieFaltante', 'omitido', (c) => cuenta(c, 'Se omitió un pie de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} pies de página (no se encontró o no se pudo leer su contenido en el paquete).')],
+  ['estiloTablaCondicional', 'aproximado', (c) => cuenta(c, 'Un estilo de tabla con formato de texto condicional (primera fila, bandas...) no se aplicó: solo se usa el formato base del estilo.', '{n} estilos de tabla con formato de texto condicional (primera fila, bandas...) no se aplicaron: solo se usa el formato base del estilo.')],
   ['vMergeConTexto', 'omitido', (c) => cuenta(c, 'Una celda de continuación de una combinación vertical traía texto propio, que no se muestra (como hace Word).', '{n} celdas de continuación de combinaciones verticales traían texto propio, que no se muestra (como hace Word).')]
 ];
 
@@ -686,12 +748,7 @@ function aplanarCuerpo(cuerpo: XmlElemento): XmlElemento[] {
 
 function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, partes: ParteParrafo[]): void {
   const rPrEl = primerHijo(runEl, 'w:rPr');
-  const acc: RPrAcum = { ...baseRuns };
-  if (rPrEl) {
-    const rStyleId = primerHijo(rPrEl, 'w:rStyle')?.atributos['w:val'];
-    if (rStyleId) for (const est of cadenaEstilo(rStyleId, ctx.estilos)) if (est.rPr) aplicarRPr(acc, est.rPr);
-    aplicarRPr(acc, rPrEl);
-  }
+  const acc = rPrEl ? rPrEfectivo(ctx, { base: baseRuns, estiloCaracter: primerHijo(rPrEl, 'w:rStyle')?.atributos['w:val'] ?? null, directo: rPrEl }) : baseRuns;
   const formato = formatoDeAcc(acc);
 
   for (const h of runEl.hijos) {
@@ -962,14 +1019,15 @@ function listaDeParrafo(acc: PPrAcum, ctx: Contexto): InfoLista | null {
   return lista;
 }
 
-function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
-  const { pPr, estiloEfectivo, cadena, acc } = pPrEfectivo(el, ctx);
+/** Formato base de los runs de un párrafo (cuerpo o celda): `rPrEfectivo` con el estilo de tabla (si es celda), el de párrafo y la marca de párrafo. */
+function baseRunsDeParrafo(estiloParrafo: string | null, pPr: XmlElemento | null, ctx: Contexto): RPrAcum {
+  return rPrEfectivo(ctx, { estiloTabla: ctx.enCelda ? ctx.estiloTabla : null, estiloParrafo, marca: pPr ? primerHijo(pPr, 'w:rPr') : null });
+}
 
-  const baseRuns = rPrPorDefecto();
-  if (ctx.docDefaultsRPr) aplicarRPr(baseRuns, ctx.docDefaultsRPr);
-  for (const est of cadena) if (est.rPr) aplicarRPr(baseRuns, est.rPr);
-  const marcaRPr = pPr ? primerHijo(pPr, 'w:rPr') : null; // formato del carácter de fin de párrafo: baseline razonable para runs sin rPr propio
-  if (marcaRPr) aplicarRPr(baseRuns, marcaRPr);
+function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
+  const { pPr, estiloEfectivo, acc } = pPrEfectivo(el, ctx);
+
+  const baseRuns = baseRunsDeParrafo(estiloEfectivo, pPr, ctx);
 
   const nivelEncabezado = nivelEncabezadoDeEstilo(estiloEfectivo, ctx.estilos) ?? (acc.outlineLvl !== null ? Math.min(6, acc.outlineLvl + 1) : null);
 
@@ -1080,7 +1138,7 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
     if (hijo.nombre === 'w:p') {
       if (bloquesVistos > 0) partes.push({ tipo: 'saltoLinea' });
       // Formato de la celda (E-102, E-103): cada párrafo trae SU lista, sangrías, alineación, espaciado e interlineado, con el mismo `pPrEfectivo` que el cuerpo.
-      const { acc: accP } = pPrEfectivo(hijo, ctx);
+      const { acc: accP, pPr: pPrP, estiloEfectivo: estiloP } = pPrEfectivo(hijo, ctx);
       if (bloquesVistos === 0) alineacion = accP.alineacion;
       partes.push({
         tipo: 'inicioParrafo', lista: listaDeParrafo(accP, ctx),
@@ -1088,8 +1146,7 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
         alineacion: accP.alineacion, espacioAntesPt: accP.espacioAntesPt, espacioDespuesPt: accP.espacioDespuesPt,
         interlineadoFactor: accP.interlineadoFactor, interlineadoExactoPt: accP.interlineadoExactoPt
       });
-      const baseRuns = rPrPorDefecto();
-      if (ctx.docDefaultsRPr) aplicarRPr(baseRuns, ctx.docDefaultsRPr);
+      const baseRuns = baseRunsDeParrafo(estiloP, pPrP, ctx);
       const desde = partes.length;
       recorrerContenidoParrafo(hijo, baseRuns, ctx, partes);
       // Tabulaciones reales (E-101): cada `w:tab` de la celda lleva las paradas de SU párrafo.
@@ -1146,8 +1203,12 @@ function procesarTablaReal(tbl: XmlElemento, ctx: Contexto): Tabla {
   const bordesTabla = leerBordesTablaPorLado(tblBorders, ctx);
   const pPrTablaAntes = ctx.pPrTabla;
   ctx.pPrTabla = estiloTabla ? cadenaEstilo(estiloTabla, ctx.estilos).flatMap((est) => (est.pPr ? [est.pPr] : [])) : [];
+  const estiloTablaAntes = ctx.estiloTabla;
+  ctx.estiloTabla = estiloTabla ?? null;
+  if (estiloTabla && cadenaEstilo(estiloTabla, ctx.estilos).some((est) => est.condicionalRPr)) anotar(ctx, 'estiloTablaCondicional');
   const filas = hijosElemento(tbl, 'w:tr').map((fila) => procesarFila(fila, ctx));
   ctx.pPrTabla = pPrTablaAntes;
+  ctx.estiloTabla = estiloTablaAntes;
   if (anchosColPt.length === 0) {
     // Sin w:tblGrid (raro en un .docx real: Word siempre lo escribe): ancho
     // de 1" por columna como valor por defecto razonable, mejor que fallar.
@@ -1318,7 +1379,7 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
     : { numMap: new Map<string, string>(), abstractNums: new Map<string, AbstractNumDef>() };
   const rels = relsXml ? leerRelaciones(relsXml) : null;
 
-  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), vinetasAvisadas: new Set(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, pPrTabla: [], camposAbiertos: [] };
+  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), vinetasAvisadas: new Set(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, pPrTabla: [], estiloTabla: null, camposAbiertos: [] };
 
   const bloques: BloqueDocx[] = [];
   // Una marca por sección, en orden de documento: su `w:sectPr` y dónde acaba (índice en `bloques`, exclusivo).
