@@ -3073,3 +3073,30 @@ intercambiando ancho y alto de `pageBox` con 90/270.
 **Cómo se detecta ahora.** `tests/unit/OcrRotada.test.ts`: proveedor OCR falso con cajas conocidas sobre páginas `/Rotate` 0/90/180/270,
 con y sin CropBox desplazada; `findText` + `PageGeometry.rectPtToCss` deben caer sobre cada caja (izquierda ±2 pt, dentro de su franja
 vertical, horizontal).
+
+### E-090 · Deshacer una edición de texto no devolvía la página idéntica en PDF con límite de inglete o planitud
+
+**Síntoma.** En un PDF cuyo content stream lleva estado gráfico `M` (límite de inglete) o `i` (planitud), p. ej. el sello de
+`acrobat-enu-template2.pdf` (`1.5 i … 4 M`), editar una línea y deshacer dejaba la página distinta de la original: 39 px cambiados (máx.
+64/765 por canal) en las esquinas agudas de los trazos, lejos del texto editado. «Guardar sin editar» es exacto (0 px en 29/29 PDF).
+
+**Causa raíz.** `FPDFPage_GenerateContent` de PDFium regenera el content stream de la página pero NO escribe `M` ni `i`: el límite de
+inglete vuelve al valor por defecto (10) y las esquinas agudas pasan de bisel a punta. Deshacer re-editaba en sitio (`editTextRun` con el
+texto viejo, o la operación inversa en color/mover), que vuelve a regenerar la página: nunca restauraba los bytes originales.
+
+**Arreglo.** Deshacer por SNAPSHOT (`c.reload(before)`, con `before` = bytes antes de ejecutar) en `EditTextRunCmd`, `ReemplazarTextoCmd`
+(siempre, no solo con sustitución de fuente), `SetColorCmd` y `MoveRunCmd`; el resto de comandos de texto (`EditarLineaCmd`,
+`PropiedadesLineaCmd`, `SetRunFont`, `SetRunFontSize`, `ReplaceRunFont`, `DeleteRun`) ya lo hacían. La UI toma el snapshot antes de
+`editTextRun` y lo pasa a `EditTextRunCmd`; la coalescencia conserva el del PRIMER comando. La recarga sigue siendo perezosa (E-043/E-044):
+medido en `grande.pdf` (500 páginas), deshacer una edición tarda ~340 ms hasta ver el texto (139 ms re-editando en sitio) con
+`getPageText` +2 y `renderPage` +7, nunca las 500 páginas.
+
+**Cómo se detecta ahora.** Fixture `inglete.pdf` (texto + trazo de ~20° con `4 M` y `1.5 i` escritos a mano),
+`tests/unit/Inglete.test.ts` (editar, color y mover → deshacer = 0 px y mismos bytes; coalescencia; camino `pushExecuted` de la UI) y
+`tests/e2e/next/deshacer-snapshot.spec.ts` (canvas idéntico tras Ctrl+Z en Chromium; coste acotado en `grande.pdf`).
+
+**Límite (sin API en PDFium).** Tras EDITAR (sin deshacer) una página con estos operadores, sus esquinas agudas cambian sutilmente al
+regenerarse el contenido (medido: 39 px, máx. 64/765). PDFium ni `@embedpdf/pdfium` exponen el límite de inglete ni la planitud, y no hay
+forma de regenerar la página sin `GenerateContent`. Lo documenta el test «E-090 limitación conocida» de `Inglete.test.ts`: si falla,
+PDFium ya conserva `M`/`i` y hay que quitar esta limitación. Quedan fuera del arreglo (no son edición de texto): `SetObjectRectCmd`,
+`InsertTextCmd` y similares, que deshacen con la operación inversa.

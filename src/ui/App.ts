@@ -1348,10 +1348,11 @@ export class App {
     if (!s || !this.bus) return;
     // N1: una línea de VARIOS objetos (Chrome: uno por glifo) se edita con el diff mínimo y deshacer por snapshot.
     if (req.linea.runIds.length > 1) { await this.editarLineaCompuesta(req); return; }
+    const antes = s.engine.save(s.doc); // E-090: snapshot previo; deshacer recarga estos bytes, no re-edita en sitio
     const res = s.engine.editTextRun(s.doc, req.pageIndex, req.runId, req.newText);
     if (res.ok) {
       s.model.updateRunText(req.pageIndex, req.runId, req.newText);
-      this.bus.pushExecuted(new EditTextRunCmd(req.pageIndex, req.runId, req.newText, req.oldText));
+      this.bus.pushExecuted(new EditTextRunCmd(req.pageIndex, req.runId, req.newText, req.oldText, antes));
       this.setStatus('Editado.');
       return;
     }
