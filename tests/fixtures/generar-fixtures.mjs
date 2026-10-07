@@ -1469,6 +1469,28 @@ async function pdfLigaduras() {
   return doc.save({ useObjectStreams: false });
 }
 
+/**
+ * E-090: una línea de texto y un trazo poligonal con una esquina MUY aguda (~20 grados), con límite de inglete
+ * `4 M` y planitud `1.5 i` escritos a mano en el content stream. PDFium no regenera `M` ni `i` en
+ * `GenerateContent`: con el límite por defecto (10) la esquina pasa de bisel a punta.
+ * Unidades del trazo: puntos PDF (origen abajo-izquierda).
+ */
+async function pdfInglete() {
+  const doc = await PDFDocument.create();
+  const ctx = doc.context;
+  const fuente = await doc.embedFont(StandardFonts.Helvetica);
+  const cuerpo = [
+    '1.5 i 4 M 0 j 0 J',
+    'BT /F1 18 Tf 1 0 0 1 40 160 Tm (INGLETE) Tj ET',
+    '8 w 0 0 0 RG',
+    '40 40 m 240 40 l 40 112 l S'
+  ].join('\n');
+  const page = doc.addPage([320, 200]);
+  page.node.setFontDictionary(PDFName.of('F1'), fuente.ref);
+  page.node.set(PDFName.of('Contents'), ctx.register(ctx.stream(cuerpo)));
+  return doc.save({ useObjectStreams: false });
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -1486,6 +1508,7 @@ async function main() {
     'justificado-tw.pdf': await pdfJustificadoTw(),
     'sin-espacio-tex.pdf': await pdfSinEspacioTex(),
     'ligaduras.pdf': await pdfLigaduras(),
+    'inglete.pdf': await pdfInglete(),
     'marcadores.pdf': await pdfMarcadores(),
     'outline-ciclo.pdf': await pdfOutlineCiclo(),
     'marcadores-uri.pdf': await pdfMarcadoresConAccion({ S: 'URI', URI: PDFString.of('https://example.com/') }),

@@ -1,9 +1,13 @@
 import type { Command, Ctx } from './Command';
 
-/** Cambia el color de un run. Deshacer restaura el color previo (operación inversa). */
+/**
+ * Cambia el color de un run. Deshacer por SNAPSHOT (E-090): `GenerateContent` de PDFium no regenera `M`/`i`, así que
+ * aplicar el color previo dejaba la página regenerada y no la original.
+ */
 export class SetColorCmd implements Command {
   readonly id = 'set-color';
   readonly label = 'Color del texto';
+  private before: Uint8Array<ArrayBuffer> | null = null;
 
   constructor(
     readonly pageIndex: number,
@@ -17,6 +21,13 @@ export class SetColorCmd implements Command {
     c.refreshPage(this.pageIndex);
   }
 
-  execute(c: Ctx): void { this.aplicar(c, this.newColor); }
-  undo(c: Ctx): void { this.aplicar(c, this.oldColor); }
+  execute(c: Ctx): void {
+    this.before = c.engine.save(c.doc);
+    this.aplicar(c, this.newColor);
+  }
+
+  async undo(c: Ctx): Promise<void> {
+    if (this.before) await c.reload(this.before);
+    else this.aplicar(c, this.oldColor);
+  }
 }

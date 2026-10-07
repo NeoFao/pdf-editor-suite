@@ -50,15 +50,13 @@ export interface OpcionesReemplazo {
  * runs aún pendientes nunca se mueven. Tras cada página se hace UN
  * `refreshPage` (E-044), no un `refresh()` del documento entero.
  *
- * Deshacer: si todo fue en sitio, se re-edita cada run al texto original
- * (barato, página a página). Si hubo alguna sustitución de fuente (cambia la
- * estructura de la página) se recarga el snapshot previo.
+ * Deshacer SIEMPRE por snapshot (E-090): re-editar en sitio dejaba la página
+ * regenerada por PDFium, que no escribe `M`/`i` del estado gráfico. La recarga
+ * es perezosa (`refresh()` no relee el texto de las N páginas, E-043/E-044).
  */
 export class ReemplazarTextoCmd implements Command {
   readonly id = 'reemplazar-texto';
   private before: Uint8Array<ArrayBuffer> | null = null;
-  private usoSustitucion = false;
-  private aplicados: CambioTexto[] = [];
   /** Cambios que no se pudieron aplicar (el run quedó intacto), tras `execute()`. */
   fallidosCambios: CambioTexto[] = [];
   resumen: ResumenReemplazo = { editados: 0, sustituidos: 0, fallidos: 0, fuentes: [] };
@@ -83,8 +81,6 @@ export class ReemplazarTextoCmd implements Command {
 
   async execute(c: Ctx): Promise<void> {
     this.before = c.engine.save(c.doc);
-    this.usoSustitucion = false;
-    this.aplicados = [];
     this.fallidosCambios = [];
     const resumen: ResumenReemplazo = { editados: 0, sustituidos: 0, fallidos: 0, fuentes: [] };
     const paginas = this.porPagina(this.cambios);
@@ -95,11 +91,10 @@ export class ReemplazarTextoCmd implements Command {
       for (const ch of lista) {
         if (ch.linea) {
           const r = this.editarLinea(c, ch);
-          if (r === 'ok') { resumen.editados++; this.aplicados.push(ch); continue; }
+          if (r === 'ok') { resumen.editados++; continue; }
           if (typeof r === 'object') {
             resumen.sustituidos++;
             if (!resumen.fuentes.includes(r.fuente)) resumen.fuentes.push(r.fuente);
-            this.aplicados.push(ch);
             continue;
           }
           resumen.fallidos++;
@@ -107,14 +102,12 @@ export class ReemplazarTextoCmd implements Command {
           continue;
         }
         const res = c.engine.editTextRun(c.doc, pageIndex, ch.runId, ch.newText);
-        if (res.ok) { resumen.editados++; this.aplicados.push(ch); continue; }
+        if (res.ok) { resumen.editados++; continue; }
         if (res.reason === 'glyph-missing') {
           const sust = c.engine.replaceRunWithStandardFont(c.doc, pageIndex, ch.runId, ch.newText);
           if (sust.ok) {
             resumen.sustituidos++;
-            this.usoSustitucion = true;
             if (!resumen.fuentes.includes(sust.fontName)) resumen.fuentes.push(sust.fontName);
-            this.aplicados.push(ch);
             continue;
           }
         }
@@ -142,10 +135,7 @@ export class ReemplazarTextoCmd implements Command {
       let res = c.engine.editLine(c.doc, ch.pageIndex, linea, ch.newText);
       if (!res.ok && res.reason === 'glyph-missing') res = c.engine.editLine(c.doc, ch.pageIndex, linea, ch.newText, { fuenteEstandar: true });
       if (res.ok) {
-        // Una línea de varios objetos cambia la estructura (objetos eliminados, sufijo trasladado): deshacer por snapshot.
         const fuente = 'fuenteEstandar' in res ? res.fuenteEstandar : undefined;
-        // E-086: palabras nuevas por una fuente sin glifo de espacio (`objetosAnadidos`) también cambian la estructura.
-        if (linea.runIds.length > 1 || fuente || 'objetosAnadidos' in res) this.usoSustitucion = true;
         return fuente ? { fuente } : 'ok';
       }
       if (res.reason !== 'stale' && res.reason !== 'not-a-text-run') return 'fallo';
@@ -160,13 +150,6 @@ export class ReemplazarTextoCmd implements Command {
   }
 
   async undo(c: Ctx): Promise<void> {
-    if (this.usoSustitucion) {
-      if (this.before) await c.reload(this.before);
-      return;
-    }
-    for (const [pageIndex, lista] of this.porPagina(this.aplicados)) {
-      for (const ch of lista) c.engine.editTextRun(c.doc, pageIndex, ch.runId, ch.oldText);
-      c.refreshPage(pageIndex);
-    }
+    if (this.before) await c.reload(this.before);
   }
 }
