@@ -8,7 +8,7 @@
  *   (4000 = MMMM) hasta 32767; por encima el número se deja en cifras arábigas. (Convención adoptada: no se ha
  *   contrastado con Word para esos valores raros.)
  * - 0 no tiene cifra en letras ni romanos: cadena vacía (`w:start="0"` con esos formatos).
- * - `bullet`: siempre "•" (el `lvlText` de una viñeta es un carácter de una fuente de símbolos que no se embebe).
+ * - `bullet`: "•" aquí; el carácter real de la viñeta (Wingdings, Symbol...) lo resuelve `vinetas.ts` (E-102).
  */
 
 /** Formatos de `w:numFmt` que este módulo sabe formatear. */

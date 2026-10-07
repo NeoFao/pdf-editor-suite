@@ -1,5 +1,6 @@
 import { DocxError } from './DocxError';
 import { formatoNumero, aplicarLvlText } from './numeracion';
+import { resolverVineta, type VinetaResuelta } from './vinetas';
 import { omitido, aproximado, type Advertencia, type TipoAdvertencia } from '../advertencia';
 import { parseXml, hijosElemento, primerHijo, textoDirecto, buscarDescendiente, type XmlElemento } from './xml';
 import { classifyFont } from '../../engine/fontClassify';
@@ -107,6 +108,11 @@ export type ParteParrafo =
   | { tipo: 'tab'; ptab?: { alineacion: 'left' | 'center' | 'right'; leader: LiderTab }; paradas?: ParadaTab[] }
   | { tipo: 'saltoLinea' }
   | { tipo: 'saltoPagina' }
+  /**
+   * Solo dentro de una celda de tabla (E-102): arranque de un párrafo de LISTA de la celda. Lleva su marcador (el mismo cálculo y
+   * los mismos contadores que un párrafo de cuerpo) y la sangría del nivel (pt PDF, desde el borde interior de la celda).
+   */
+  | { tipo: 'inicioParrafo'; lista: InfoLista | null; sangriaIzqPt: number; sangriaPrimeraLineaPt: number }
   /** Imagen inline (`w:drawing > wp:inline`, fase 2a). `refId` es la ruta dentro del ZIP del .docx (p. ej. `word/media/image1.png`); `wPt`/`hPt` son el tamaño DECLARADO por Word (`wp:extent`, EMU → pt), sin clampar todavía al ancho útil de página — eso lo hace `render.ts`, que conoce la geometría. */
   | { tipo: 'imagen'; refId: string; wPt: number; hPt: number;
     /** Fase 2b: presente si es una imagen FLOTANTE (`wp:anchor`) — se coloca en su posición sin ajuste de texto. Sin esto, es inline. */
@@ -114,7 +120,11 @@ export type ParteParrafo =
   /** Campo de número de página (fase 2b, solo en encabezados/pies): `PAGE` = página actual, `NUMPAGES` = total. `formato` es el del run, para pintar el número con el mismo estilo. */
   | { tipo: 'campo'; campo: 'PAGE' | 'NUMPAGES'; formato: RunFormato };
 
-export interface InfoLista { textoMarcador: string }
+/**
+ * Marcador de un párrafo de lista. `fuenteMarcador`/`escalaMarcador` (E-102): fuente estándar PDF y factor de tamaño con que se
+ * dibuja (viñetas de Wingdings/Symbol → ZapfDingbats...); sin ellos, Helvetica a tamaño 1.
+ */
+export interface InfoLista { textoMarcador: string; fuenteMarcador?: string; escalaMarcador?: number }
 
 export interface Parrafo {
   tipo: 'parrafo';
@@ -374,7 +384,7 @@ function leerEstilos(root: XmlElemento): {
 // ---------------------------------------------------------------------------
 
 /** `inicio`: `w:start` (1 si falta); `lvlText`: plantilla del marcador (`%1.%2.`), `null` si el nivel no la declara. */
-interface NivelListaDef { formato: string; sangriaIzqPt: number; sangriaColganteP: number; inicio: number; lvlText: string | null }
+interface NivelListaDef { formato: string; sangriaIzqPt: number; sangriaColganteP: number; inicio: number; lvlText: string | null; fuenteVineta: string | null }
 interface AbstractNumDef { niveles: Map<number, NivelListaDef> }
 
 function leerNumbering(root: XmlElemento): { numMap: Map<string, string>; abstractNums: Map<string, AbstractNumDef> } {
@@ -390,11 +400,13 @@ function leerNumbering(root: XmlElemento): { numMap: Map<string, string>; abstra
       const ind = pPr ? primerHijo(pPr, 'w:ind') : null;
       const left = ind?.atributos['w:left'] ?? ind?.atributos['w:start'];
       const hanging = ind?.atributos['w:hanging'];
+      const rFontsVineta = (() => { const r = primerHijo(lvl, 'w:rPr'); return r ? primerHijo(r, 'w:rFonts') : null; })();
       const inicioAttr = Number(primerHijo(lvl, 'w:start')?.atributos['w:val']);
       niveles.set(ilvl, {
         formato: numFmt,
         inicio: Number.isFinite(inicioAttr) ? inicioAttr : 1,
         lvlText: primerHijo(lvl, 'w:lvlText')?.atributos['w:val'] ?? null,
+        fuenteVineta: rFontsVineta?.atributos['w:ascii'] ?? rFontsVineta?.atributos['w:hAnsi'] ?? null,
         sangriaIzqPt: left !== undefined ? twipsAPt(Number(left)) : (ilvl + 1) * 18,
         sangriaColganteP: hanging !== undefined ? twipsAPt(Number(hanging)) : 18
       });
@@ -422,7 +434,7 @@ function obtenerNivelLista(numId: string, ilvl: number, ctx: Contexto): NivelLis
  * `w:lvlText` sustituyendo `%N` por el contador del nivel N-1 con el formato de ESE nivel. Estado en
  * `ctx.contadoresListas`, uno por documento. Un `numFmt` no soportado se numera con cifras y se avisa.
  */
-function siguienteMarcador(numId: string, ilvl: number, nivel: NivelListaDef, ctx: Contexto): string {
+function siguienteMarcador(numId: string, ilvl: number, nivel: NivelListaDef, ctx: Contexto): InfoLista {
   let contadores = ctx.contadoresListas.get(numId);
   if (!contadores) { contadores = new Array<number | null>(9).fill(null); ctx.contadoresListas.set(numId, contadores); }
   const previo = contadores[ilvl] ?? null;
@@ -436,15 +448,30 @@ function siguienteMarcador(numId: string, ilvl: number, nivel: NivelListaDef, ct
     if (f === null) { anotar(ctx, 'listaFormato'); return String(valor); }
     return f;
   };
-  if (nivel.formato === 'bullet') return '•';
+  if (nivel.formato === 'bullet') {
+    const v = resolverVineta(nivel.lvlText, nivel.fuenteVineta);
+    if (v.aproximada) avisarVineta(v, nivel.fuenteVineta, ctx);
+    return { textoMarcador: v.texto, fuenteMarcador: v.font, escalaMarcador: v.escala };
+  }
   const plantilla = nivel.lvlText ?? `%${ilvl + 1}.`;
-  return aplicarLvlText(plantilla, Array.from({ length: ilvl + 1 }, (_v, k) => formateado(k)));
+  return { textoMarcador: aplicarLvlText(plantilla, Array.from({ length: ilvl + 1 }, (_v, k) => formateado(k))) };
+}
+
+/** Aviso `vinetaFuente` (aproximado), uno por par original/dibujado: dice QUÉ carácter pedía Word y CUÁL se dibujó. */
+function avisarVineta(v: VinetaResuelta, fuente: string | null, ctx: Contexto): void {
+  const cod = (c: string): string => `U+${c.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`;
+  const clave = `${fuente ?? ''}|${v.oficial}|${v.texto}|${v.font}`;
+  if (ctx.vinetasAvisadas.has(clave)) return;
+  ctx.vinetasAvisadas.add(clave);
+  const original = /[-]/.test(v.oficial) ? cod(v.oficial) : `"${v.oficial}" (${cod(v.oficial)})`;
+  const dibujado = v.font === 'Helvetica' ? `"${v.texto}"` : `"${v.texto}" (${v.font}${v.escala !== 1 ? ` al ${Math.round(v.escala * 100)} %` : ''})`;
+  ctx.advertenciasExtra.push(aproximado(`vinetaFuente: la viñeta ${original}${fuente ? ` de ${fuente}` : ''} se dibujó como ${dibujado}: ninguna fuente estándar del PDF tiene ese glifo exacto.`));
 }
 
 function calcularInfoLista(numId: string, ilvl: number, ctx: Contexto): InfoLista | null {
   const nivel = obtenerNivelLista(numId, ilvl, ctx);
   if (!nivel) return null;
-  return { textoMarcador: siguienteMarcador(numId, ilvl, nivel, ctx) };
+  return siguienteMarcador(numId, ilvl, nivel, ctx);
 }
 
 // ---------------------------------------------------------------------------
@@ -565,6 +592,8 @@ interface Contexto {
   numMap: Map<string, string>;
   abstractNums: Map<string, AbstractNumDef>;
   contadoresListas: Map<string, (number | null)[]>;
+  /** Viñetas ya avisadas (`vinetaFuente`), para un aviso por par original/dibujado. */
+  vinetasAvisadas: Set<string>;
   /** `word/_rels/document.xml.rels` ya parseado (`null` si el .docx no lo trae, p. ej. sin imágenes ni enlaces). */
   rels: Map<string, Relacion> | null;
   /**
@@ -884,7 +913,11 @@ function paradasDeParrafo(el: XmlElemento, ctx: Contexto): ParadaTab[] {
   return [...acc.tabs.values()].sort((a, b) => a.posPt - b.posPt);
 }
 
-function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
+/**
+ * Propiedades de párrafo EFECTIVAS de un `w:p` (docDefaults, cadena de estilos y propias; la sangría de su nivel de lista si no
+ * trae `w:ind`). Es el camino ÚNICO del cuerpo y de las celdas de tabla (E-102).
+ */
+function pPrEfectivo(el: XmlElemento, ctx: Contexto): { pPr: XmlElemento | null; estiloEfectivo: string | null; cadena: EstiloDef[]; acc: PPrAcum } {
   const pPr = primerHijo(el, 'w:pPr');
   const pStyleIdPropio = pPr ? primerHijo(pPr, 'w:pStyle')?.atributos['w:val'] ?? null : null;
   const estiloEfectivo = pStyleIdPropio ?? ctx.estiloParrafoPorDefecto;
@@ -900,6 +933,18 @@ function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
     const nivel = obtenerNivelLista(acc.numId, acc.ilvl, ctx);
     if (nivel) { acc.sangriaIzqPt = nivel.sangriaIzqPt; acc.sangriaPrimeraLineaPt = -nivel.sangriaColganteP; }
   }
+  return { pPr, estiloEfectivo, cadena, acc };
+}
+
+/** Marcador del párrafo de lista (avanza el contador de su `numId`); `null` sin lista o con numeración sin definir (se avisa). */
+function listaDeParrafo(acc: PPrAcum, ctx: Contexto): InfoLista | null {
+  const lista = acc.numId ? calcularInfoLista(acc.numId, acc.ilvl, ctx) : null;
+  if (acc.numId && !lista) anotar(ctx, 'listaSinDef');
+  return lista;
+}
+
+function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
+  const { pPr, estiloEfectivo, cadena, acc } = pPrEfectivo(el, ctx);
 
   const baseRuns = rPrPorDefecto();
   if (ctx.docDefaultsRPr) aplicarRPr(baseRuns, ctx.docDefaultsRPr);
@@ -915,8 +960,7 @@ function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
   let tamanoBasePt = baseRuns.sizePt;
   for (const p of partes) if (p.tipo === 'texto') { tamanoBasePt = p.formato.sizePt; break; }
 
-  const lista = acc.numId ? calcularInfoLista(acc.numId, acc.ilvl, ctx) : null;
-  if (acc.numId && !lista) anotar(ctx, 'listaSinDef');
+  const lista = listaDeParrafo(acc, ctx);
 
   return {
     tipo: 'parrafo', partes,
@@ -1021,6 +1065,9 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
         const jc = pPr ? primerHijo(pPr, 'w:jc') : null;
         if (jc?.atributos['w:val'] !== undefined) alineacion = mapAlineacion(jc.atributos['w:val']);
       }
+      // Lista y sangría de la celda (E-102): mismo marcador, mismos contadores y misma sangría que un párrafo de cuerpo (sea o no de lista).
+      const { acc: accP } = pPrEfectivo(hijo, ctx);
+      if (accP.numId || accP.sangriaIzqPt !== 0 || accP.sangriaPrimeraLineaPt !== 0) partes.push({ tipo: 'inicioParrafo', lista: listaDeParrafo(accP, ctx), sangriaIzqPt: accP.sangriaIzqPt, sangriaPrimeraLineaPt: accP.sangriaPrimeraLineaPt });
       const baseRuns = rPrPorDefecto();
       if (ctx.docDefaultsRPr) aplicarRPr(baseRuns, ctx.docDefaultsRPr);
       const desde = partes.length;
@@ -1248,7 +1295,7 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
     : { numMap: new Map<string, string>(), abstractNums: new Map<string, AbstractNumDef>() };
   const rels = relsXml ? leerRelaciones(relsXml) : null;
 
-  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, camposAbiertos: [] };
+  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), vinetasAvisadas: new Set(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, camposAbiertos: [] };
 
   const bloques: BloqueDocx[] = [];
   // Una marca por sección, en orden de documento: su `w:sectPr` y dónde acaba (índice en `bloques`, exclusivo).

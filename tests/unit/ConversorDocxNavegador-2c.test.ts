@@ -147,3 +147,25 @@ test('word-numeracion-tabs.docx (E-101): los marcadores "iv.", "B)" y "xii." sal
   expect(Math.abs(valor.boxPt.xPt - 277)).toBeLessThanOrEqual(1.5);
   engine.close(doc);
 });
+
+test('word-listas-celda.docx (E-102): la lista numerada continúa del cuerpo a la celda y vuelve; las viñetas Wingdings/Symbol salen como ■, ✔ y •; solo el cuadradito avisa', async () => {
+  const { engine, doc, advertencias } = await convertir('word-listas-celda.docx');
+  // El ▪ (U+25AA) se dibuja como ■ (aproximado) y avisa; ✔ y la redonda de Symbol son exactas.
+  expect(advertencias).toHaveLength(1);
+  expect(advertencias[0]).toMatch(/viñeta/i);
+  expect(advertencias[0]).toContain('▪');
+  expect(advertencias[0]).toContain('"■"');
+  const runs = engine.getPageText(doc, 0);
+  const lineas = runs.map((r) => r.text.trim());
+  for (const esperada of ['1. uno', '2. dos', '3. tres', '4. cuatro', '5. cinco']) expect(lineas, esperada).toContain(esperada);
+  // Cada viñeta es un run propio (otra fuente) en la MISMA línea que su texto y a su izquierda. ▪ de Wingdings -> cuadrado de ZapfDingbats.
+  for (const [vineta, texto] of [['■', 'cuadro'], ['✔', 'visto']] as const) {
+    const v = runs.find((r) => r.text.trim() === vineta)!;
+    const t = runs.find((r) => r.text.trim() === texto)!;
+    expect(v, vineta).toBeDefined();
+    expect(Math.abs(v.boxPt.yPt - t.boxPt.yPt), vineta).toBeLessThan(6);
+    expect(v.boxPt.xPt, vineta).toBeLessThan(t.boxPt.xPt);
+  }
+  expect(lineas).toContain('• redonda'); // la viñeta de Symbol es la Helvetica de siempre: mismo run que su texto
+  engine.close(doc);
+});
