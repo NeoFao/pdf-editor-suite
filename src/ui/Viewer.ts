@@ -1094,21 +1094,24 @@ export class Viewer {
   }
 
   /**
-   * Enlaces INTERNOS del PDF (anotación `/Link` con destino en el propio documento, p. ej. los de Word → PDF): una caja invisible
-   * sobre cada uno, navegable con clic o Intro (`role="link"`). Se leen del motor, no del modelo (como notas e imágenes). Solo
-   * actúan con la herramienta "ninguna" (con otra, la capa de captura de la herramienta queda encima). Los enlaces externos (URI) no
-   * se pintan aquí: abrir una URL desde el visor es otra decisión (permiso de navegación) que no toma esta capa.
+   * Enlaces INTERNOS del PDF (anotación `/Link` con destino en el propio documento, p. ej. los de Word → PDF). Se leen del motor,
+   * no del modelo (como notas e imágenes). Como en Acrobat en modo edición, un clic normal NO sigue el enlace: las cajas son
+   * `pointer-events: none` (el texto de debajo se edita o se selecciona como siempre, E-106) y solo sirven de objetivo de teclado
+   * (`role="link"`, Intro navega). Ctrl+clic (Cmd+clic en Mac) sigue el enlace: un único manejador en CAPTURA sobre la página
+   * hace el hit-test contra los rectángulos (px CSS de página). Es un listener del propio elemento de la página, que se descarta con
+   * ella (nada global que quitar). Solo con la herramienta "ninguna". Los enlaces externos (URI) no se tratan aquí.
    */
   private drawLinks(i: number): void {
     const wrapper = this.wrappers[i];
     if (!wrapper) return;
     wrapper.querySelector('.link-layer')?.remove();
     const internos = this.session.engine.getLinks(this.session.doc, i).filter((e) => e.destino.tipo === 'pagina');
-    if (internos.length === 0) return;
+    if (internos.length === 0) { this.enlacesPorPagina.delete(wrapper); return; }
     const geom = this.geoms[i]!;
     const layer = document.createElement('div');
     layer.className = 'link-layer';
     Object.assign(layer.style, { position: 'absolute', inset: '0', pointerEvents: 'none' });
+    const objetivos: { left: number; top: number; width: number; height: number; ir: () => void }[] = [];
     for (const e of internos) {
       const d = e.destino;
       if (d.tipo !== 'pagina') continue;
@@ -1117,15 +1120,34 @@ export class Viewer {
       caja.className = 'link-box';
       caja.setAttribute('role', 'link');
       caja.setAttribute('tabindex', '0');
-      caja.setAttribute('aria-label', `Ir a la página ${d.pageIndex + 1}`);
-      Object.assign(caja.style, { position: 'absolute', left: `${css.left}px`, top: `${css.top}px`, width: `${css.width}px`, height: `${css.height}px`, pointerEvents: 'auto', cursor: 'pointer' });
+      const etiqueta = `Ctrl+clic para ir a la página ${d.pageIndex + 1}`;
+      caja.setAttribute('aria-label', etiqueta);
+      caja.title = etiqueta;
+      Object.assign(caja.style, { position: 'absolute', left: `${css.left}px`, top: `${css.top}px`, width: `${css.width}px`, height: `${css.height}px`, pointerEvents: 'none' });
       const ir = (): void => { if (this.tool === 'none') this.cb.onEnlaceInterno?.(d.pageIndex, d.yPt); };
-      caja.addEventListener('click', ir);
       caja.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); ir(); } });
+      objetivos.push({ ...css, ir });
       layer.appendChild(caja);
     }
     wrapper.appendChild(layer);
+    this.enlacesPorPagina.set(wrapper, objetivos);
+    if (!this.conManejadorDeEnlaces.has(wrapper)) {
+      this.conManejadorDeEnlaces.add(wrapper);
+      // Captura + pointerdown: el gesto con Ctrl no debe llegar a la capa de texto (seleccionaría la línea o empezaría un arrastre).
+      const alcanzado = (ev: MouseEvent): (() => void) | null => {
+        if (!(ev.ctrlKey || ev.metaKey) || this.tool !== 'none') return null;
+        const r = wrapper.getBoundingClientRect();
+        const x = ev.clientX - r.left, y = ev.clientY - r.top;
+        return this.enlacesPorPagina.get(wrapper)?.find((o) => x >= o.left && x <= o.left + o.width && y >= o.top && y <= o.top + o.height)?.ir ?? null;
+      };
+      wrapper.addEventListener('pointerdown', (ev) => { if (alcanzado(ev)) { ev.preventDefault(); ev.stopPropagation(); } }, true);
+      wrapper.addEventListener('click', (ev) => { const ir = alcanzado(ev); if (ir) { ev.preventDefault(); ev.stopPropagation(); ir(); } }, true);
+    }
   }
+
+  /** Rectángulos de enlace interno por página (px CSS de página) para el hit-test de Ctrl+clic, y páginas que ya llevan su manejador. */
+  private enlacesPorPagina = new WeakMap<HTMLElement, { left: number; top: number; width: number; height: number; ir: () => void }[]>();
+  private conManejadorDeEnlaces = new WeakSet<HTMLElement>();
 
   private rebuild(): void {
     this.root.textContent = '';
