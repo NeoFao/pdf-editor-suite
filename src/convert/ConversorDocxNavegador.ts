@@ -22,7 +22,7 @@ import type { ImagenColocada } from './flujo/layout';
  * `decodificarImagenDocx` y colocadas con `insertImage`) y ENLACES clicables
  * (`w:hyperlink` externo, anotación `/Link` real vía `addLink`, con la
  * misma validación de esquema que el motor). Sigue sin cuadros de texto,
- * notas al pie, otros campos ni control de cambios
+ * otros campos ni control de cambios
  * resuelto — todo eso se CUENTA en `advertencias` (nunca se pierde en
  * silencio, ver `ConversorDocumento.ResultadoConversion`).
  *
@@ -82,6 +82,16 @@ export class ConversorDocxNavegador implements ConversorDocumento {
         const bytesRels = await zip.leer(`${ruta.slice(0, barra + 1)}_rels/${ruta.slice(barra + 1)}.rels`);
         if (bytesRels) relsPartes[ruta] = decodificador.decode(bytesRels);
       }
+    }
+
+    // Notas al pie y al final (E-109): partes fijas del paquete, leídas con la misma acotación de tamaño que el resto (`zip.leer`) junto a sus
+    // relaciones propias (los hipervínculos de una nota viven en `word/_rels/footnotes.xml.rels`).
+    for (const ruta of ['word/footnotes.xml', 'word/endnotes.xml']) {
+      const bytesNotas = await zip.leer(ruta);
+      if (!bytesNotas) continue;
+      partes[ruta] = decodificador.decode(bytesNotas);
+      const bytesRels = await zip.leer(`word/_rels/${ruta.slice('word/'.length)}.rels`);
+      if (bytesRels) relsPartes[ruta] = decodificador.decode(bytesRels);
     }
 
     const modelo = construirModeloDocx(documentXml, stylesXml, numberingXml, relsXml, { settingsXml: settingsBytes ? decodificador.decode(settingsBytes) : null, partes, relsPartes });

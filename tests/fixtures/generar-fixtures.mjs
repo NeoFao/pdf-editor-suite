@@ -1236,6 +1236,58 @@ function docxEnlacesInternos() {
 }
 
 /**
+ * `word-notas.docx` (E-109): 70 líneas de 12 pt exactos (10 pt de letra) en Carta con margen de 72 pt (54 líneas por página),
+ * 3 notas al pie y 2 notas al final. Las notas ocupan 1 línea (12 pt) más el separador (12 pt):
+ * - nota al pie 1 en la línea 2 (página 1): reserva 24 pt, así que la página 1 admite hasta la línea 52;
+ * - nota al pie 2 en la línea 52: con su nota ya no cabe (ni 52 x 12 + 36 > 648), así que la LÍNEA 52 PASA A LA PÁGINA 2 con su nota;
+ * - nota al pie 3 en la línea 60 (página 2); notas al final 1 y 2 en las líneas 10 y 65, impresas tras la línea 70.
+ * Ver `tests/unit/ConversorDocxNavegador-notas.test.ts`. Sin avisos.
+ */
+export const DOCX_NOTAS = {
+  lineas: 70, lineaPt: 12, refs: { pie1: 2, pie2: 52, pie3: 60, final1: 10, final2: 65 },
+  textoPie: ['Texto de la nota uno', 'Texto de la nota dos', 'Texto de la nota tres'],
+  textoFinal: ['Nota final uno', 'Nota final dos']
+};
+function docxNotas() {
+  const ref = (tag, id, estilo) => `<w:r><w:rPr><w:rStyle w:val="${estilo}"/></w:rPr><w:${tag} w:id="${id}"/></w:r>`;
+  const refPie = { [DOCX_NOTAS.refs.pie1]: 1, [DOCX_NOTAS.refs.pie2]: 2, [DOCX_NOTAS.refs.pie3]: 3 };
+  const refFinal = { [DOCX_NOTAS.refs.final1]: 1, [DOCX_NOTAS.refs.final2]: 2 };
+  const parrafos = [];
+  for (let i = 1; i <= DOCX_NOTAS.lineas; i++) {
+    const extra = (refPie[i] ? ref('footnoteReference', refPie[i], 'FootnoteReference') : '') + (refFinal[i] ? ref('endnoteReference', refFinal[i], 'EndnoteReference') : '');
+    parrafos.push(`<w:p><w:pPr>${ESP_EXACTO}</w:pPr><w:r>${RPR_10}<w:t>Linea ${i}</w:t></w:r>${extra}</w:p>`);
+  }
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  ${parrafos.join('\n  ')}
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  const estilo = (id, tipo, nombre, ppr, rpr) => `<w:style w:type="${tipo}" w:styleId="${id}"><w:name w:val="${nombre}"/>${ppr}${rpr}</w:style>`;
+  const pprNota = '<w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr>';
+  const styles = `<?xml version="1.0" encoding="UTF-8"?>
+<w:styles>
+  <w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="20"/></w:rPr></w:rPrDefault></w:docDefaults>
+  ${estilo('FootnoteText', 'paragraph', 'footnote text', pprNota, RPR_10)}
+  ${estilo('EndnoteText', 'paragraph', 'endnote text', pprNota, RPR_10)}
+  ${estilo('FootnoteReference', 'character', 'footnote reference', '', '<w:rPr><w:vertAlign w:val="superscript"/></w:rPr>')}
+  ${estilo('EndnoteReference', 'character', 'endnote reference', '', '<w:rPr><w:vertAlign w:val="superscript"/></w:rPr>')}
+</w:styles>`;
+  const nota = (raiz, id, estiloTexto, estiloRef, tagRef, texto) => `<w:${raiz} w:id="${id}"><w:p><w:pPr><w:pStyle w:val="${estiloTexto}"/></w:pPr><w:r><w:rPr><w:rStyle w:val="${estiloRef}"/></w:rPr><w:${tagRef}/></w:r><w:r><w:t xml:space="preserve"> ${texto}</w:t></w:r></w:p></w:${raiz}>`;
+  const especiales = (raiz) => `<w:${raiz} w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:${raiz}><w:${raiz} w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:${raiz}>`;
+  const footnotesXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:footnotes>${especiales('footnote')}${DOCX_NOTAS.textoPie.map((t, i) => nota('footnote', i + 1, 'FootnoteText', 'FootnoteReference', 'footnoteRef', t)).join('')}</w:footnotes>`;
+  const endnotesXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:endnotes>${especiales('endnote')}${DOCX_NOTAS.textoFinal.map((t, i) => nota('endnote', i + 1, 'EndnoteText', 'EndnoteReference', 'endnoteRef', t)).join('')}</w:endnotes>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/styles.xml', datos: Buffer.from(styles, 'utf-8') },
+    { nombre: 'word/footnotes.xml', datos: Buffer.from(footnotesXml, 'utf-8') },
+    { nombre: 'word/endnotes.xml', datos: Buffer.from(endnotesXml, 'utf-8') }
+  ]);
+}
+
+/**
  * "Zip bomb" real: 8 MB de ceros comprimidos con deflate (que reduce a un
  * puñado de KB) en una única entrada — ejercita la defensa de ratio de
  * compresión de `src/convert/docx/zip.ts` con datos reales, no solo tamaños
@@ -1946,6 +1998,7 @@ async function main() {
     'word-rpr-estilo.docx': docxRprEstilo(),
     'word-rpr-efectos.docx': docxRprEfectos(),
     'word-enlaces-internos.docx': docxEnlacesInternos(),
+    'word-notas.docx': docxNotas(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {

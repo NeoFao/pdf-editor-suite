@@ -408,3 +408,28 @@ test('E-106: Intro con el foco en el enlace navega, y la caja dice cómo seguirl
   await page.keyboard.press('Enter');
   await expect.poll(() => indicador(page)).toBe('3 / 3');
 });
+
+const WORD_NOTAS = path.resolve(AQUI, '../../fixtures/generados/word-notas.docx');
+
+test('abrir word-notas.docx: la nota al pie 1 queda en su página bajo el cuerpo, la 2 empuja su línea a la página 2 y las notas finales cierran el documento, sin aviso (E-109)', async ({ page }) => {
+  const { eng, doc } = await convertirYGuardar(page, WORD_NOTAS, 'word-notas');
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
+  expect(eng.pageCount(doc)).toBe(2);
+  const p0 = eng.getPageText(doc, 0), p1 = eng.getPageText(doc, 1);
+  const base = (r: { matriz: number[] }) => r.matriz[5]!;
+  const de = (runs: typeof p0, t: string) => runs.find((r) => r.textoReal.includes(t))!;
+
+  // Nota 1: misma página que su referencia (línea 2), por debajo de la línea 51 y sobre el margen inferior (72); la línea 52 pasó a la página 2.
+  const nota1 = de(p0, 'Texto de la nota uno');
+  expect(base(nota1)).toBeLessThan(base(de(p0, 'Linea 51')));
+  expect(base(nota1)).toBeGreaterThanOrEqual(72);
+  expect(p0.some((r) => r.textoReal.trim() === 'Linea 52')).toBe(false);
+  expect(p1.some((r) => r.textoReal.trim() === 'Linea 52')).toBe(true);
+  expect(p1.some((r) => r.textoReal.includes('Texto de la nota dos'))).toBe(true);
+  // Separador (regla corta) en las dos páginas y notas finales tras la última línea, con "i" y "ii".
+  expect(eng.listPathObjects(doc, 0).some((p) => Math.abs(p.rectPt.wPt - 144) < 0.5 && p.rectPt.hPt < 2)).toBe(true);
+  expect(base(de(p1, 'Nota final uno'))).toBeLessThan(base(de(p1, 'Linea 70')));
+  expect(p0.some((r) => r.textoReal.trim() === 'i')).toBe(true);
+  expect(p1.some((r) => r.textoReal.trim() === 'ii')).toBe(true);
+  eng.close(doc);
+});
