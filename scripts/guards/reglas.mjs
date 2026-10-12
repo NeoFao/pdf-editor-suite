@@ -1093,6 +1093,57 @@ export const conCapturasSinTransicionesEnCurso = {
   }
 };
 
+/* ── E-107 · esperas por tiempo fijo en los E2E de la app nueva ───────────── */
+/**
+ * Tope por fichero de `page.waitForTimeout(...)` heredado antes de E-107. Solo puede BAJAR: un spec nuevo
+ * tiene 0 y subir un número aquí es la violación que la regla existe para evitar (AGENTS.md §3).
+ */
+export const TOPE_ESPERAS_FIJAS = {
+  'comentarios-marcado.spec.ts': 2, 'cropbox-origen.spec.ts': 1, 'deshacer-snapshot.spec.ts': 3,
+  'documento-grande.spec.ts': 3, 'editar-linea-n1.spec.ts': 3, 'imprimir.spec.ts': 1, 'movil.spec.ts': 1,
+  'pagina-actual-mover.spec.ts': 1, 'pagina-actual.spec.ts': 2, 'propiedades-linea-n1.spec.ts': 1,
+  'seleccion-multipagina.spec.ts': 1, 'userunit.spec.ts': 3
+};
+
+/** Líneas con una llamada real a `waitForTimeout(` (no comentarios ni exentas por escape con razón). */
+export function esperasFijasEn(contenido, idRegla = 'sin-espera-fija-en-next') {
+  const exentas = lineasExentas(contenido, idRegla);
+  const lineas = [];
+  contenido.split(/\r?\n/).forEach((linea, i) => {
+    if (/^\s*(\/\/|\*)/.test(linea)) return;
+    if (/\.waitForTimeout\(/.test(linea) && !exentas.has(i + 1)) lineas.push(i + 1);
+  });
+  return lineas;
+}
+
+export const sinEsperaFijaEnE2e = {
+  id: 'sin-espera-fija-en-next',
+  titulo: 'tests/e2e/next/ no añade page.waitForTimeout(): se espera a una condición, no a un tiempo',
+  comoArreglar:
+    'Espera a la condición con expect.poll(...) o un expect(locator) con auto-espera (la caja dentro del visor, ' +
+    'el bitmap del canvas con el tamaño final, el indicador de página). Un tiempo fijo es una apuesta: bajo ' +
+    'carga (CPU x6) el render de una página a DPR alto o cada clic de zoom tardan 10x más y el test lee a ' +
+    'medias o agota su presupuesto (E-039, E-091, E-107). Si la ausencia de un efecto es lo que se prueba ' +
+    'y no hay señal observable, añade un escape con razón de al menos 10 caracteres. Los tests antiguos ' +
+    'conservan un tope por fichero que solo puede bajar.',
+  ejecutar() {
+    const dir = 'tests/e2e/next';
+    if (!fs.existsSync(path.join(RAIZ, dir))) return [];
+    const hallazgos = [];
+    for (const nombre of fs.readdirSync(path.join(RAIZ, dir))) {
+      if (!nombre.endsWith('.spec.ts')) continue;
+      const rel = `${dir}/${nombre}`;
+      if (tieneDeuda(rel, this.id)) continue;
+      const lineas = esperasFijasEn(leer(rel), this.id);
+      const tope = TOPE_ESPERAS_FIJAS[nombre] ?? 0;
+      if (lineas.length > tope) {
+        hallazgos.push(hallazgo(rel, lineas[tope], `${lineas.length} waitForTimeout() frente a un tope de ${tope}: espera a una condición`));
+      }
+    }
+    return hallazgos;
+  }
+};
+
 /* ── tests unitarios no aserta sobre tiempo de reloj ────────────────────── */
 export const sinCronometrajeEnUnit = {
   id: 'sin-cronometraje-en-unit',
@@ -1521,5 +1572,6 @@ export const TODAS = [
   capaTextoSinRotacionPorRun,
   conRegistroSinDuplicados,
   conPuertosE2eSincronizados,
-  sinPromptNativo
+  sinPromptNativo,
+  sinEsperaFijaEnE2e
 ];
