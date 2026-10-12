@@ -19,7 +19,9 @@ async function medir(page: Page): Promise<{ bitmap: number; css: number; alto: n
 async function abrir(page: Page, pdf = FUENTES): Promise<void> {
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(pdf);
-  await expect(page.locator('.run').first()).toBeVisible();
+  // El primer render a DPR alto es trabajo de CPU proporcional a los píxeles (a CPU x6 y DPR 3 pasa de 10 s): se espera con
+  // `waitFor`, que solo está acotado por el timeout del test, y no con un `expect` de 10 s (E-107).
+  await page.locator('.run').first().waitFor({ state: 'visible' });
 }
 
 test.describe('DPR 2', () => {
@@ -83,16 +85,26 @@ test.describe('DPR 1', () => {
 });
 
 test.describe('DPR 3', () => {
-  test.use({ deviceScaleFactor: 3 });
+  // Viewport de escritorio más pequeño (≥1024 px: sigue con pestañas): la página ajustada al ancho tiene menos
+  // píxeles y el render inicial a DPR 3 es ~2x más barato. Con 1440 px, a CPU x6 tardaba 12-19 s en pintar
+  // y agotaba el `expect` de 10 s (E-107): la app termina siempre; era el presupuesto del test.
+  test.use({ deviceScaleFactor: 3, viewport: { width: 1024, height: 768 } });
 
   test('nitidez: el factor se acota (DPR máx. 2,5) y el bitmap respeta el límite de píxeles por página', async ({ page }) => {
     await abrir(page, NATIVO);
     const m = await medir(page);
     expect(m.bitmap / m.css).toBeLessThanOrEqual(2.51);
     expect(m.bitmap / m.css).toBeGreaterThan(1.4);
-    // Con mucho zoom manual el límite de píxeles manda: nunca más de 8 Mpx por página.
-    for (let i = 0; i < 6; i++) await page.locator('#btn-zoom-in').click();
+    // Con mucho zoom manual el límite de píxeles manda: nunca más de 8 Mpx por página. Dos clics bastan para pasar
+    // de los 8 Mpx a DPR 2,5 desde un 1024 px de ancho (cada render a ese tope es lo caro de este test).
+    for (let i = 0; i < 2; i++) await page.locator('#btn-zoom-in').click();
     await expect.poll(async () => { const z = await medir(page); return z.css; }).toBeGreaterThan(m.css * 1.2);
+    // El ancho CSS cambia al instante, el bitmap cuando termina el repintado: se espera a que el bitmap llegue al tope
+    // (si no, la lectura podría ser la del bitmap viejo y el límite se cumpliría de forma trivial).
+    await page.waitForFunction(() => {
+      const cv = document.querySelector('.page canvas') as HTMLCanvasElement;
+      return cv.width * cv.height > 8_000_000 * 0.9;
+    });
     const z = await medir(page);
     expect(z.bitmap * z.alto).toBeLessThanOrEqual(Math.max(8_000_000, z.css * z.altoCss) * 1.02);
   });
