@@ -3477,3 +3477,13 @@ no se modelan `w:spacing`/`w:position`/`w:w`/`w:kern`/`w:emboss`/`w:outline`/`w:
 **Arreglo.** Sin subir timeouts ni añadir `retries`. `firma-visible`: viewport 1024x768 (escritorio) y 3 clics en vez de 4 (la página sigue desbordando el visor en los dos ejes), y la comprobación espera con `expect.poll` a que ningún borde de la firma esté fuera del visor en vez de `waitForTimeout`. `nitidez-pagina` (DPR 3): viewport 1024x768, 2 clics de zoom en vez de 6 (bastan para pasar de 8 Mpx), el render pesado se espera con `locator.waitFor()` / `page.waitForFunction()` (solo acotados por el timeout del test) y la lectura del límite de píxeles espera antes a que el bitmap llegue al tope: antes podía leer el bitmap viejo y cumplir el límite trivialmente.
 
 **Cómo se detecta ahora.** Regla `sin-espera-fija-en-next` (`scripts/guards/reglas.mjs`, test en `reglas.test.mjs`): `tests/e2e/next/` no añade `page.waitForTimeout()`; los 12 specs antiguos conservan un tope por fichero que solo puede bajar. La reproducción: los specs con `--workers=1 --repeat-each=10` y CPU x6 por CDP en un fixture temporal.
+
+### E-108 · Subir a Vite 8: el test E-099 reconocía el chunk de pdf-lib por su NOMBRE de fichero
+
+**Síntoma.** El PR de Dependabot vite 6 → 8 pasó todo el CI salvo un E2E: `E-099 pdf-lib solo se descarga si el PDF declara /UserUnit` fallaba con «un PDF con /UserUnit en un /ObjStm debe cargar pdf-lib», aunque la app hacía exactamente lo mismo que antes.
+
+**Causa raíz.** El test contaba peticiones a `/assets/index-<hash>.js`. Con Rollup (Vite 6) el chunk dinámico de pdf-lib se llamaba `index-<hash>.js` (por `pdf-lib/es/index.js`); con rolldown (Vite 8) se llama `es-<hash>.js` y el bundle principal pasa a `index.next-<hash>.js`. El nombre de un chunk generado no es contrato: el defecto era del TEST, no de la app (el import dinámico, el WASM, los workers y `build:deploy` funcionan igual).
+
+**Arreglo.** El test identifica el chunk por su contenido (literal `Failed to parse PDF document`, que solo contiene pdf-lib) en vez de por su nombre.
+
+**Cómo se detecta ahora.** El propio E2E `tests/e2e/next/userunit.spec.ts` (el caso sin `/UserUnit` sigue exigiendo cero descargas de pdf-lib). Sin regla guard: es un patrón de un solo test.

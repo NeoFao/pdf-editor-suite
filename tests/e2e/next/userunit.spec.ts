@@ -231,7 +231,13 @@ test('E-099 guardar no muta el documento: los bytes no dependen de la escala de 
 
 test('E-099 pdf-lib solo se descarga si el PDF declara /UserUnit (también dentro de un /ObjStm)', async ({ page }) => {
   const pedidos: string[] = [];
-  page.on('request', (r) => { if (/\/assets\/index-[\w-]+\.js$/.test(new URL(r.url()).pathname)) pedidos.push(r.url()); });
+  // El chunk de pdf-lib se identifica por su CONTENIDO, no por su nombre: Vite 6 lo llamaba `index-<hash>.js` y Vite 8
+  // (rolldown) `es-<hash>.js`; atarse al nombre rompió el test al subir de versión (E-108). `Failed to parse PDF document`
+  // es un literal de pdf-lib que el bundle principal no contiene.
+  page.on('response', (r) => {
+    if (!/\/assets\/[\w.-]+\.js$/.test(new URL(r.url()).pathname)) return;
+    void r.text().then((t) => { if (t.includes('Failed to parse PDF document')) pedidos.push(r.url()); }, () => {});
+  });
   await abrir(page, 'ancho', path.resolve(AQUI, '../../fixtures/generados/nativo.pdf'));
   await page.waitForTimeout(500);
   expect(pedidos, 'un PDF con /ObjStm pero sin /UserUnit no debe cargar el chunk de pdf-lib').toEqual([]);
