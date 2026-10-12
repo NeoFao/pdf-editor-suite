@@ -297,7 +297,7 @@ function avisos(documentXml: string, rels: string | null = null): string {
   return textosAdvertencias(construirModeloDocx(documentXml, null, null, rels).advertencias).join(' | ');
 }
 
-test('enlace interno (w:anchor) y enlace sin destino resoluble: se conserva el texto Y se avisa', () => {
+test('enlace interno (w:anchor): conserva el texto y su ancla (se resuelve al paginar); un enlace sin destino resoluble se conserva y se avisa', () => {
   const xml = `<w:document><w:body>
     <w:p><w:hyperlink w:anchor="marcador"><w:r><w:t>ir al marcador</w:t></w:r></w:hyperlink></w:p>
     <w:p><w:hyperlink r:id="rIdNoExiste"><w:r><w:t>sin destino</w:t></w:r></w:hyperlink></w:p>
@@ -305,8 +305,8 @@ test('enlace interno (w:anchor) y enlace sin destino resoluble: se conserva el t
   const modelo = construirModeloDocx(xml, null, null, RELS_ENLACES);
   const textos = soloParrafos(modelo).flatMap((p) => p.partes).map((x) => (x as { texto: string }).texto);
   expect(textos).toEqual(['ir al marcador', 'sin destino']);
-  expect(textosAdvertencias(modelo.advertencias).join(' | ')).toMatch(/enlaces? interno/i);
-  expect(textosAdvertencias(modelo.advertencias).join(' | ')).toMatch(/sin destino/i);
+  expect(textosAdvertencias(modelo.advertencias).join(' | ')).not.toMatch(/enlaces? interno/i);
+  expect(modelo.advertencias.filter((a) => /sin destino/i.test(a.mensaje)).map((a) => a.tipo)).toEqual(['omitido']);
 });
 
 test('contenido dentro de w:sdt en línea, w:fldSimple, w:customXml y w:moveTo NO se pierde', () => {

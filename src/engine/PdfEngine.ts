@@ -111,6 +111,15 @@ export type SetSizeResult =
 export interface NoteInfo { index: number; text: string; rectPt: RectPt }
 
 /**
+ * Destino de una anotación `/Link` leída del documento. `pagina`: destino dentro del propio documento (acción GoTo o `/Dest`),
+ * `yPt` = posición vertical del destino (`/XYZ`) en pt de usuario con origen ABAJO (E-084), o `null` si el destino no la fija (p. ej. `/Fit`).
+ * `otro`: cualquier otra acción (GoToR, Launch, JavaScript...): solo se lee, nunca se ejecuta.
+ */
+export type DestinoEnlace = { tipo: 'uri'; uri: string } | { tipo: 'pagina'; pageIndex: number; yPt: number | null } | { tipo: 'otro' };
+/** Anotación `/Link` de una página: su caja (pt PDF, origen abajo-izquierda) y adónde lleva. */
+export interface EnlaceLeido { rectPt: RectPt; destino: DestinoEnlace }
+
+/**
  * Tipo de una anotación con comentario, tal como la lista el panel "Comentarios".
  * Alcance: solo anotaciones REALES del PDF. Resaltar/subrayar/tachar crean desde T11
  * anotaciones /Highlight, /Underline y /StrikeOut y por tanto aparecen; los
@@ -479,6 +488,15 @@ export interface PdfEngine {
    * E-003/E-027). Persiste tras `save()`+reabrir.
    */
   addLink(doc: DocHandle, pageIndex: number, rectPt: RectPt, url: string): boolean;
+  /**
+   * Crea una anotación `/Link` real con acción GoTo hacia la página `destPageIndex` (0-based) del PROPIO documento, con destino
+   * `[página /XYZ null destYPt null]`: el visor baja hasta `destYPt` (pt de usuario, origen ABAJO, E-084) sin tocar el zoom ni la x.
+   * `rectPt` en pt PDF (origen abajo-izquierda) de `pageIndex`. `false` —sin crear nada— si la página de destino no existe o
+   * `destYPt` no es finito. Persiste tras `save()`+reabrir.
+   */
+  addInternalLink(doc: DocHandle, pageIndex: number, rectPt: RectPt, destPageIndex: number, destYPt: number): boolean;
+  /** Anotaciones `/Link` de la página, en el orden del documento. Solo lectura: ninguna acción se ejecuta. */
+  getLinks(doc: DocHandle, pageIndex: number): EnlaceLeido[];
   /**
    * Crea una nota adhesiva (anotación real /Subtype /Text) de 20×20 pt cuya esquina
    * superior-izquierda es (xPt, yPt) — el punto del clic — y `Contents` = text.

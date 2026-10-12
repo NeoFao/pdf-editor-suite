@@ -21,6 +21,7 @@ const WORD_JPEG = path.resolve(AQUI, '../../fixtures/generados/word-jpeg.docx');
 const WORD_COMBINADA = path.resolve(AQUI, '../../fixtures/generados/word-combinada.docx');
 const WORD_COMPLETO = path.resolve(AQUI, '../../fixtures/generados/word-completo.docx');
 const WORD_ENCABEZADOS = path.resolve(AQUI, '../../fixtures/generados/word-encabezados.docx');
+const WORD_ENLACES_INTERNOS = path.resolve(AQUI, '../../fixtures/generados/word-enlaces-internos.docx');
 const WORD_FLOTANTE = path.resolve(AQUI, '../../fixtures/generados/word-flotante.docx');
 
 async function dataTransferConFichero(page: Page, bytes: number[], fileName: string, mime: string) {
@@ -341,4 +342,69 @@ test('abrir word-parrafo-celda.docx: alineación, sangría derecha y espaciado d
   // (La medida exacta de la altura está en ConversorDocxNavegador-parrafo-celda.test.ts; aquí, el mínimo con 2 líneas de 15 pt.)
   expect(run('Centro').boxPt.yPt - run('Despues').boxPt.yPt).toBeGreaterThan(10 + 12 + 2 * 15 + 6 - 5);
   eng.close(doc);
+});
+
+test('enlace interno de Word: un solo enlace navegable (el del marcador existente) y el roto avisa como omitido', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(WORD_ENLACES_INTERNOS);
+  await expect(page.locator('.run').first()).toBeVisible();
+  await expect(page.locator('#page-indicator')).toHaveText('1 / 3');
+
+  // Un solo enlace navegable: el del marcador existente (el roto no crea anotación).
+  const enlace = page.getByRole('link', { name: /página 3/i });
+  await expect(enlace).toHaveCount(1);
+
+  // El enlace roto deja su texto y avisa como omitido (no se pierde en silencio).
+  await expect(page.locator('#conversion-warnings')).toBeVisible();
+  await expect(page.locator('#conversion-warnings')).toContainText(/sin destino/i);
+});
+
+/** Abre `word-enlaces-internos.docx`: la línea "Ir a la conclusion" (página 1) es texto editable Y lleva un enlace interno a la página 3. */
+async function abrirConEnlace(page: Page) {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(WORD_ENLACES_INTERNOS);
+  await expect(page.locator('.run').first()).toBeVisible();
+  await expect(page.locator('#page-indicator')).toHaveText('1 / 3');
+  await expect(page.locator('#conversion-warnings')).toBeVisible(); // el aviso del enlace roto desplaza el visor: se espera a que se asiente
+  return page.locator('.run', { hasText: 'Ir a la conclusion' });
+}
+const indicador = (page: Page) => page.locator('#page-indicator').textContent().then((t) => (t ?? '').trim());
+
+test('E-106: un clic normal sobre la línea enlazada la EDITA (no navega): la página no cambia', async ({ page }) => {
+  const linea = await abrirConEnlace(page);
+  await linea.click();
+  await expect(page.locator('.run.editing')).toHaveCount(1);
+  await expect(page.locator('.run.editing')).toContainText('Ir a la conclusion');
+  expect(await indicador(page)).toBe('1 / 3');
+});
+
+test('E-106: un arrastre que empieza sobre el enlace selecciona texto (no navega)', async ({ page, context }) => {
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const linea = await abrirConEnlace(page);
+  const b = (await linea.boundingBox())!;
+  // Empieza dentro del texto (el borde izquierdo es el asa de mover la línea).
+  await page.mouse.move(b.x + b.width * 0.25, b.y + b.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(b.x + b.width * 0.25 + 12, b.y + b.height / 2 + 4, { steps: 3 });
+  await page.mouse.move(b.x + b.width * 0.8, b.y + b.height / 2, { steps: 10 });
+  await page.mouse.up();
+  await page.keyboard.press('Control+C');
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toContain('conclus');
+  await expect(page.locator('.run.editing')).toHaveCount(0);
+  expect(await indicador(page)).toBe('1 / 3');
+});
+
+test('E-106: Ctrl+clic sobre el enlace lo sigue (página 3)', async ({ page }) => {
+  const linea = await abrirConEnlace(page);
+  await linea.click({ modifiers: ['Control'] });
+  await expect.poll(() => indicador(page)).toBe('3 / 3');
+  await expect(page.locator('.run.editing')).toHaveCount(0);
+});
+
+test('E-106: Intro con el foco en el enlace navega, y la caja dice cómo seguirlo con el ratón', async ({ page }) => {
+  await abrirConEnlace(page);
+  const enlace = page.getByRole('link', { name: /Ctrl\+clic para ir a la página 3/i });
+  await enlace.focus();
+  await page.keyboard.press('Enter');
+  await expect.poll(() => indicador(page)).toBe('3 / 3');
 });
