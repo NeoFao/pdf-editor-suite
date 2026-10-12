@@ -13,7 +13,9 @@ const FIX = (n: string) => path.resolve(AQUI, '../../fixtures/generados/' + n);
  * no veía nada. Medido en px CSS de viewport (getBoundingClientRect).
  */
 async function abrir(page: Page, fixture: string, zoomClics: number, scrollFrac: number): Promise<void> {
-  await page.setViewportSize({ width: 1440, height: 900 });
+  // 1024x768 (escritorio, con pestañas): con 1440x900 cada clic de zoom repinta ~8 Mpx y a CPU x6 los 4 clics
+  // se comían 26 s de los 60 s del test (E-107). La página sigue desbordando el visor en los dos ejes.
+  await page.setViewportSize({ width: 1024, height: 768 });
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(FIX(fixture));
   await expect(page.locator('.run').first()).toBeVisible();
@@ -41,30 +43,35 @@ async function dibujar(page: Page, guardar: string | null): Promise<void> {
 async function comprobarVisibleYSeleccionada(page: Page): Promise<void> {
   const caja = page.locator('.image-box.selected');
   await expect(caja).toHaveCount(1);
-  await page.waitForTimeout(400); // deja terminar cualquier desplazamiento del visor
-  const v = (await page.locator('#viewer').boundingBox())!;
-  const b = (await caja.boundingBox())!;
-  expect(b.x, 'borde izquierdo dentro del visor').toBeGreaterThanOrEqual(v.x - 1);
-  expect(b.y, 'borde superior dentro del visor').toBeGreaterThanOrEqual(v.y - 1);
-  expect(b.x + b.width, 'borde derecho dentro del visor').toBeLessThanOrEqual(v.x + v.width + 1);
-  expect(b.y + b.height, 'borde inferior dentro del visor').toBeLessThanOrEqual(v.y + v.height + 1);
+  // El visor puede seguir desplazándose (scroll suave) justo después de insertar: se espera a la condición
+  // (ningún borde fuera del visor), no a un tiempo fijo (E-091, E-107).
+  await expect.poll(async () => {
+    const v = (await page.locator('#viewer').boundingBox())!;
+    const b = (await caja.boundingBox())!;
+    const fuera: string[] = [];
+    if (b.x < v.x - 1) fuera.push('izquierdo');
+    if (b.y < v.y - 1) fuera.push('superior');
+    if (b.x + b.width > v.x + v.width + 1) fuera.push('derecho');
+    if (b.y + b.height > v.y + v.height + 1) fuera.push('inferior');
+    return fuera;
+  }, 'bordes de la firma fuera del visor').toEqual([]);
 }
 
 test('firma dibujada con zoom alto: queda dentro del visor y seleccionada', async ({ page }) => {
-  await abrir(page, 'nativo.pdf', 4, 0.45);
+  await abrir(page, 'nativo.pdf', 3, 0.45);
   await dibujar(page, null);
   await comprobarVisibleYSeleccionada(page);
 });
 
 test('firma desde imagen con zoom alto: queda dentro del visor y seleccionada', async ({ page }) => {
-  await abrir(page, 'nativo.pdf', 4, 0.45);
+  await abrir(page, 'nativo.pdf', 3, 0.45);
   await page.locator('#btn-sign-upload').setInputFiles(FIX('firma-blanca.png'));
   await expect(page.locator('#status')).toContainText('Firma insertada desde imagen');
   await comprobarVisibleYSeleccionada(page);
 });
 
 test('firma guardada con zoom alto: queda dentro del visor y seleccionada', async ({ page }) => {
-  await abrir(page, 'nativo.pdf', 4, 0.2);
+  await abrir(page, 'nativo.pdf', 3, 0.2);
   await dibujar(page, 'Visible');
   await expect(page.locator('#status')).toContainText('Firma insertada');
   // Cambia la zona visible y la inserta de nuevo desde «Mis firmas».

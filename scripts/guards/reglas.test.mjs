@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen, analizarAvanceNaturalEnAgrupacion, analizarPromptNativo } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen, analizarAvanceNaturalEnAgrupacion, analizarPromptNativo, esperasFijasEn, TOPE_ESPERAS_FIJAS } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -1001,6 +1001,40 @@ describe('sin-prompt-nativo', () => {
 
   test('respeta el escape con razón', () => {
     assert.deepEqual(analizarPromptNativo('src/x.ts', "// guard-disable-next-line sin-prompt-nativo: depuración local temporal\nwindow.prompt('x');"), []);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('sin-espera-fija-en-next', () => {
+  const regla = detectarEn('sin-espera-fija-en-next');
+
+  test('detecta una espera por tiempo fijo (E-107)', () => {
+    const cuerpo = ['await page.locator("a").click();', '  await page.waitForTimeout(400);'].join('\n');
+    assert.deepEqual(esperasFijasEn(cuerpo), [2]);
+  });
+
+  test('ignora comentarios y respeta el escape con razón', () => {
+    const cuerpo = [
+      '// no usar page.waitForTimeout(300) aquí',
+      '// guard-disable-next-line sin-espera-fija-en-next: se prueba que NO ocurre nada tras un gesto',
+      'await page.waitForTimeout(200);',
+      'await page.waitForTimeout(200);'
+    ].join('\n');
+    assert.deepEqual(esperasFijasEn(cuerpo), [4]);
+  });
+
+  test('un escape sin razón suficiente no vale', () => {
+    const cuerpo = ['// guard-disable-next-line sin-espera-fija-en-next: ok', 'await page.waitForTimeout(1);'].join('\n');
+    assert.deepEqual(esperasFijasEn(cuerpo), [2]);
+  });
+
+  test('los specs que arreglaron E-107 ya no tienen tope: 0 esperas fijas', () => {
+    for (const f of ['firma-visible.spec.ts', 'nitidez-pagina.spec.ts', 'miniaturas-nitidas.spec.ts']) {
+      assert.equal(TOPE_ESPERAS_FIJAS[f], undefined);
+    }
   });
 
   test('sobre el repo real no encuentra nada', () => {
