@@ -52,6 +52,10 @@ export interface Atom {
    * cuando `Seg.url` está presente).
    */
   url?: string;
+  /** Enlace INTERNO (Word `w:hyperlink w:anchor`): nombre del marcador de destino. Como `url`, separa trazos; `paginar` la deja en `ResultadoLayout.enlacesAncla` para resolverla con `marcadores`. */
+  ancla?: string;
+  /** Marcadores (`w:bookmarkStart`) que empiezan justo ANTES de este átomo: `paginar` registra en `ResultadoLayout.marcadores` dónde cae su línea. Un átomo con marcas nunca se funde con el anterior. */
+  marcas?: string[];
   /**
    * Marca este átomo como una TABULACIÓN (fase 2c): no pinta texto (`text` = ''), salta a la siguiente parada. Solo
    * lo entiende `lineaConTabs` (y por tanto `parrafoFlex` con `tabs`). `leader` fuerza el relleno de esta tabulación
@@ -89,6 +93,10 @@ export interface Barra {
 export interface ImagenColocada { page: number; xPt: number; yPt: number; wPt: number; hPt: number; imgId: string }
 /** Enlace clicable ya colocado en una página concreta, en puntos PDF (origen abajo-izquierda) — listo para `PdfEngine.addLink`. */
 export interface EnlaceColocado { page: number; xPt: number; yPt: number; wPt: number; hPt: number; url: string }
+/** Enlace interno colocado (misma caja que `EnlaceColocado`, pt PDF), aún SIN resolver: `ancla` es el nombre del marcador de destino. */
+export interface EnlaceAncla { page: number; xPt: number; yPt: number; wPt: number; hPt: number; ancla: string }
+/** Dónde cae un marcador una vez paginado: página 0-based e `yPt` del borde superior de su línea (pt PDF, origen abajo). */
+export interface PosMarcador { page: number; yPt: number }
 
 export interface ResultadoLayout {
   totalPaginas: number;
@@ -96,6 +104,10 @@ export interface ResultadoLayout {
   barras: Barra[];
   imagenes: ImagenColocada[];
   enlaces: EnlaceColocado[];
+  /** Enlaces internos (a marcadores) sin resolver; vacío en Markdown. */
+  enlacesAncla: EnlaceAncla[];
+  /** Posición de cada `w:bookmarkStart` (por nombre; el primero gana) tras paginar; vacío en Markdown. */
+  marcadores: Map<string, PosMarcador>;
   /** Avisos generados al paginar (p. ej. una combinación vertical de celdas que cruza un salto de página). */
   advertencias: Advertencia[];
   /** Una entrada por página (en orden): su geometría (puede cambiar entre secciones) y la sección que la abrió (índice de `FlowSectionStart.seccion`; 0 si el flujo no tiene secciones). */
@@ -108,6 +120,8 @@ export interface Seg {
   xPt: number; text: string; font: string; sizePt: number; color: RGB;
   /** URL del enlace clicable que cubre este trazo (ver `Atom.url`), o `undefined`. */
   url?: string;
+  /** Ver `Atom.ancla` y `Atom.marcas`. */
+  ancla?: string; marcas?: string[];
   /**
    * Ancho en puntos PDF de `text` (ya medido por `lineToFlowLine`). Se usa
    * para calcular la caja del enlace clicable cuando `url` está presente y
@@ -131,7 +145,9 @@ export interface Seg {
 export interface BarSeg { xPt: number; wPt: number; color: RGB }
 export interface BgSeg { xPt: number; wPt: number; color: RGB }
 
-export interface FlowLine { kind: 'line'; height: number; segs: Seg[]; bars: BarSeg[]; bg?: BgSeg; keepWithNextHeight?: number }
+export interface FlowLine { kind: 'line'; height: number; segs: Seg[]; bars: BarSeg[]; bg?: BgSeg; keepWithNextHeight?: number;
+  /** Marcadores que empiezan en esta línea aunque no haya texto tras ellos (párrafo vacío o marcador al final de un párrafo): se registran en el borde superior de la línea. */
+  marcas?: string[] }
 export interface FlowGap { kind: 'gap'; height: number; bars: BarSeg[] }
 export interface FlowRule { kind: 'rule'; height: number; xPt: number; wPt: number; color: RGB; bars: BarSeg[] }
 /** Salto de página explícito (`w:br w:type="page"` o `w:pageBreakBefore` en DOCX). Markdown no lo usa. */
@@ -274,6 +290,13 @@ export function wrapAtoms(atoms: Atom[], maxWidthPt: number, medir: Medir): Atom
 export function tamanoLinea(a: Atom): number { return a.sizeLineaPt ?? a.sizePt; }
 
 /** Campos de efecto de un átomo que pasan al `Seg` (solo los presentes: un `Seg` sin efectos queda idéntico al de siempre). */
+/** Enlace interno y marcadores de un átomo, listos para su `Seg` (solo las claves presentes). */
+function refsDe(a: Atom): Pick<Seg, 'ancla' | 'marcas'> {
+  const o: Pick<Seg, 'ancla' | 'marcas'> = {};
+  if (a.ancla !== undefined) o.ancla = a.ancla;
+  if (a.marcas) o.marcas = a.marcas;
+  return o;
+}
 function efectosDe(a: Atom): Pick<Seg, 'underline' | 'strike' | 'dyPt' | 'sizeLineaPt' | 'fondo'> {
   const o: Pick<Seg, 'underline' | 'strike' | 'dyPt' | 'sizeLineaPt' | 'fondo'> = { underline: a.underline };
   if (a.strike) o.strike = a.strike;
@@ -314,7 +337,7 @@ export function lineToFlowLine(
     const segs: Seg[] = [];
     let x = xStartPt;
     atoms.forEach((a, i) => {
-      segs.push({ xPt: x, text: a.text, font: a.font, sizePt: a.sizePt, color: a.color, url: a.url, wPt: anchos[i], ...efectosDe(a) });
+      segs.push({ xPt: x, text: a.text, font: a.font, sizePt: a.sizePt, color: a.color, url: a.url, wPt: anchos[i], ...refsDe(a), ...efectosDe(a) });
       x += anchos[i]!;
       if (i < atoms.length - 1) x += espacios[i]! + (atoms[i + 1]!.pegado ? 0 : extraPorHueco);
     });
@@ -340,12 +363,12 @@ export function lineToFlowLine(
     // ambos trazos). La URL del enlace también forma parte del "estilo": dos
     // átomos con URLs distintas (o uno con y otro sin) nunca se fusionan,
     // cada uno necesita su propia caja de anotación `/Link`.
-    while (j < atoms.length && atoms[j]!.font === a.font && atoms[j]!.sizePt === a.sizePt && sameColor(atoms[j]!.color, a.color) && atoms[j]!.url === a.url && mismosEfectos(atoms[j]!, a)) {
+    while (j < atoms.length && atoms[j]!.font === a.font && atoms[j]!.sizePt === a.sizePt && sameColor(atoms[j]!.color, a.color) && atoms[j]!.url === a.url && atoms[j]!.ancla === a.ancla && !atoms[j]!.marcas && mismosEfectos(atoms[j]!, a)) {
       text += (atoms[j]!.pegado ? '' : ' ') + atoms[j]!.text;
       j++;
     }
     const anchoSeg = medir(a.font, a.sizePt, text);
-    segs.push({ xPt: x, text, font: a.font, sizePt: a.sizePt, color: a.color, url: a.url, wPt: anchoSeg, ...efectosDe(a) });
+    segs.push({ xPt: x, text, font: a.font, sizePt: a.sizePt, color: a.color, url: a.url, wPt: anchoSeg, ...refsDe(a), ...efectosDe(a) });
     x += anchoSeg;
     if (j < atoms.length && !atoms[j]!.pegado) x += medir(a.font, a.sizePt, ' ');
     i = j;
@@ -538,6 +561,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
   const barras: Barra[] = [];
   const imagenes: ImagenColocada[] = [];
   const enlaces: EnlaceColocado[] = [];
+  const enlacesAncla: EnlaceAncla[] = [];
+  const marcadores = new Map<string, PosMarcador>();
   let page = 0;
   // Geometría y sección vigentes (fase 2c: un marcador `section` las cambia). `topPt`/`bottomPt` son los límites de la
   // página ACTUAL: una sección continua cambia el inferior (y los de las páginas nuevas) pero no el superior de esta.
@@ -593,6 +618,18 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     return out;
   }
 
+  /** Registra los enlaces (externos o internos) de un trazo ya colocado; `baseline` incluye ya `dyPt`. */
+  function enlacesDeSeg(seg: Seg, baseline: number): void {
+    if (!seg.wPt) return;
+    const caja = { page, xPt: seg.xPt, yPt: baseline - seg.sizePt * 0.2, wPt: seg.wPt, hPt: seg.sizePt * 1.1 };
+    if (seg.url) enlaces.push({ ...caja, url: seg.url });
+    else if (seg.ancla) enlacesAncla.push({ ...caja, ancla: seg.ancla });
+  }
+  /** Registra un marcador en su posición (el PRIMERO con ese nombre gana, como Word). `yPt` = borde superior de su línea. */
+  function registrarMarcas(nombres: string[] | undefined, yPt: number): void {
+    for (const n of nombres ?? []) if (!marcadores.has(n)) marcadores.set(n, { page, yPt });
+  }
+
   /** Coloca una fila de tabla YA en la página/cursor actuales (no decide paginación: eso lo hace el llamador). */
   function colocarFila(row: FlowTableRow): void {
     for (const id of row.mergeContinua ?? []) if (paginaDeMerge.get(id) !== page) mergesPartidos.add(id);
@@ -604,7 +641,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
       const baseline = cursor - linea.relYPt;
       for (const seg of linea.segs) {
         trazos.push({ page, xPt: seg.xPt, yPt: baseline + (seg.dyPt ?? 0), text: seg.text, font: seg.font, sizePt: seg.sizePt, color: seg.color });
-        if (seg.url && seg.wPt) enlaces.push({ page, xPt: seg.xPt, yPt: baseline + (seg.dyPt ?? 0) - seg.sizePt * 0.2, wPt: seg.wPt, hPt: seg.sizePt * 1.1, url: seg.url });
+        enlacesDeSeg(seg, baseline + (seg.dyPt ?? 0));
+        registrarMarcas(seg.marcas, baseline + seg.sizePt); // celda: borde superior aproximado del texto (línea base + cuerpo)
         barras.push(...barrasDeSeg(seg, baseline));
       }
     }
@@ -621,10 +659,12 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     const baseline = bottom + item.height * baselineFraction;
     for (const seg of item.segs) {
       trazos.push({ page, xPt: seg.xPt, yPt: baseline + (seg.dyPt ?? 0), text: seg.text, font: seg.font, sizePt: seg.sizePt, color: seg.color });
-      if (seg.url && seg.wPt) enlaces.push({ page, xPt: seg.xPt, yPt: baseline + (seg.dyPt ?? 0) - seg.sizePt * 0.2, wPt: seg.wPt, hPt: seg.sizePt * 1.1, url: seg.url });
+      enlacesDeSeg(seg, baseline + (seg.dyPt ?? 0));
+      registrarMarcas(seg.marcas, cursor); // `cursor` aún es el borde superior de la línea
       barras.push(...barrasDeSeg(seg, baseline));
       pintadoEnPagina = true;
     }
+    registrarMarcas(item.marcas, cursor);
     if (item.bg) { barras.push({ page, xPt: item.bg.xPt, yPt: bottom, wPt: item.bg.wPt, hPt: item.height, color: item.bg.color }); pintadoEnPagina = true; }
     for (const bar of item.bars) { barras.push({ page, xPt: bar.xPt, yPt: bottom, wPt: bar.wPt, hPt: item.height, color: bar.color }); pintadoEnPagina = true; }
     cursor = bottom;
@@ -798,7 +838,7 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     const c = mergesPartidos.size;
     advertencias.push(aproximado(`${c === 1 ? 'Una celda combinada verticalmente cruza' : `${c} celdas combinadas verticalmente cruzan`} un salto de página: la celda se muestra cortada en el salto (el texto está en la primera página de la combinación).`));
   }
-  return { totalPaginas: page + 1, trazos, barras, imagenes, enlaces, advertencias, paginas };
+  return { totalPaginas: page + 1, trazos, barras, imagenes, enlaces, enlacesAncla, marcadores, advertencias, paginas };
 }
 
 /** Altura que un ítem ocupa en el flujo, en puntos PDF (0 para marcadores y flotantes). */

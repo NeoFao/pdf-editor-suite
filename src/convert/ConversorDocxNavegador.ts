@@ -96,10 +96,10 @@ export class ConversorDocxNavegador implements ConversorDocumento {
       if (w === undefined) { w = this.engine.measureText(font, sizePt, s); cache.set(key, w); }
       return w;
     };
-    const { totalPaginas, trazos, barras, imagenes, enlaces, paginas } = renderizarModeloDocx(modelo, medir);
+    const { totalPaginas, trazos, barras, imagenes, enlaces, enlacesInternos, paginas, advertencias: avisosMaquetacion } = renderizarModeloDocx(modelo, medir);
 
     const { rgbaPorId, advertenciasImagenes } = await this.resolverImagenes(zip, imagenes);
-    const advertencias = [...modelo.advertencias, ...advertenciasImagenes];
+    const advertencias = [...modelo.advertencias, ...avisosMaquetacion, ...advertenciasImagenes];
 
     // Una página en blanco POR TAMAÑO distinto (las secciones pueden cambiar de tamaño y de orientación), en el orden del layout.
     const enBlanco = new Map<string, Uint8Array<ArrayBuffer>>();
@@ -138,6 +138,10 @@ export class ConversorDocxNavegador implements ConversorDocumento {
       agregar(e.page, { type: 'addLink', rect: { xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt }, url: e.url });
     }
     for (const [page, ops] of opsPorPagina) this.engine.applyPageOps(doc, page, ops);
+    // Enlaces internos (w:hyperlink w:anchor): ya con página y altura de su marcador. Van DESPUÉS del lote porque necesitan que todas las páginas existan.
+    for (const e of enlacesInternos) {
+      this.engine.addInternalLink(doc, e.page, { xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt }, e.destPage, e.destYPt);
+    }
 
     const out = this.engine.save(doc);
     this.engine.close(doc);
