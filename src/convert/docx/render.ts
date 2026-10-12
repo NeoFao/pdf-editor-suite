@@ -1,8 +1,8 @@
 import { aproximado, omitido, type Advertencia } from '../advertencia';
-import { esParrafo, esTabla, mensajeEnlaceSinDestino, type InfoLista, type Alineacion, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type RunFormato, type Borde, type BordesTabla, type ParadaTab, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx } from './modelo';
+import { esParrafo, esTabla, mensajeEnlaceSinDestino, type NotaDocx, type InfoLista, type Alineacion, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type RunFormato, type Borde, type BordesTabla, type ParadaTab, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx } from './modelo';
 import {
-  wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona, parrafoFlex, lineasConTabs, tamanoLinea,
-  type Atom, type Medir, type FlowItem, type FlowLine, type FlowTableRow, type RelLinea, type RelBarra, type ResultadoLayout, type PageGeometry, type RGB, type TabsConfig, type TabStopAbs
+  wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona, parrafoFlex, lineasConTabs, tamanoLinea, SEPARADOR_NOTAS,
+  type Atom, type NotaFlujo, type FlowParrafoFlex, type FlowGap, type Medir, type FlowItem, type FlowLine, type FlowTableRow, type RelLinea, type RelBarra, type ResultadoLayout, type PageGeometry, type RGB, type TabsConfig, type TabStopAbs
 } from '../flujo/layout';
 
 /**
@@ -39,10 +39,11 @@ function atomoMarcador(lista: InfoLista, sizePt: number): Atom {
 }
 
 /** Átomo de texto con el formato de un run, efectos de carácter incluidos (E-105: tachado, desplazamiento, tamaño nominal, fondo). */
-function atomoDeTexto(texto: string, f: RunFormato, pegado: boolean, url?: string, ancla?: string): Atom {
+function atomoDeTexto(texto: string, f: RunFormato, pegado: boolean, url?: string, ancla?: string, nota?: number): Atom {
   const a: Atom = { text: texto, font: f.font, sizePt: f.sizePt, color: f.color, pegado, underline: f.underline };
   if (url !== undefined) a.url = url;
   if (ancla !== undefined) a.ancla = ancla;
+  if (nota !== undefined) a.nota = nota;
   if (f.strike) a.strike = f.strike;
   if (f.dyPt) a.dyPt = f.dyPt;
   if (f.sizeLineaPt !== undefined) a.sizeLineaPt = f.sizeLineaPt;
@@ -134,7 +135,7 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
       for (const palabra of parte.texto.split(/\s+/)) {
         if (palabra === '') continue;
         const pegado = primerPalabra && !empiezaConEspacio && !terminaEnEspacio && bufferAtomos.length > 0;
-        empujar(atomoDeTexto(palabra, parte.formato, pegado, parte.url, parte.ancla));
+        empujar(atomoDeTexto(palabra, parte.formato, pegado, parte.url, parte.ancla, parte.nota));
         primerPalabra = false;
       }
       if (parte.texto.length > 0) terminaEnEspacio = /\s$/.test(parte.texto);
@@ -247,7 +248,7 @@ function celdaAGrupos(celda: CeldaTabla, xIniPt: number, xFinPt: number, tabDefe
       for (const palabra of parte.texto.split(/\s+/)) {
         if (palabra === '') continue;
         const pegado = primerPalabra && !empiezaConEspacio && !terminaEnEspacio && actual.length > 0;
-        const a = atomoDeTexto(palabra, parte.formato, pegado, parte.url, parte.ancla);
+        const a = atomoDeTexto(palabra, parte.formato, pegado, parte.url, parte.ancla, parte.nota);
         if (marcasPendientes.length > 0) { a.marcas = marcasPendientes; marcasPendientes = []; }
         actual.push(a);
         primerPalabra = false;
@@ -614,6 +615,39 @@ function geoDeclarada(sec: SeccionDocx): PageGeometry {
 export interface EnlaceInterno { page: number; xPt: number; yPt: number; wPt: number; hPt: number; destPage: number; destYPt: number }
 export type ResultadoDocx = ResultadoLayout & { enlacesInternos: EnlaceInterno[] };
 
+/** Las líneas de un párrafo con tabulaciones (`flex`) resueltas contra su franja completa: una nota se maqueta entera antes de paginar. */
+function aplanarFlex(it: FlowParrafoFlex): FlowLine[] {
+  const out: FlowLine[] = [];
+  for (let d = 0; d < it.total;) {
+    const r = it.paso(d, { xPt: it.xPt, wPt: it.wPt }, d === 0);
+    if (!r || r.siguiente <= d) break;
+    out.push(r.linea);
+    d = r.siguiente;
+  }
+  return out;
+}
+
+/** Ítems (líneas y huecos) del texto de una nota con los márgenes de la sección donde se la referencia: el MISMO dibujo de párrafos que el cuerpo. */
+function itemsDeNota(nota: NotaDocx, sec: SeccionDocx, medir: Medir, tabDefectoPt: number): (FlowLine | FlowGap)[] {
+  const out: (FlowLine | FlowGap)[] = [];
+  for (const p of nota.bloques) {
+    for (const it of renderizarParrafo(p, sec.margenIzqPt, sec.margenDerPt, sec.paginaAnchoPt, medir, null, { flex: false, tabDefectoPt })) {
+      if (it.kind === 'line' || it.kind === 'gap') out.push(it);
+      else if (it.kind === 'flex') out.push(...aplanarFlex(it));
+      // salto de página, imágenes y flotantes no aplican dentro de una nota (el modelo ya quita las imágenes con aviso)
+    }
+  }
+  return out;
+}
+
+/** Índices (`ParteParrafo.nota`) de las notas al pie que referencia un bloque, en orden. */
+function notasDeBloque(b: BloqueDocx): number[] {
+  const partes = esParrafo(b) ? b.partes : b.filas.flatMap((f) => f.celdas.flatMap((c) => c.partes));
+  const out: number[] = [];
+  for (const x of partes) if (x.tipo === 'texto' && x.nota !== undefined) out.push(x.nota);
+  return out;
+}
+
 export function renderizarModeloDocx(modelo: ModeloDocx, medir: Medir): ResultadoDocx {
   const av = nuevosAvisos();
   const secciones = seccionesDe(modelo);
@@ -636,6 +670,9 @@ export function renderizarModeloDocx(modelo: ModeloDocx, medir: Medir): Resultad
 
   const items: FlowItem[] = [];
   const geos: PageGeometry[] = [];
+  // Notas al pie (E-109): cada una se maqueta con los márgenes de la sección de su referencia y `paginar` la coloca en la página de esa línea.
+  const notasFlujo = new Map<number, NotaFlujo>();
+  const ultima: { sec: SeccionDocx | null } = { sec: null };
   secciones.forEach((sec, idx) => {
     const altoCab = altoMax(sec.encabezados, sec);
     const altoPie = altoMax(sec.pies, sec);
@@ -649,19 +686,36 @@ export function renderizarModeloDocx(modelo: ModeloDocx, medir: Medir): Resultad
     // Una sección final sin ningún bloque no abre una página en blanco.
     if (idx > 0 && sec.finBloque === sec.inicioBloque) return;
     items.push({ kind: 'section', geo, continua: sec.tipo === 'continuous' && idx > 0, seccion: idx });
+    ultima.sec = sec;
     const alturaUtilPt = geo.heightPt - geo.marginTopPt - geo.marginBottomPt;
     const bloques: BloqueRenderizado[] = [];
     for (const bloque of modelo.bloques.slice(sec.inicioBloque, sec.finBloque)) {
+      for (const k of notasDeBloque(bloque)) {
+        const nota = modelo.notasAlPie?.[k];
+        if (!nota || notasFlujo.has(k)) continue;
+        const its = itemsDeNota(nota, sec, medir, tabDefectoPt);
+        notasFlujo.set(k, { items: its, altoPt: its.reduce((s, x) => s + x.height, 0) });
+      }
       if (esParrafo(bloque)) bloques.push({ items: renderizarParrafo(bloque, sec.margenIzqPt, sec.margenDerPt, sec.paginaAnchoPt, medir, null, opcCuerpo), keepNext: bloque.mantenerConSiguiente, keepLines: bloque.mantenerLineasJuntas });
       else if (esTabla(bloque)) bloques.push({ items: renderizarTabla(bloque, sec.margenIzqPt, sec.margenDerPt, sec.paginaAnchoPt, alturaUtilPt, medir, av, opcCuerpo), keepNext: false, keepLines: false });
     }
     items.push(...agruparKeep(bloques));
   });
 
+  // Notas al final (E-109): tras el último párrafo, con su separador; el separador no se queda solo al pie de una página (va con la primera nota).
+  const finales = modelo.notasFinales ?? [];
+  if (finales.length > 0 && ultima.sec) {
+    const sec: SeccionDocx = ultima.sec;
+    const ancho = sec.paginaAnchoPt - sec.margenIzqPt - sec.margenDerPt;
+    const porNota = finales.map((n) => itemsDeNota(n, sec, medir, tabDefectoPt));
+    items.push({ kind: 'keepStart' }, { kind: 'rule', height: SEPARADOR_NOTAS.altoPt, xPt: sec.margenIzqPt, wPt: Math.min(SEPARADOR_NOTAS.anchoPt, ancho), color: [0, 0, 0], bars: [] }, ...(porNota[0] ?? []), { kind: 'keepEnd' });
+    for (const its of porNota.slice(1)) items.push(...its);
+  }
+
   // Fracción de línea donde cae la línea base: mismo valor que Markdown
   // (`BASELINE_FRACTION`) y que `TABLA_BASELINE_FRACTION` de arriba,
   // aproximación documentada en `../markdown/layout.ts`.
-  const res = paginar(items, geos[0]!, TABLA_BASELINE_FRACTION);
+  const res = paginar(items, geos[0]!, TABLA_BASELINE_FRACTION, undefined, notasFlujo);
 
   // Segunda pasada: con el total de páginas conocido, cada página recibe el encabezado y el pie de SU sección (PAGE/NUMPAGES
   // ya resueltos). El número visible reinicia con `w:pgNumType w:start` en la primera página de una sección.

@@ -73,6 +73,9 @@ import type { PosFlotanteH, PosFlotanteV, AjusteFlotante } from '../flujo/layout
  *   (`w:evenAndOddHeaders`), con `PAGE`/`NUMPAGES`, imágenes y tablas (2c).
  * - Tabulaciones (2c): reales también dentro de una celda de tabla (E-101), con las
  *   paradas de su párrafo medidas desde el borde interior de la celda.
+ * - Notas (E-109): `w:footnoteReference` → número en superíndice + cuerpo de `footnotes.xml` (`ModeloDocx.notasAlPie`, que `paginar` coloca
+ *   al pie de la MISMA página); `w:endnoteReference` → `endnotes.xml` (`notasFinales`), impresas tras el último párrafo. Numeración continua
+ *   (`w:numFmt`/`w:numStart` de `w:footnotePr`/`w:endnotePr`); sin reinicio por sección/página (con aviso).
  * - Enlaces: `w:hyperlink` EXTERNO (`r:id` con `TargetMode="External"`) e INTERNO a un
  *   marcador del propio documento (`w:anchor` → `w:bookmarkStart`), que se resuelve tras
  *   paginar a página + posición vertical (`render.ts`).
@@ -123,7 +126,9 @@ export type ParteParrafo =
   /** `url`, cuando está presente, es la URL YA VALIDADA (`validarUrlEnlace`) de un `w:hyperlink` que envuelve este texto. */
   | { tipo: 'texto'; texto: string; formato: RunFormato; url?: string;
     /** Nombre del `w:bookmarkStart` al que apunta el `w:hyperlink w:anchor` que envuelve este texto (enlace INTERNO). Se resuelve tras paginar: sin url. */
-    ancla?: string }
+    ancla?: string;
+    /** Referencia de nota al pie (E-109): índice de la nota en `ModeloDocx.notasAlPie`. El texto es el número ya formateado, en superíndice. */
+    nota?: number }
   /** `w:bookmarkStart w:name`: dónde empieza el marcador `nombre` (no ocupa espacio). `paginar` registra la página y la y de su línea; `_GoBack` no se emite nunca. */
   | { tipo: 'marcador'; nombre: string }
   /**
@@ -228,6 +233,12 @@ export interface Tabla {
   bordesTabla?: BordesTabla;
 }
 
+/**
+ * Nota al pie o al final (E-109): `numero` ya formateado (`1`, `c`, `iv`...) y los párrafos de su `w:footnote`/`w:endnote` con el formato
+ * efectivo del estilo `FootnoteText`/`EndnoteText`; el primero empieza con el número en superíndice (`w:footnoteRef`). Los separadores no son notas.
+ */
+export interface NotaDocx { numero: string; bloques: Parrafo[] }
+
 /** Bloque de nivel superior del documento: párrafo o tabla, en el orden en que aparecen. */
 export type BloqueDocx = Parrafo | Tabla;
 
@@ -277,6 +288,10 @@ export interface ModeloDocx {
   secciones?: SeccionDocx[];
   /** Intervalo de las paradas de tabulación por defecto (`w:defaultTabStop` de settings.xml), en pt. 36 (720 twips) si no está. */
   tabPorDefectoPt: number;
+  /** Notas al pie en orden de referencia (E-109); `ParteParrafo.nota` indexa esta lista. Ausente en modelos construidos a mano. */
+  notasAlPie?: NotaDocx[];
+  /** Notas al final en orden de referencia; se imprimen tras el último párrafo. */
+  notasFinales?: NotaDocx[];
 }
 
 /**
@@ -735,7 +750,14 @@ interface Contexto {
   estiloTabla: string | null;
   /** Campos complejos (`w:fldChar`) abiertos, el más interno al final. `suprimir`: el resultado cacheado se descarta porque ya se emitió un `campo`. */
   camposAbiertos: { instr: string; separado: boolean; suprimir: boolean; emitido: boolean }[];
+  /** Notas al pie y al final (E-109). */
+  notas: { pie: ClaseNotas; final: ClaseNotas; enNota: boolean; numeroActual: string | null };
 }
+
+/** Una clase de notas (al pie o al final): sus `w:footnote`/`w:endnote` por id, sus relaciones propias, la configuración de numeración y las ya referenciadas. */
+interface ClaseNotas { elementos: Map<string, XmlElemento>; relsXml: string | null; fmt: string; inicio: number; reinicio: boolean; lista: NotaDocx[] }
+
+function claseNotasVacia(fmt: string): ClaseNotas { return { elementos: new Map(), relsXml: null, fmt, inicio: 1, reinicio: false, lista: [] }; }
 
 function anotar(ctx: Contexto, clave: string): void { ctx.perdidas.set(clave, (ctx.perdidas.get(clave) ?? 0) + 1); }
 
@@ -768,6 +790,12 @@ const MENSAJES_PERDIDAS: [string, TipoAdvertencia, (c: number) => string][] = [
   ['encabezadoFaltante', 'omitido', (c) => cuenta(c, 'Se omitió un encabezado de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} encabezados de página (no se encontró o no se pudo leer su contenido en el paquete).')],
   ['pieFaltante', 'omitido', (c) => cuenta(c, 'Se omitió un pie de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} pies de página (no se encontró o no se pudo leer su contenido en el paquete).')],
   ['estiloTablaCondicional', 'aproximado', (c) => cuenta(c, 'Un estilo de tabla con formato de texto condicional (primera fila, bandas...) no se aplicó: solo se usa el formato base del estilo.', '{n} estilos de tabla con formato de texto condicional (primera fila, bandas...) no se aplicaron: solo se usa el formato base del estilo.')],
+  ['notaFaltante', 'omitido', (c) => cuenta(c, 'Se omitió la referencia de una nota al pie o al final cuyo texto no se encontró en el documento.', 'Se omitieron {n} referencias de notas al pie o al final cuyo texto no se encontró en el documento.')],
+  ['notaEnZona', 'omitido', (c) => cuenta(c, 'Se omitió una referencia de nota situada dentro de un encabezado, un pie de página u otra nota.', 'Se omitieron {n} referencias de notas situadas dentro de encabezados, pies de página u otras notas.')],
+  ['notaContenido', 'omitido', (c) => cuenta(c, 'Se omitió una tabla o una imagen dentro del texto de una nota (aún no soportado).', 'Se omitieron {n} tablas o imágenes dentro del texto de notas (aún no soportado).')],
+  ['notaFormato', 'aproximado', (c) => cuenta(c, 'El formato de numeración de las notas (p. ej. símbolos) no se reproduce: se numeran con cifras o letras equivalentes.', 'El formato de numeración de {n} tipos de notas (p. ej. símbolos) no se reproduce: se numeran con cifras.')],
+  ['notaReinicio', 'aproximado', () => 'El reinicio de la numeración de las notas (por sección o por página) no se reproduce: la numeración sigue continua en todo el documento.'],
+  ['notaMarcaPropia', 'aproximado', (c) => cuenta(c, 'Una nota con marca personalizada (w:customMarkFollows) se numeró con la numeración automática.', '{n} notas con marca personalizada (w:customMarkFollows) se numeraron con la numeración automática.')],
   ['rPrEspaciado', 'aproximado', () => 'Se ignoró el espaciado, la posición vertical o la escala horizontal de carácter (w:spacing, w:position, w:w) de algún texto: se dibuja con su espaciado normal.'],
   ['vMergeConTexto', 'omitido', (c) => cuenta(c, 'Una celda de continuación de una combinación vertical traía texto propio, que no se muestra (como hace Word).', '{n} celdas de continuación de combinaciones verticales traían texto propio, que no se muestra (como hace Word).')]
 ];
@@ -821,6 +849,10 @@ function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, parte
       partes.push({ tipo: 'tab', ptab: { alineacion: al === 'right' ? 'right' : al === 'center' ? 'center' : 'left', leader: leerLider(h.atributos['w:leader']) } });
     }
     else if (h.nombre === 'w:sym') anotar(ctx, 'sym');
+    else if (h.nombre === 'w:footnoteReference' || h.nombre === 'w:endnoteReference') referenciaNota(h, h.nombre === 'w:footnoteReference' ? 'pie' : 'final', acc, ctx, partes);
+    else if (h.nombre === 'w:footnoteRef' || h.nombre === 'w:endnoteRef') {
+      if (ctx.notas.numeroActual !== null) partes.push({ tipo: 'texto', texto: ctx.notas.numeroActual, formato: formatoSuperindice(acc) });
+    }
     else if (h.nombre === 'w:noBreakHyphen') partes.push({ tipo: 'texto', texto: '-', formato });
     else if (h.nombre === 'w:drawing') { const parte = resolverImagenDrawing(h, ctx); if (parte) partes.push(parte); }
     else if (h.nombre === 'mc:AlternateContent') {
@@ -830,9 +862,90 @@ function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, parte
       else if (!buscarDescendiente(h, 'w:pict')) anotar(ctx, 'desconocido');
     }
     else if (!RUIDO_RUN.has(h.nombre) && buscarDescendiente(h, 'w:t')) anotar(ctx, 'desconocido');
-    // w:pict (VML, Word <2007), w:footnoteReference, w:commentReference,
-    // w:fldChar, w:instrText, w:delText...: contenido no soportado en esta
-    // fase, contado aparte en `construirAdvertencias` (no se pierde en silencio).
+    // w:pict (VML, Word <2007), w:commentReference, w:delText...:
+    // contenido no soportado en esta fase, contado aparte en `construirAdvertencias` (no se pierde en silencio).
+  }
+}
+
+/** Formato de la marca de una nota (referencia del cuerpo y número delante del texto de la nota): siempre en superíndice, aunque falte el estilo `FootnoteReference`. */
+function formatoSuperindice(acc: RPrAcum): RunFormato {
+  return formatoDeAcc(acc.vertAlign === 'baseline' ? { ...acc, vertAlign: 'superscript' } : acc);
+}
+
+/**
+ * Referencia de nota (E-109): numera la nota (continua por documento, `w:numStart`/`w:numFmt` de `w:footnotePr`/`w:endnotePr`), lee su
+ * cuerpo de `footnotes.xml`/`endnotes.xml` y deja en el texto el número en superíndice. En una nota al pie la parte lleva `nota` (el
+ * maquetador reserva su espacio en la página); una nota al final solo deja el número (su texto va tras el último párrafo).
+ */
+function referenciaNota(h: XmlElemento, clase: 'pie' | 'final', acc: RPrAcum, ctx: Contexto, partes: ParteParrafo[]): void {
+  if (ctx.zona || ctx.notas.enNota) { anotar(ctx, 'notaEnZona'); return; }
+  const k = ctx.notas[clase];
+  const id = h.atributos['w:id'];
+  const el = id !== undefined ? k.elementos.get(id) : undefined;
+  if (!el) { anotar(ctx, 'notaFaltante'); return; }
+  if (h.atributos['w:customMarkFollows'] !== undefined && leerToggle({ ...h, atributos: { 'w:val': h.atributos['w:customMarkFollows'] } })) anotar(ctx, 'notaMarcaPropia');
+  const valor = k.inicio + k.lista.length;
+  let numero = formatoNumero(valor, k.fmt);
+  if (numero === null) { anotar(ctx, 'notaFormato'); numero = String(valor); }
+  const indice = k.lista.length;
+  k.lista.push({ numero, bloques: leerCuerpoNota(el, numero, k, ctx) });
+  const parte: Extract<ParteParrafo, { tipo: 'texto' }> = { tipo: 'texto', texto: numero, formato: formatoSuperindice(acc) };
+  if (clase === 'pie') parte.nota = indice;
+  partes.push(parte);
+}
+
+/** Párrafos de una nota con el contexto de SU parte (relaciones propias, fuera de celdas y de campos abiertos). Una tabla o imagen dentro de la nota se omite con aviso. */
+function leerCuerpoNota(el: XmlElemento, numero: string, k: ClaseNotas, ctx: Contexto): Parrafo[] {
+  const guarda = { rels: ctx.rels, enCelda: ctx.enCelda, pPrTabla: ctx.pPrTabla, estiloTabla: ctx.estiloTabla, campos: ctx.camposAbiertos.splice(0), numero: ctx.notas.numeroActual };
+  ctx.rels = k.relsXml ? leerRelaciones(k.relsXml) : null;
+  ctx.enCelda = false; ctx.pPrTabla = []; ctx.estiloTabla = null;
+  ctx.notas.enNota = true; ctx.notas.numeroActual = numero;
+  const bloques: Parrafo[] = [];
+  try {
+    for (const hijo of aplanarCuerpo(el)) {
+      if (hijo.nombre === 'w:p') {
+        const p = procesarParrafo(hijo, ctx);
+        const sinImagenes = p.partes.filter((x) => x.tipo !== 'imagen');
+        for (let i = sinImagenes.length; i < p.partes.length; i++) anotar(ctx, 'notaContenido');
+        p.partes = sinImagenes;
+        bloques.push(p);
+      } else if (hijo.nombre === 'w:tbl') anotar(ctx, 'notaContenido');
+    }
+  } finally {
+    ctx.rels = guarda.rels; ctx.enCelda = guarda.enCelda; ctx.pPrTabla = guarda.pPrTabla; ctx.estiloTabla = guarda.estiloTabla;
+    ctx.camposAbiertos.length = 0; ctx.camposAbiertos.push(...guarda.campos);
+    ctx.notas.enNota = false; ctx.notas.numeroActual = guarda.numero;
+  }
+  return bloques;
+}
+
+/** Lee `word/footnotes.xml`/`endnotes.xml` (si falta o está dañado, la clase queda sin notas y cada referencia avisa): solo las notas normales, no `separator`/`continuationSeparator`/`continuationNotice`. */
+function leerClaseNotas(xml: string | undefined, relsXml: string | undefined, etiqueta: 'w:footnote' | 'w:endnote', fmt: string): ClaseNotas {
+  const k = claseNotasVacia(fmt);
+  k.relsXml = relsXml ?? null;
+  if (xml === undefined) return k;
+  try {
+    for (const n of hijosElemento(parseXml(xml), etiqueta)) {
+      const tipo = n.atributos['w:type'];
+      const id = n.atributos['w:id'];
+      if (id === undefined || (tipo !== undefined && tipo !== 'normal')) continue;
+      k.elementos.set(id, n);
+    }
+  } catch { /* parte ilegible: sin notas, cada referencia avisa como omitida */ }
+  return k;
+}
+
+/** Configuración de numeración (`w:numFmt`, `w:numStart`, `w:numRestart`) de `w:footnotePr`/`w:endnotePr`: la de settings.xml y, encima, la de la sección final. */
+function leerConfigNotas(k: ClaseNotas, etiqueta: 'w:footnotePr' | 'w:endnotePr', fuentes: (XmlElemento | null)[]): void {
+  for (const f of fuentes) {
+    const pr = f ? primerHijo(f, etiqueta) : null;
+    if (!pr) continue;
+    const fmt = primerHijo(pr, 'w:numFmt')?.atributos['w:val'];
+    if (fmt !== undefined) k.fmt = fmt;
+    const ini = Number(primerHijo(pr, 'w:numStart')?.atributos['w:val']);
+    if (Number.isFinite(ini) && ini >= 0) k.inicio = ini;
+    const rr = primerHijo(pr, 'w:numRestart')?.atributos['w:val'];
+    if (rr !== undefined) k.reinicio = rr !== 'continuous';
   }
 }
 
@@ -1376,7 +1489,6 @@ function construirAdvertencias(docRoot: XmlElemento): Advertencia[] {
   const advertencias: Advertencia[] = [];
   const imagenesVml = contarElementos(docRoot, 'w:pict');
   const cuadros = contarElementos(docRoot, 'w:txbxContent');
-  const notas = contarElementos(docRoot, 'w:footnoteReference') + contarElementos(docRoot, 'w:endnoteReference');
   const comentarios = contarElementos(docRoot, 'w:commentReference');
   const cambios = contarElementos(docRoot, 'w:ins') + contarElementos(docRoot, 'w:del') + contarElementos(docRoot, 'w:moveFrom') + contarElementos(docRoot, 'w:moveTo');
   const conColumnas = contarColumnasMultiples(docRoot);
@@ -1384,7 +1496,6 @@ function construirAdvertencias(docRoot: XmlElemento): Advertencia[] {
 
   if (imagenesVml > 0) advertencias.push(omitido(`Se omitieron ${imagenesVml} ${pluralizar(imagenesVml, 'imagen', 'imágenes')} en formato antiguo (VML, aún no soportado).`));
   if (cuadros > 0) advertencias.push(omitido(`Se omitieron ${cuadros} ${pluralizar(cuadros, 'cuadro de texto', 'cuadros de texto')} (aún no soportados).`));
-  if (notas > 0) advertencias.push(omitido(`Se omitieron ${notas} ${pluralizar(notas, 'nota al pie', 'notas al pie')} (aún no soportadas).`));
   if (comentarios > 0) advertencias.push(omitido(`Se omitieron ${comentarios} ${pluralizar(comentarios, 'comentario', 'comentarios')} (aún no soportados).`));
   if (cambios > 0) advertencias.push(aproximado(`El documento tiene ${cambios} ${pluralizar(cambios, 'cambio', 'cambios')} de control de cambios sin resolver; se aceptaron las inserciones y se descartaron las eliminaciones.`));
 
@@ -1478,7 +1589,17 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
     : { numMap: new Map<string, string>(), abstractNums: new Map<string, AbstractNumDef>() };
   const rels = relsXml ? leerRelaciones(relsXml) : null;
 
-  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), vinetasAvisadas: new Set(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, pPrTabla: [], estiloTabla: null, camposAbiertos: [] };
+  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), vinetasAvisadas: new Set(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, pPrTabla: [], estiloTabla: null, camposAbiertos: [], notas: { pie: claseNotasVacia('decimal'), final: claseNotasVacia('lowerRoman'), enNota: false, numeroActual: null } };
+  // Notas (E-109): sus partes ya vienen decodificadas en `extras.partes`; la numeración sale de settings.xml y de la sección final.
+  ctx.notas.pie = leerClaseNotas(extras.partes?.['word/footnotes.xml'], extras.relsPartes?.['word/footnotes.xml'], 'w:footnote', 'decimal');
+  ctx.notas.final = leerClaseNotas(extras.partes?.['word/endnotes.xml'], extras.relsPartes?.['word/endnotes.xml'], 'w:endnote', 'lowerRoman');
+  {
+    let raizSettings: XmlElemento | null = null;
+    try { raizSettings = extras.settingsXml ? parseXml(extras.settingsXml) : null; } catch { /* settings ilegible: numeración por defecto */ }
+    const sectFinal = primerHijo(body, 'w:sectPr');
+    leerConfigNotas(ctx.notas.pie, 'w:footnotePr', [raizSettings, sectFinal]);
+    leerConfigNotas(ctx.notas.final, 'w:endnotePr', [raizSettings, sectFinal]);
+  }
 
   const bloques: BloqueDocx[] = [];
   // Una marca por sección, en orden de documento: su `w:sectPr` y dónde acaba (índice en `bloques`, exclusivo).
@@ -1500,6 +1621,8 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
       anotar(ctx, 'desconocido');
     }
   }
+
+  if ((ctx.notas.pie.reinicio && ctx.notas.pie.lista.length > 0) || (ctx.notas.final.reinicio && ctx.notas.final.lista.length > 0)) anotar(ctx, 'notaReinicio');
 
   // El contenido tras el último `w:sectPr` de párrafo (o todo, si no hay ninguno) forma una sección final con la geometría por defecto.
   if (marcas.length === 0 || (marcas[marcas.length - 1]!.fin < bloques.length)) marcas.push({ sectPr: null, fin: bloques.length });
@@ -1556,6 +1679,7 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
     tituloPagina: ultima.tituloPagina,
     paresImpares,
     encabezados: ultima.encabezados, pies: ultima.pies,
-    secciones, tabPorDefectoPt
+    secciones, tabPorDefectoPt,
+    notasAlPie: ctx.notas.pie.lista, notasFinales: ctx.notas.final.lista
   };
 }

@@ -66,6 +66,8 @@ export interface Atom {
   underline?: boolean;
   /** Efectos de carácter de Word (E-105), ver `Seg`: tachado, desplazamiento de línea base, tamaño nominal de línea y fondo. */
   strike?: 1 | 2; dyPt?: number; sizeLineaPt?: number; fondo?: RGB;
+  /** Referencia de nota al pie (E-109): clave de la nota en el mapa `notas` de `paginar`. Un átomo con `nota` nunca se funde con otro. */
+  nota?: number;
 }
 
 export interface Trazo {
@@ -122,6 +124,8 @@ export interface Seg {
   url?: string;
   /** Ver `Atom.ancla` y `Atom.marcas`. */
   ancla?: string; marcas?: string[];
+  /** Ver `Atom.nota`: `paginar` reserva en la página de esta línea el espacio de la nota y la dibuja al pie. */
+  nota?: number;
   /**
    * Ancho en puntos PDF de `text` (ya medido por `lineToFlowLine`). Se usa
    * para calcular la caja del enlace clicable cuando `url` está presente y
@@ -249,6 +253,17 @@ export interface FlowParrafoFlex {
 
 export type FlowItem = FlowLine | FlowGap | FlowRule | FlowPageBreak | FlowImage | FlowTableRow | FlowTableStart | FlowTableEnd | FlowKeepStart | FlowKeepEnd | FlowFloatImage | FlowSectionStart | FlowParrafoFlex;
 
+/**
+ * Nota al pie ya maquetada (E-109): sus líneas (x absoluto de página, alto propio) y huecos en el orden en que se dibujan, de arriba
+ * abajo, y su altura total. `paginar` la reserva en la página de la línea que la referencia (`Seg.nota`) y la dibuja pegada al margen inferior.
+ */
+export interface NotaFlujo { items: (FlowLine | FlowGap)[]; altoPt: number }
+
+/** Separador de las notas al pie (E-109), en pt PDF: la zona de notas empieza con un bloque de `altoPt` con una regla de `anchoPt` (1 pt de grosor, a media altura) en el margen izquierdo. */
+export const SEPARADOR_NOTAS = { altoPt: 12, anchoPt: 144 } as const;
+/** Fracción del área de texto que puede ocupar como máximo la zona de notas de una página (el resto de una nota más larga continúa en la siguiente). */
+const FRACCION_MAXIMA_NOTAS = 0.75;
+
 /** Tamaño y márgenes de una página, en puntos PDF. */
 export interface PageGeometry {
   widthPt: number;
@@ -291,10 +306,11 @@ export function tamanoLinea(a: Atom): number { return a.sizeLineaPt ?? a.sizePt;
 
 /** Campos de efecto de un átomo que pasan al `Seg` (solo los presentes: un `Seg` sin efectos queda idéntico al de siempre). */
 /** Enlace interno y marcadores de un átomo, listos para su `Seg` (solo las claves presentes). */
-function refsDe(a: Atom): Pick<Seg, 'ancla' | 'marcas'> {
-  const o: Pick<Seg, 'ancla' | 'marcas'> = {};
+function refsDe(a: Atom): Pick<Seg, 'ancla' | 'marcas' | 'nota'> {
+  const o: Pick<Seg, 'ancla' | 'marcas' | 'nota'> = {};
   if (a.ancla !== undefined) o.ancla = a.ancla;
   if (a.marcas) o.marcas = a.marcas;
+  if (a.nota !== undefined) o.nota = a.nota;
   return o;
 }
 function efectosDe(a: Atom): Pick<Seg, 'underline' | 'strike' | 'dyPt' | 'sizeLineaPt' | 'fondo'> {
@@ -363,7 +379,7 @@ export function lineToFlowLine(
     // ambos trazos). La URL del enlace también forma parte del "estilo": dos
     // átomos con URLs distintas (o uno con y otro sin) nunca se fusionan,
     // cada uno necesita su propia caja de anotación `/Link`.
-    while (j < atoms.length && atoms[j]!.font === a.font && atoms[j]!.sizePt === a.sizePt && sameColor(atoms[j]!.color, a.color) && atoms[j]!.url === a.url && atoms[j]!.ancla === a.ancla && !atoms[j]!.marcas && mismosEfectos(atoms[j]!, a)) {
+    while (a.nota === undefined && j < atoms.length && atoms[j]!.nota === undefined && atoms[j]!.font === a.font && atoms[j]!.sizePt === a.sizePt && sameColor(atoms[j]!.color, a.color) && atoms[j]!.url === a.url && atoms[j]!.ancla === a.ancla && !atoms[j]!.marcas && mismosEfectos(atoms[j]!, a)) {
       text += (atoms[j]!.pegado ? '' : ' ') + atoms[j]!.text;
       j++;
     }
@@ -556,7 +572,7 @@ export function lineasConTabs(o: OpcionesParrafoFlex): FlowLine[] {
  * la página actual — un salto de página al principio del documento, sin
  * contenido previo, no genera una página en blanco de más).
  */
-export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: number, obstaculosExternos?: Map<number, Obstaculo[]>): ResultadoLayout {
+export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: number, obstaculosExternos?: Map<number, Obstaculo[]>, notas?: Map<number, NotaFlujo>): ResultadoLayout {
   const trazos: Trazo[] = [];
   const barras: Barra[] = [];
   const imagenes: ImagenColocada[] = [];
@@ -586,7 +602,82 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
   const paginaDeMerge = new Map<number, number>();
   const mergesPartidos = new Set<number>();
 
+  // Notas al pie (E-109). `notasPagina`: bloques de la página actual (el primero es continuación si viene de la página anterior);
+  // `reservaNotas`: su altura con el separador (0 sin notas), que sube el límite inferior del cuerpo; `continuacion`: lo que no cupo y pasa a la página siguiente.
+  type ItemNota = FlowLine | FlowGap;
+  const notasDef = notas ?? new Map<number, NotaFlujo>();
+  const notasYaReservadas = new Set<number>();
+  let notasPagina: { continuacion: boolean; items: ItemNota[] }[] = [];
+  let reservaNotas = 0;
+  let continuacion: ItemNota[] = [];
+  /** Límite inferior efectivo del cuerpo en la página actual: el margen más la zona de notas. */
+  const limite = (): number => bottomPt + reservaNotas;
+  const maxReservaNotas = (): number => FRACCION_MAXIMA_NOTAS * (topPt - bottomPt);
+
+  /** Notas aún sin reservar que referencian los trazos de una línea (o de una fila de tabla), con su clave. */
+  function notasNuevas(segs: Seg[]): [number, NotaFlujo][] {
+    const out: [number, NotaFlujo][] = [];
+    for (const s of segs) {
+      if (s.nota === undefined || notasYaReservadas.has(s.nota) || out.some(([k]) => k === s.nota)) continue;
+      const n = notasDef.get(s.nota);
+      if (n) out.push([s.nota, n]);
+    }
+    return out;
+  }
+  const segsDeFila = (row: FlowTableRow): Seg[] => row.lineas.flatMap((l) => l.segs);
+  /** Altura que añade reservar `lista` en la página actual: sus líneas más el separador si aún no hay zona de notas. */
+  function costeNotas(lista: [number, NotaFlujo][]): number {
+    return lista.length === 0 ? 0 : lista.reduce((s, [, n]) => s + n.altoPt, 0) + (reservaNotas === 0 ? SEPARADOR_NOTAS.altoPt : 0);
+  }
+  /**
+   * `true` si hay que abrir página antes de colocar algo de altura `altura` con las notas `lista`: no cabe junto a ellas, o la zona de
+   * notas pasaría del máximo. Sobre una página recién abierta (`cursor === topPt`) nunca empuja (se coloca igualmente y la nota se parte).
+   */
+  function hayQueEmpujar(altura: number, lista: [number, NotaFlujo][]): boolean {
+    if (cursor >= topPt) return false;
+    const coste = costeNotas(lista);
+    return cursor - altura - coste < limite() || (coste > 0 && reservaNotas + coste > maxReservaNotas());
+  }
+  /**
+   * Reserva en la página actual las notas `lista` (la línea de la referencia, de altura `alturaLinea`, aún sin colocar). Lo que no cabe
+   * (nota más larga que la página, o el máximo de la zona) queda en `continuacion` para la página siguiente; siempre se coloca al menos un ítem.
+   */
+  function reservarNotas(lista: [number, NotaFlujo][], alturaLinea: number): void {
+    if (lista.length === 0) return;
+    for (const [k] of lista) notasYaReservadas.add(k);
+    const todos = lista.flatMap(([, n]) => n.items);
+    const sep = reservaNotas === 0 ? SEPARADOR_NOTAS.altoPt : 0;
+    const disponible = Math.min(cursor - alturaLinea - limite() - sep, maxReservaNotas() - reservaNotas - sep);
+    let usado = 0, n = 0;
+    for (const it of todos) {
+      if (n > 0 && usado + it.height > disponible + 1e-6) break;
+      usado += it.height; n++;
+    }
+    continuacion.push(...todos.slice(n));
+    if (n === 0) return;
+    notasPagina.push({ continuacion: false, items: todos.slice(0, n) });
+    reservaNotas += sep + usado;
+  }
+  /** Dibuja la zona de notas de la página que se cierra: separador arriba y las notas apiladas hasta el margen inferior. Usa `bottomPt` de ESA página. */
+  function dibujarNotas(): void {
+    if (notasPagina.length === 0) return;
+    const g = paginas[page]!.geo;
+    const guardaCursor = cursor;
+    const arriba = bottomPt + reservaNotas;
+    const ancho = g.widthPt - g.marginLeftPt - g.marginRightPt;
+    const anchoSep = notasPagina[0]!.continuacion ? ancho : Math.min(SEPARADOR_NOTAS.anchoPt, ancho);
+    barras.push({ page, xPt: g.marginLeftPt, yPt: arriba - SEPARADOR_NOTAS.altoPt + (SEPARADOR_NOTAS.altoPt - 1) / 2, wPt: anchoSep, hPt: 1, color: [0, 0, 0] });
+    cursor = arriba - SEPARADOR_NOTAS.altoPt;
+    for (const bloque of notasPagina) {
+      for (const it of bloque.items) { if (it.kind === 'line') colocarLinea(it); else cursor -= it.height; }
+    }
+    cursor = guardaCursor;
+    pintadoEnPagina = true;
+    notasPagina = []; reservaNotas = 0;
+  }
+
   function nuevaPagina(): void {
+    dibujarNotas();
     page++;
     topPt = geoActual.heightPt - geoActual.marginTopPt;
     bottomPt = geoActual.marginBottomPt;
@@ -594,6 +685,19 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     cursor = topPt;
     skipLeadingGaps = true;
     pintadoEnPagina = false;
+    if (continuacion.length > 0) {
+      // Lo que no cupo de una nota de la página anterior abre esta, tras un separador a todo el ancho (como el `w:continuationSeparator` de Word).
+      const todos = continuacion;
+      const disponible = maxReservaNotas() - SEPARADOR_NOTAS.altoPt;
+      let usado = 0, n = 0;
+      for (const it of todos) {
+        if (n > 0 && usado + it.height > disponible + 1e-6) break;
+        usado += it.height; n++;
+      }
+      continuacion = todos.slice(n);
+      notasPagina.push({ continuacion: true, items: todos.slice(0, n) });
+      reservaNotas = SEPARADOR_NOTAS.altoPt + usado;
+    }
   }
 
   /**
@@ -728,7 +832,7 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
         if (q.kind === 'keepEnd' || q.kind === 'pagebreak' || q.kind === 'keepStart') break;
         total += alturaDeFlujo(q);
       }
-      if (cursor < topPt && cursor - total < bottomPt && total <= topPt - bottomPt) nuevaPagina();
+      if (cursor < topPt && cursor - total < limite() && total <= topPt - bottomPt) nuevaPagina();
       continue;
     }
 
@@ -737,7 +841,7 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
       geoActual = item.geo;
       seccionActual = item.seccion;
       if (mismaPagina) { bottomPt = item.geo.marginBottomPt; continue; } // sección continua: sigue en la misma página
-      if (!pintadoEnPagina && cursor === topPt) {
+      if (!pintadoEnPagina && cursor === topPt && notasPagina.length === 0) {
         // Página todavía vacía: se reutiliza con la geometría de la sección nueva (sin página en blanco).
         topPt = item.geo.heightPt - item.geo.marginTopPt;
         bottomPt = item.geo.marginBottomPt;
@@ -766,7 +870,7 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
       let estado = 0;
       for (let guardia = 0; estado < item.total && guardia < 100000; guardia++) {
         const h = item.alturaLinea;
-        if (cursor - h < bottomPt && cursor < topPt) nuevaPagina();
+        if (cursor - h < limite() && cursor < topPt) nuevaPagina();
         skipLeadingGaps = false;
         colocarFlotantes();
         const libre = franjaLibre(item.xPt, item.wPt, h);
@@ -777,7 +881,9 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
         }
         const r = item.paso(estado, libre ?? { xPt: item.xPt, wPt: item.wPt }, estado === 0);
         if (!r || r.siguiente <= estado) break;
-        if (cursor - r.linea.height < bottomPt && cursor < topPt) { nuevaPagina(); continue; }
+        const nl = notasNuevas(r.linea.segs);
+        if (hayQueEmpujar(r.linea.height, nl)) { nuevaPagina(); continue; }
+        reservarNotas(nl, r.linea.height);
         colocarLinea(r.linea);
         estado = r.siguiente;
       }
@@ -785,7 +891,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     }
 
     if (item.kind === 'tableRow') {
-      if (cursor - item.height < bottomPt && cursor < topPt) {
+      const nl = notasNuevas(segsDeFila(item));
+      if (hayQueEmpujar(item.height, nl)) {
         nuevaPagina();
         // Repite el encabezado en la página nueva, salvo si la fila que
         // provocó el salto es ella misma una fila de encabezado (evita
@@ -794,12 +901,13 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
         if (!item.esEncabezado) for (const h of encabezadosTabla) colocarFila(h);
       }
       colocarFlotantes();
+      reservarNotas(nl, item.height);
       colocarFila(item);
       continue;
     }
 
     if (item.kind === 'image') {
-      if (cursor - item.height < bottomPt && cursor < topPt) nuevaPagina();
+      if (cursor - item.height < limite() && cursor < topPt) nuevaPagina();
       colocarFlotantes();
       const bottom = cursor - item.height;
       imagenes.push({ page, xPt: item.xPt, yPt: bottom, wPt: item.wPt, hPt: item.height, imgId: item.imgId });
@@ -810,7 +918,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
 
     const extra = item.kind === 'line' ? (item.keepWithNextHeight ?? 0) : 0;
     const needed = item.height + extra;
-    if (cursor - needed < bottomPt && cursor < topPt) {
+    const nl = item.kind === 'line' ? notasNuevas(item.segs) : [];
+    if (hayQueEmpujar(needed, nl)) {
       nuevaPagina();
       if (item.kind === 'gap') continue;
     }
@@ -819,6 +928,7 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     const bottom = cursor - item.height;
 
     if (item.kind === 'line') {
+      reservarNotas(nl, item.height);
       colocarLinea(item);
       continue;
     } else if (item.kind === 'rule') {
@@ -833,6 +943,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
   }
 
   colocarFlotantes();
+  while (continuacion.length > 0) nuevaPagina(); // resto de una nota que no cupo: páginas que solo llevan la continuación
+  dibujarNotas();
   const advertencias: Advertencia[] = [];
   if (mergesPartidos.size > 0) {
     const c = mergesPartidos.size;
