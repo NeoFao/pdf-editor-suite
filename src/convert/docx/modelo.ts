@@ -225,6 +225,8 @@ export interface Tabla {
   tipo: 'tabla';
   /** Ancho de cada columna (`w:tblGrid`/`w:gridCol`, twips → pt), en el mismo orden que las celdas de cada fila (sumando `gridSpan`). */
   anchosColPt: number[];
+  /** `w:tblLayout w:type="fixed"` (E-110): el ancho de columna no se adapta al contenido; una imagen más ancha que su celda se escala con aviso. */
+  layoutFijo?: boolean;
   filas: FilaTabla[];
   /** `null` = sin bordes visibles. Un único color/grosor para TODA la tabla (simplificación de fase 2a, ver comentario de `CeldaTabla`). */
   bordeColor: RGB | null;
@@ -742,7 +744,7 @@ interface Contexto {
   perdidas: Map<string, number>;
   /** `true` mientras se procesa un encabezado o pie: ahí `PAGE`/`NUMPAGES` son campos reales y las imágenes se omiten con aviso. */
   zona: boolean;
-  /** `true` mientras se procesa una celda de tabla: ahí una imagen se omite con aviso (`imagenEnCelda`). */
+  /** `true` mientras se procesa una celda de tabla: ahí una imagen flotante se omite con aviso (`imagenEnCelda`); la inline se dibuja (E-110). */
   enCelda: boolean;
   /** `w:pPr` de la cadena del estilo de la tabla en curso (de la raíz a la hoja): base de los párrafos de sus celdas, entre docDefaults y el estilo de párrafo (E-103). */
   pPrTabla: XmlElemento[];
@@ -777,7 +779,7 @@ const MENSAJES_PERDIDAS: [string, TipoAdvertencia, (c: number) => string][] = [
   ['saltoColumna', 'aproximado', (c) => cuenta(c, 'Un salto de columna se trató como salto de línea (sin columnas).', '{n} saltos de columna se trataron como saltos de línea (sin columnas).')],
   ['listaSinDef', 'aproximado', (c) => cuenta(c, 'Un párrafo de lista cuya numeración no está definida se maquetó sin marcador.', '{n} párrafos de lista cuya numeración no está definida se maquetaron sin marcador.')],
   ['tablaAnidada', 'aproximado', (c) => cuenta(c, 'Una tabla anidada dentro de otra se aplanó a texto (celdas separadas por tabulador).', '{n} tablas anidadas se aplanaron a texto (celdas separadas por tabulador).')],
-  ['imagenEnCelda', 'omitido', (c) => cuenta(c, 'Se omitió una imagen dentro de una celda de tabla (aún no soportado).', 'Se omitieron {n} imágenes dentro de celdas de tabla (aún no soportado).')],
+  ['imagenEnCelda', 'omitido', (c) => cuenta(c, 'Se omitió una imagen flotante dentro de una celda de tabla (aún no soportado).', 'Se omitieron {n} imágenes flotantes dentro de celdas de tabla (aún no soportado).')],
   ['saltoPaginaEnCelda', 'aproximado', (c) => cuenta(c, 'Un salto de página dentro de una celda de tabla se trató como salto de línea.', '{n} saltos de página dentro de celdas de tabla se trataron como saltos de línea.')],
   ['flotante', 'aproximado', (c) => cuenta(c, 'Imagen flotante colocada sin ajuste de texto (el texto no la rodea y puede quedar debajo o encima de ella).', '{n} imágenes flotantes colocadas sin ajuste de texto (el texto no las rodea y puede quedar debajo o encima de ellas).')],
   ['flotanteAprox', 'aproximado', (c) => cuenta(c, 'El ajuste de texto de una imagen flotante con contorno (estrecho o a través, con polígono) se aproximó a un cuadrado.', 'El ajuste de texto de {n} imágenes flotantes con contorno (estrecho o a través, con polígono) se aproximó a un cuadrado.')],
@@ -1061,7 +1063,7 @@ function resolverImagenDrawing(drawing: XmlElemento, ctx: Contexto): ParteParraf
   const base = { tipo: 'imagen' as const, refId: rutaMediaDesdeWord(rel.target), wPt: cx / EMU_POR_PUNTO, hPt: cy / EMU_POR_PUNTO };
   if (!anchor) return base;
   const ajuste = leerAjuste(anchor, ctx);
-  // Sin ajuste de texto (wrapNone o sin elemento de ajuste) se avisa; dentro de una celda se omitirá con su propio aviso (`imagenEnCelda`).
+  // Sin ajuste de texto (wrapNone o sin elemento de ajuste) se avisa; dentro de una celda la flotante se omitirá con su propio aviso (`imagenEnCelda`).
   if (!ajuste && !ctx.enCelda) anotar(ctx, 'flotante');
   return { ...base, flotante: { ...leerPosicionAnchor(anchor), ...(ajuste ? { ajuste } : {}) } };
 }
@@ -1383,7 +1385,8 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
   // Lo que una celda no puede pintar en esta fase se degrada CON aviso, nunca en silencio.
   for (let k = partes.length - 1; k >= 0; k--) {
     const parte = partes[k]!;
-    if (parte.tipo === 'imagen') { partes.splice(k, 1); anotar(ctx, 'imagenEnCelda'); }
+    // Una imagen EN LÍNEA se dibuja (E-110); solo la flotante (`wp:anchor`) se omite con aviso.
+    if (parte.tipo === 'imagen' && parte.flotante) { partes.splice(k, 1); anotar(ctx, 'imagenEnCelda'); }
     else if (parte.tipo === 'saltoPagina') { partes[k] = { tipo: 'saltoLinea' }; anotar(ctx, 'saltoPaginaEnCelda'); }
   }
   if (vMerge === 'continue' && partes.some((x) => x.tipo === 'texto')) { anotar(ctx, 'vMergeConTexto'); partes.length = 0; }
@@ -1427,7 +1430,8 @@ function procesarTablaReal(tbl: XmlElemento, ctx: Contexto): Tabla {
     const numCols = filas.reduce((max, f) => Math.max(max, f.celdas.reduce((s, c) => s + c.gridSpan, 0)), 1);
     anchosColPt = new Array(numCols).fill(72);
   }
-  return { tipo: 'tabla', anchosColPt, filas, bordeColor, bordeGrosorPt, ...(bordesTabla ? { bordesTabla } : {}) };
+  const layoutFijo = tblPr ? primerHijo(tblPr, 'w:tblLayout')?.atributos['w:type'] === 'fixed' : false;
+  return { tipo: 'tabla', anchosColPt, filas, bordeColor, bordeGrosorPt, ...(bordesTabla ? { bordesTabla } : {}), ...(layoutFijo ? { layoutFijo } : {}) };
 }
 
 function leerGeometriaPagina(sectPr: XmlElemento | null): { anchoPt: number; altoPt: number; margenSup: number; margenInf: number; margenIzq: number; margenDer: number; margenCab: number; margenPie: number } {

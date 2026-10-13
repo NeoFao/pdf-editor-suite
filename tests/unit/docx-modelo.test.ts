@@ -356,12 +356,12 @@ test('una lista cuyo numId no está definido se avisa (el marcador se perdería)
   expect(avisos(xml)).toMatch(/lista|numeraci/i);
 });
 
-test('tabla anidada, imagen y salto de página dentro de una celda: el texto se conserva aplanado y se avisa', () => {
+test('tabla anidada, imagen FLOTANTE y salto de página dentro de una celda (la inline se dibuja, E-110): el texto se conserva aplanado y se avisa', () => {
   const xml = `<w:document><w:body><w:tbl><w:tblGrid><w:gridCol w:w="4000"/></w:tblGrid><w:tr><w:tc>
     <w:p><w:r><w:t>externa</w:t></w:r></w:p>
     <w:tbl><w:tblGrid><w:gridCol w:w="1000"/><w:gridCol w:w="1000"/></w:tblGrid>
       <w:tr><w:tc><w:p><w:r><w:t>n1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>n2</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
-    <w:p><w:r>${drawingInline('rId1', 914400, 914400)}</w:r><w:r><w:br w:type="page"/></w:r></w:p>
+    <w:p><w:r>${drawingInline('rId1', 914400, 914400).replace(/wp:inline/g, 'wp:anchor')}</w:r><w:r><w:br w:type="page"/></w:r></w:p>
   </w:tc></w:tr></w:tbl></w:body></w:document>`;
   const modelo = construirModeloDocx(xml, null, null, RELS_UNA_IMAGEN);
   const tabla = modelo.bloques[0]!;

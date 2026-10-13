@@ -2,7 +2,7 @@ import { aproximado, omitido, type Advertencia } from '../advertencia';
 import { esParrafo, esTabla, mensajeEnlaceSinDestino, type NotaDocx, type InfoLista, type Alineacion, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type RunFormato, type Borde, type BordesTabla, type ParadaTab, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx } from './modelo';
 import {
   wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona, parrafoFlex, lineasConTabs, tamanoLinea, SEPARADOR_NOTAS,
-  type Atom, type NotaFlujo, type FlowParrafoFlex, type FlowGap, type Medir, type FlowItem, type FlowLine, type FlowTableRow, type RelLinea, type RelBarra, type ResultadoLayout, type PageGeometry, type RGB, type TabsConfig, type TabStopAbs
+  type Atom, type NotaFlujo, type FlowParrafoFlex, type FlowGap, type Medir, type FlowItem, type FlowLine, type FlowTableRow, type RelLinea, type RelImagen, type RelBarra, type ResultadoLayout, type PageGeometry, type RGB, type TabsConfig, type TabStopAbs
 } from '../flujo/layout';
 
 /**
@@ -201,6 +201,8 @@ interface GrupoCelda {
   sangriaIzqPt: number; sangriaPrimeraLineaPt: number; sangriaDerPt: number;
   alineacion: Alineacion; espacioAntesPt: number; espacioDespuesPt: number;
   interlineadoFactor: number; interlineadoExactoPt: number | null;
+  /** Grupo que es UNA imagen en línea (E-110): tamaño declarado por `wp:extent` (EMU / 12700 = pt) y ruta dentro del ZIP. `atoms` va vacío. */
+  imagen?: { refId: string; wPt: number; hPt: number };
 }
 
 /**
@@ -211,22 +213,27 @@ interface GrupoCelda {
  * `tab` que resuelve `lineaConTabs` (E-101, el MISMO motor que los
  * párrafos normales): las paradas del párrafo se miden desde el borde
  * interior de la celda (`xIniPt`; `xFinPt` es el interior derecho, al que
- * se alinea un `w:ptab`). Una `imagen` dentro de una celda queda fuera de
- * alcance de esta fase (se ignora: no hay un "bloque" de altura propia
- * dentro de la línea de una celda en este maquetador) — caso raro en tablas
- * reales, no cubierto por los tests de este PR.
+ * se alinea un `w:ptab`). Una imagen EN LÍNEA (E-110) cierra el texto
+ * anterior del párrafo y forma su PROPIO grupo (`GrupoCelda.imagen`, una "línea" tan alta como la imagen), con el formato del
+ * párrafo: así se apila con el texto, respeta su alineación y la fila crece sola. El texto que sigue a la imagen, dentro del
+ * mismo párrafo, conserva el formato del párrafo (sin repetir el marcador de lista). El espaciado antes/después del párrafo
+ * se aplica a cada trozo (aproximación en un párrafo que mezcla texto e imagen).
  */
+type InicioCelda = Extract<CeldaTabla['partes'][number], { tipo: 'inicioParrafo' }>;
 function celdaAGrupos(celda: CeldaTabla, xIniPt: number, xFinPt: number, tabDefectoPt: number): GrupoCelda[] {
   const grupos: GrupoCelda[] = [];
   let actual: Atom[] = [];
   let paradas: ParadaTab[] | null = null;
   let terminaEnEspacio = true;
-  let inicio: Extract<CeldaTabla['partes'][number], { tipo: 'inicioParrafo' }> | null = null;
+  let inicio: InicioCelda | null = null;
+  let sinTextoTrasImagen = false; // tras una imagen, el cierre del párrafo no añade una línea de texto vacía
   let marcasPendientes: string[] = [];
   const cerrar = (): void => {
+    if (actual.length === 0 && marcasPendientes.length === 0 && sinTextoTrasImagen) { sinTextoTrasImagen = false; paradas = null; inicio = null; return; }
     // Marcador sin texto detrás dentro del grupo: se cuelga del último átomo (misma línea) si lo hay.
     if (marcasPendientes.length > 0 && actual.length > 0) { const u = actual[actual.length - 1]!; u.marcas = [...(u.marcas ?? []), ...marcasPendientes]; }
     marcasPendientes = [];
+    sinTextoTrasImagen = false;
     if (inicio?.lista && inicio.lista.textoMarcador !== '') actual.unshift(atomoMarcador(inicio.lista, tamanoLineaDe(actual.find((a) => !a.tab)) ?? TABLA_SIZE_PT_DEFECTO));
     const tabs: TabsConfig | null = paradas ? { stops: paradas.map((t): TabStopAbs => ({ posPt: xIniPt + t.posPt, tipo: t.tipo, leader: t.leader })), defectoPt: tabDefectoPt, origenPt: xIniPt } : null;
     const izq = inicio?.sangriaIzqPt ?? 0;
@@ -241,7 +248,7 @@ function celdaAGrupos(celda: CeldaTabla, xIniPt: number, xFinPt: number, tabDefe
   };
   for (const parte of celda.partes) {
     if (parte.tipo === 'inicioParrafo') {
-      inicio = parte;
+      inicio = parte; sinTextoTrasImagen = false;
     } else if (parte.tipo === 'texto') {
       const empiezaConEspacio = parte.texto.length === 0 || /^\s/.test(parte.texto);
       let primerPalabra = true;
@@ -263,16 +270,28 @@ function celdaAGrupos(celda: CeldaTabla, xIniPt: number, xFinPt: number, tabDefe
       terminaEnEspacio = true;
     } else if (parte.tipo === 'saltoLinea' || parte.tipo === 'saltoPagina') {
       cerrar();
+    } else if (parte.tipo === 'imagen' && !parte.flotante) {
+      const ini = inicio as InicioCelda | null;
+      if (actual.length > 0 || marcasPendientes.length > 0) cerrar();
+      const izq = ini?.sangriaIzqPt ?? 0;
+      grupos.push({
+        atoms: [], tabs: null, sangriaIzqPt: izq, sangriaPrimeraLineaPt: Math.max(-izq, ini?.sangriaPrimeraLineaPt ?? 0), sangriaDerPt: ini?.sangriaDerPt ?? 0,
+        alineacion: ini?.alineacion ?? celda.alineacion, espacioAntesPt: ini?.espacioAntesPt ?? 0, espacioDespuesPt: ini?.espacioDespuesPt ?? 0,
+        interlineadoFactor: ini?.interlineadoFactor ?? TABLA_LINE_HEIGHT_FACTOR, interlineadoExactoPt: ini?.interlineadoExactoPt ?? null,
+        imagen: { refId: parte.refId, wPt: parte.wPt, hPt: parte.hPt }
+      });
+      // Tras cerrar el texto previo, `inicio` quedó a null: se restaura SIN el marcador de lista (ya se dibujó o no toca repetirlo).
+      inicio = ini ? { ...ini, lista: null } : null;
+      terminaEnEspacio = true; sinTextoTrasImagen = true;
     }
-    // 'imagen': ver el comentario de la función.
   }
   cerrar();
   return grupos;
 }
 
 /** Contadores de degradaciones de tabla (se convierten en avisos al final de `renderizarModeloDocx`). */
-interface AvisosTabla { filasPartidas: number; anchoEscalado: number; gridAmpliado: number; mergeDemasiadoAlto: number; siguienteMerge: number; saltoEnZona: number; zonaAcotada: number }
-const nuevosAvisos = (): AvisosTabla => ({ filasPartidas: 0, anchoEscalado: 0, gridAmpliado: 0, mergeDemasiadoAlto: 0, siguienteMerge: 0, saltoEnZona: 0, zonaAcotada: 0 });
+interface AvisosTabla { imagenEscalada: number; imagenAlta: number; filasPartidas: number; anchoEscalado: number; gridAmpliado: number; mergeDemasiadoAlto: number; siguienteMerge: number; saltoEnZona: number; zonaAcotada: number }
+const nuevosAvisos = (): AvisosTabla => ({ imagenEscalada: 0, imagenAlta: 0, filasPartidas: 0, anchoEscalado: 0, gridAmpliado: 0, mergeDemasiadoAlto: 0, siguienteMerge: 0, saltoEnZona: 0, zonaAcotada: 0 });
 
 /** Una celda ya colocada en la rejilla de SU fila (x absoluto de página, en pt). */
 interface CeldaPos {
@@ -355,6 +374,20 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
     const xIni = p.xStart + TABLA_PAD_X_PT;
     return celdaAGrupos(p.celda, xIni, xIni + anchoTexto, opc.tabDefectoPt).flatMap((g) => {
       const { atoms, tabs, sangriaIzqPt, sangriaPrimeraLineaPt, alineacion } = g;
+      if (g.imagen) {
+        // Imagen en línea (E-110): ancho interior de la celda - sangrías; si la imagen es más ancha se escala proporcionalmente (como
+        // "ajustar automáticamente" de Word) y, con columnas de ancho fijo, se avisa. Nunca más alta que la zona útil de la página.
+        const anchoImg = Math.max(10, anchoTexto - sangriaIzqPt - g.sangriaDerPt);
+        let { wPt, hPt } = g.imagen;
+        if (wPt > anchoImg) { const e = anchoImg / wPt; wPt *= e; hPt *= e; if (t.layoutFijo) av.imagenEscalada++; }
+        const altoMax = Math.max(20, alturaUtilPt - TABLA_PAD_Y_PT * 2 - 2);
+        if (hPt > altoMax) { const e = altoMax / hPt; wPt *= e; hPt *= e; av.imagenAlta++; }
+        const xBase = xIni + sangriaIzqPt;
+        // Alineación del párrafo (E-103): centrada/derecha dentro del ancho disponible; izquierda y justificada, al borde.
+        const x = alineacion === 'center' ? xBase + (anchoImg - wPt) / 2 : alineacion === 'right' ? xBase + anchoImg - wPt : xBase;
+        const hueco = (alto: number): FlowLine => ({ kind: 'line', height: alto, segs: [], bars: [] });
+        return [...(g.espacioAntesPt > 0 ? [hueco(g.espacioAntesPt)] : []), { kind: 'line', height: hPt, segs: [], bars: [], imagen: { xPt: x, wPt, imgId: g.imagen.refId } }, ...(g.espacioDespuesPt > 0 ? [hueco(g.espacioDespuesPt)] : [])];
+      }
       const xNormal = xIni + sangriaIzqPt;
       const xPrimera = xNormal + sangriaPrimeraLineaPt;
       // Ancho de línea = interior de la celda - sangría izquierda - sangría derecha (centrado, derecha y justificado se miden contra él).
@@ -417,9 +450,11 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
   function armarFila(i: number, lineasFila: FlowLine[][], altura: number, esEncabezado: boolean, inferior: 'ninguno' | 'interno' | 'tabla'): FlowTableRow {
     const fila = pos[i]!;
     const lineasRel: RelLinea[] = [];
+    const imagenesRel: RelImagen[] = [];
     lineasFila.forEach((ls) => {
       let y = TABLA_PAD_Y_PT;
       for (const l of ls) {
+        if (l.imagen) imagenesRel.push({ relYPt: y, xPt: l.imagen.xPt, wPt: l.imagen.wPt, hPt: l.height, imgId: l.imagen.imgId });
         lineasRel.push({ relYPt: y + l.height * (1 - TABLA_BASELINE_FRACTION), segs: l.segs });
         y += l.height;
       }
@@ -442,7 +477,7 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
     });
     const mergeInicio = fila.filter((p) => p.filasCombinadas > 1).map((p) => p.mergeId!);
     const mergeContinua = fila.filter((p) => p.esContinuacion).map((p) => p.mergeId!);
-    return { kind: 'tableRow', height: altura, lineas: lineasRel, fondos, bordes, esEncabezado, ...(mergeInicio.length ? { mergeInicio } : {}), ...(mergeContinua.length ? { mergeContinua } : {}) };
+    return { kind: 'tableRow', height: altura, lineas: lineasRel, ...(imagenesRel.length ? { imagenes: imagenesRel } : {}), fondos, bordes, esEncabezado, ...(mergeInicio.length ? { mergeInicio } : {}), ...(mergeContinua.length ? { mergeContinua } : {}) };
   }
 
   /** Reparte las líneas de cada celda en trozos que caben en `capacidad` pt de contenido; el trozo c de cada celda va en la fila c. */
@@ -494,6 +529,8 @@ function renderizarTabla(t: Tabla, margenIzqPt: number, margenDerPt: number, anc
 function mensajesTabla(av: AvisosTabla): Advertencia[] {
   const out: Advertencia[] = [];
   const c = (n: number, uno: string, varios: string): string => (n === 1 ? uno : varios.replace('{n}', String(n)));
+  if (av.imagenEscalada > 0) out.push(aproximado(c(av.imagenEscalada, 'Una imagen más ancha que su celda (de ancho fijo) se redujo proporcionalmente al ancho de la celda.', '{n} imágenes más anchas que su celda (de ancho fijo) se redujeron proporcionalmente al ancho de la celda.')));
+  if (av.imagenAlta > 0) out.push(aproximado(c(av.imagenAlta, 'Una imagen dentro de una celda era más alta que una página y se redujo proporcionalmente para que cupiera.', '{n} imágenes dentro de celdas eran más altas que una página y se redujeron proporcionalmente para que cupieran.')));
   if (av.filasPartidas > 0) out.push(aproximado(c(av.filasPartidas, 'Una fila de tabla era más alta que una página y se partió por líneas entre páginas.', '{n} filas de tabla eran más altas que una página y se partieron por líneas entre páginas.')));
   if (av.mergeDemasiadoAlto > 0) out.push(aproximado(c(av.mergeDemasiadoAlto, 'Una fila con celdas combinadas verticalmente es más alta que una página y no se pudo partir: parte de su contenido puede quedar fuera de la página.', '{n} filas con celdas combinadas verticalmente son más altas que una página y no se pudieron partir: parte de su contenido puede quedar fuera de la página.')));
   if (av.gridAmpliado > 0) out.push(aproximado(c(av.gridAmpliado, 'Una tabla tenía filas con más celdas que columnas en su rejilla; se ampliaron las columnas (72 pt cada una) para no perder celdas.', '{n} tablas tenían filas con más celdas que columnas en su rejilla; se ampliaron las columnas (72 pt cada una) para no perder celdas.')));
