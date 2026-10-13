@@ -128,7 +128,9 @@ export type ParteParrafo =
     /** Nombre del `w:bookmarkStart` al que apunta el `w:hyperlink w:anchor` que envuelve este texto (enlace INTERNO). Se resuelve tras paginar: sin url. */
     ancla?: string;
     /** Referencia de nota al pie (E-109): índice de la nota en `ModeloDocx.notasAlPie`. El texto es el número ya formateado, en superíndice. */
-    nota?: number }
+    nota?: number;
+    /** Resultado de un `PAGEREF marcador` (E-111): `texto` es el número guardado por Word (caché, '' si no hay); al maquetar se sustituye por el número de página de NUESTRA paginación. */
+    pageref?: string }
   /** `w:bookmarkStart w:name`: dónde empieza el marcador `nombre` (no ocupa espacio). `paginar` registra la página y la y de su línea; `_GoBack` no se emite nunca. */
   | { tipo: 'marcador'; nombre: string }
   /**
@@ -751,10 +753,16 @@ interface Contexto {
   /** `w:tblStyle` de la tabla en curso (base del formato de carácter de sus celdas, E-104); `null` fuera de tablas o sin estilo. */
   estiloTabla: string | null;
   /** Campos complejos (`w:fldChar`) abiertos, el más interno al final. `suprimir`: el resultado cacheado se descarta porque ya se emitió un `campo`. */
-  camposAbiertos: { instr: string; separado: boolean; suprimir: boolean; emitido: boolean }[];
+  camposAbiertos: CampoAbierto[];
   /** Notas al pie y al final (E-109). */
   notas: { pie: ClaseNotas; final: ClaseNotas; enNota: boolean; numeroActual: string | null };
 }
+
+/**
+ * Campo complejo en curso (E-111). `cache`: ya hubo resultado (texto o dibujo) entre `separate` y `end`, en el propio campo o en uno anidado.
+ * `ref`: parte `pageref` de un PAGEREF: el resultado guardado se CAPTURA en ella en vez de emitirse (se sustituye al maquetar).
+ */
+interface CampoAbierto { instr: string; separado: boolean; suprimir: boolean; emitido: boolean; cache: boolean; ref: Extract<ParteParrafo, { tipo: 'texto' }> | null }
 
 /** Una clase de notas (al pie o al final): sus `w:footnote`/`w:endnote` por id, sus relaciones propias, la configuración de numeración y las ya referenciadas. */
 interface ClaseNotas { elementos: Map<string, XmlElemento>; relsXml: string | null; fmt: string; inicio: number; reinicio: boolean; lista: NotaDocx[] }
@@ -787,7 +795,8 @@ const MENSAJES_PERDIDAS: [string, TipoAdvertencia, (c: number) => string][] = [
   ['seccionParImpar', 'aproximado', (c) => cuenta(c, 'Un salto de sección de tipo página par, página impar o columna siguiente se trató como un salto a página nueva.', '{n} saltos de sección de tipo página par, página impar o columna siguiente se trataron como saltos a página nueva.')],
   ['numeroPaginaFormato', 'aproximado', (c) => cuenta(c, 'El formato de numeración de página de una sección (romano, letras...) no se reproduce: se numera con cifras arábigas.', 'El formato de numeración de página de {n} secciones (romano, letras...) no se reproduce: se numera con cifras arábigas.')],
   ['numeroPaginaContinua', 'aproximado', (c) => cuenta(c, 'El reinicio de numeración de página de una sección continua se ignoró (la numeración sigue por páginas).', 'El reinicio de numeración de página de {n} secciones continuas se ignoró (la numeración sigue por páginas).')],
-  ['campo', 'aproximado', (c) => cuenta(c, 'Un campo no soportado (fecha, índice, referencia...) se dejó con el último valor que Word guardó.', '{n} campos no soportados (fecha, índice, referencia...) se dejaron con el último valor que Word guardó.')],
+  ['campo', 'aproximado', (c) => cuenta(c, 'Un campo que Word recalcula al abrir o imprimir (fecha, hora, número de página en el cuerpo...) se dejó con el último valor que Word guardó.', '{n} campos que Word recalcula al abrir o imprimir (fecha, hora, número de página en el cuerpo...) se dejaron con el último valor que Word guardó.')],
+  ['campoSinResultado', 'omitido', (c) => cuenta(c, 'Se omitió un campo sin resultado guardado en el documento (Word lo calcularía al actualizarlo).', 'Se omitieron {n} campos sin resultado guardado en el documento (Word los calcularía al actualizarlos).')],
   ['bordeEstilo', 'aproximado', (c) => cuenta(c, 'Un borde de tabla con estilo no continuo (doble, punteado...) se dibujó como línea continua.', '{n} bordes de tabla con estilo no continuo (doble, punteado...) se dibujaron como línea continua.')],
   ['encabezadoFaltante', 'omitido', (c) => cuenta(c, 'Se omitió un encabezado de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} encabezados de página (no se encontró o no se pudo leer su contenido en el paquete).')],
   ['pieFaltante', 'omitido', (c) => cuenta(c, 'Se omitió un pie de página (no se encontró o no se pudo leer su contenido en el paquete).', 'Se omitieron {n} pies de página (no se encontró o no se pudo leer su contenido en el paquete).')],
@@ -837,6 +846,13 @@ function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, parte
     if (h.nombre === 'w:fldChar') { procesarFldChar(h, formato, ctx, partes); continue; }
     if (h.nombre === 'w:instrText') { const abierto = ctx.camposAbiertos[ctx.camposAbiertos.length - 1]; if (abierto && !abierto.separado) abierto.instr += textoDirecto(h); continue; }
     if (acc.vanish) continue; // texto oculto (w:vanish): Word no lo dibuja al exportar a PDF
+    if ((h.nombre === 'w:t' && textoDirecto(h) !== '') || h.nombre === 'w:drawing') for (const c of ctx.camposAbiertos) if (c.separado) c.cache = true;
+    // Resultado guardado de un PAGEREF: no se emite, se captura en su parte (se sustituye por el número de NUESTRA paginación al maquetar).
+    const capturador = [...ctx.camposAbiertos].reverse().find((c) => c.separado && c.ref !== null)?.ref ?? null;
+    if (capturador && (h.nombre === 'w:t' || h.nombre === 'w:tab' || h.nombre === 'w:br' || h.nombre === 'w:cr' || h.nombre === 'w:noBreakHyphen')) {
+      if (h.nombre === 'w:t' || h.nombre === 'w:noBreakHyphen') { if (capturador.texto === '') capturador.formato = formato; capturador.texto += h.nombre === 'w:t' ? textoDirecto(h) : '-'; }
+      continue;
+    }
     // Resultado cacheado de un campo ya sustituido (PAGE/NUMPAGES): se descarta, el número real se pinta al maquetar.
     if (ctx.camposAbiertos.some((c) => c.suprimir) && (h.nombre === 'w:t' || h.nombre === 'w:tab' || h.nombre === 'w:br' || h.nombre === 'w:cr' || h.nombre === 'w:noBreakHyphen')) continue;
     if (h.nombre === 'w:t') { const t = textoDirecto(h); if (t.length > 0) empujarTexto(t, acc, formato, partes); }
@@ -1009,21 +1025,48 @@ function campoDePagina(instr: string): 'PAGE' | 'NUMPAGES' | null {
   return m[1]!.toUpperCase() as 'PAGE' | 'NUMPAGES';
 }
 
-/** `w:fldChar` (campo complejo): begin → abre; separate → decide (PAGE/NUMPAGES: emite el campo y suprime el resultado cacheado); end → cierra. */
+/** Clase de un campo según su código (E-111). `cambiante`: Word lo recalcula al abrir o imprimir (el valor guardado puede estar viejo). */
+type ClaseCampo = { tipo: 'pagina'; campo: 'PAGE' | 'NUMPAGES' } | { tipo: 'pageref'; marcador: string } | { tipo: 'cambiante' } | { tipo: 'otro' };
+const CAMPOS_CAMBIANTES = /^\s*(DATE|TIME|PAGE|NUMPAGES|SECTIONPAGES|SECTION)\b/i;
+
+function clasificarCampo(instr: string): ClaseCampo {
+  const pagina = campoDePagina(instr);
+  if (pagina) return { tipo: 'pagina', campo: pagina };
+  const ref = /^\s*PAGEREF\s+(?:"([^"]+)"|([^\s\\]+))/i.exec(instr);
+  // `\p` (arriba/abajo) no produce un número: queda como campo ordinario con su caché.
+  if (ref && !/\\p\b/i.test(instr)) return { tipo: 'pageref', marcador: (ref[1] ?? ref[2])! };
+  return CAMPOS_CAMBIANTES.test(instr) ? { tipo: 'cambiante' } : { tipo: 'otro' };
+}
+
+/** Avisos de un campo cerrado: sin resultado guardado no se dibuja nada (`omitido`); con él, solo avisa si es de los que cambian (`aproximado`). */
+function avisarCampo(ctx: Contexto, clase: ClaseCampo, hayResultado: boolean): void {
+  if (!hayResultado) anotar(ctx, 'campoSinResultado');
+  else if (clase.tipo === 'cambiante' || clase.tipo === 'pagina') anotar(ctx, 'campo');
+}
+
+/**
+ * `w:fldChar` (campo complejo): begin → abre; separate → decide (PAGE/NUMPAGES en encabezado/pie: emite el campo y suprime el resultado
+ * guardado; PAGEREF: emite la parte `pageref` que captura el resultado; el resto dibuja su resultado guardado, nunca el código);
+ * end → cierra y avisa (E-111).
+ */
 function procesarFldChar(el: XmlElemento, formato: RunFormato, ctx: Contexto, partes: ParteParrafo[]): void {
   const tipo = el.atributos['w:fldCharType'];
-  if (tipo === 'begin') { ctx.camposAbiertos.push({ instr: '', separado: false, suprimir: false, emitido: false }); return; }
+  if (tipo === 'begin') { ctx.camposAbiertos.push({ instr: '', separado: false, suprimir: false, emitido: false, cache: false, ref: null }); return; }
   const actual = ctx.camposAbiertos[ctx.camposAbiertos.length - 1];
   if (!actual) return;
   const resolver = (): void => {
     if (actual.emitido) return;
     actual.emitido = true;
-    const campo = ctx.zona ? campoDePagina(actual.instr) : null;
-    if (campo) { partes.push({ tipo: 'campo', campo, formato }); actual.suprimir = true; }
-    else anotar(ctx, 'campo');
+    const clase = clasificarCampo(actual.instr);
+    if (clase.tipo === 'pagina' && ctx.zona) { partes.push({ tipo: 'campo', campo: clase.campo, formato }); actual.suprimir = true; }
+    else if (clase.tipo === 'pageref') { const parte: Extract<ParteParrafo, { tipo: 'texto' }> = { tipo: 'texto', texto: '', formato, pageref: clase.marcador }; partes.push(parte); actual.ref = parte; }
   };
   if (tipo === 'separate') { actual.separado = true; resolver(); }
-  else if (tipo === 'end') { resolver(); ctx.camposAbiertos.pop(); }
+  else if (tipo === 'end') {
+    resolver();
+    if (!actual.suprimir && !actual.ref) avisarCampo(ctx, clasificarCampo(actual.instr), actual.cache);
+    ctx.camposAbiertos.pop();
+  }
 }
 
 /**
@@ -1140,14 +1183,26 @@ function recorrerContenidoParrafo(contenedor: XmlElemento, baseRuns: RPrAcum, ct
   }
 }
 
-/** `w:fldSimple`: PAGE/NUMPAGES en un encabezado/pie → `campo` (con el formato de su run, sin el texto cacheado); cualquier otro conserva su resultado y avisa. */
+/**
+ * `w:fldSimple`: PAGE/NUMPAGES en un encabezado/pie → `campo` (con el formato de su run, sin el texto guardado); PAGEREF → una parte
+ * `pageref` (el número se resuelve al maquetar); cualquier otro dibuja su resultado guardado (E-111).
+ */
 function procesarFldSimple(h: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, partes: ParteParrafo[]): void {
-  const campo = ctx.zona ? campoDePagina(h.atributos['w:instr'] ?? '') : null;
+  const clase = clasificarCampo(h.atributos['w:instr'] ?? '');
   const tmp: ParteParrafo[] = [];
   recorrerContenidoParrafo(h, baseRuns, ctx, tmp);
-  if (!campo) { anotar(ctx, 'campo'); partes.push(...tmp); return; }
-  const t = tmp.find((x) => x.tipo === 'texto');
-  partes.push({ tipo: 'campo', campo, formato: t && t.tipo === 'texto' ? t.formato : formatoDeAcc(baseRuns) });
+  if (clase.tipo === 'pagina' && ctx.zona) {
+    const t = tmp.find((x) => x.tipo === 'texto');
+    partes.push({ tipo: 'campo', campo: clase.campo, formato: t && t.tipo === 'texto' ? t.formato : formatoDeAcc(baseRuns) });
+    return;
+  }
+  if (clase.tipo === 'pageref') {
+    const ts = tmp.filter((x): x is Extract<ParteParrafo, { tipo: 'texto' }> => x.tipo === 'texto');
+    partes.push({ tipo: 'texto', texto: ts.map((x) => x.texto).join(''), formato: ts[0]?.formato ?? formatoDeAcc(baseRuns), pageref: clase.marcador }, ...tmp.filter((x) => x.tipo !== 'texto'));
+    return;
+  }
+  avisarCampo(ctx, clase, tmp.some((x) => (x.tipo === 'texto' && x.texto.trim() !== '') || x.tipo === 'imagen'));
+  partes.push(...tmp);
 }
 
 /**

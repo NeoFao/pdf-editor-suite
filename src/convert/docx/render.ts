@@ -1,5 +1,5 @@
 import { aproximado, omitido, type Advertencia } from '../advertencia';
-import { esParrafo, esTabla, mensajeEnlaceSinDestino, type NotaDocx, type InfoLista, type Alineacion, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type RunFormato, type Borde, type BordesTabla, type ParadaTab, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx } from './modelo';
+import { esParrafo, esTabla, mensajeEnlaceSinDestino, type NotaDocx, type InfoLista, type Alineacion, type Parrafo, type Tabla, type CeldaTabla, type ModeloDocx, type RunFormato, type Borde, type BordesTabla, type ParadaTab, type ZonaPaginaModelo, type SeccionDocx, type BloqueDocx, type ParteParrafo } from './modelo';
 import {
   wrapAtoms, lineToFlowLine, paginar, colocarZona, altoZona, parrafoFlex, lineasConTabs, tamanoLinea, SEPARADOR_NOTAS,
   type Atom, type NotaFlujo, type FlowParrafoFlex, type FlowGap, type Medir, type FlowItem, type FlowLine, type FlowTableRow, type RelLinea, type RelImagen, type RelBarra, type ResultadoLayout, type PageGeometry, type RGB, type TabsConfig, type TabStopAbs
@@ -685,7 +685,23 @@ function notasDeBloque(b: BloqueDocx): number[] {
   return out;
 }
 
-export function renderizarModeloDocx(modelo: ModeloDocx, medir: Medir): ResultadoDocx {
+/** Número VISIBLE de cada página (0-based → número): cuenta desde 1 y reinicia con `w:pgNumType w:start` en la primera página de una sección. */
+function numerosVisibles(res: ResultadoLayout, secciones: SeccionDocx[]): number[] {
+  const out: number[] = [];
+  let numero = 0;
+  let seccionPrevia = -1;
+  for (let n = 0; n < res.totalPaginas; n++) {
+    const info = res.paginas[n]!;
+    const sec = secciones[info.seccion] ?? secciones[0]!;
+    const primeraDeSeccion = info.seccion !== seccionPrevia;
+    seccionPrevia = info.seccion;
+    numero = primeraDeSeccion && sec.numeroInicial !== null ? sec.numeroInicial : numero + 1;
+    out.push(numero);
+  }
+  return out;
+}
+
+function renderizarUnaVez(modelo: ModeloDocx, medir: Medir): ResultadoDocx {
   const av = nuevosAvisos();
   const secciones = seccionesDe(modelo);
   // Con alguna flotante que el texto rodea, TODOS los párrafos del cuerpo se maquetan línea a línea (cada uno puede cruzarse con la caja).
@@ -757,14 +773,14 @@ export function renderizarModeloDocx(modelo: ModeloDocx, medir: Medir): Resultad
   // Segunda pasada: con el total de páginas conocido, cada página recibe el encabezado y el pie de SU sección (PAGE/NUMPAGES
   // ya resueltos). El número visible reinicia con `w:pgNumType w:start` en la primera página de una sección.
   const trazos = [...res.trazos], barras = [...res.barras], imagenes = [...res.imagenes], enlaces = [...res.enlaces];
-  let numero = 0;
+  const numeros = numerosVisibles(res, secciones);
   let seccionPrevia = -1;
   for (let n = 0; n < res.totalPaginas; n++) {
     const info = res.paginas[n]!;
     const sec = secciones[info.seccion] ?? secciones[0]!;
     const primeraDeSeccion = info.seccion !== seccionPrevia;
     seccionPrevia = info.seccion;
-    numero = primeraDeSeccion && sec.numeroInicial !== null ? sec.numeroInicial : numero + 1;
+    const numero = numeros[n]!;
     const campos: ValoresCampo = { pagina: numero, total: res.totalPaginas };
     const pagina = { widthPt: info.geo.widthPt, heightPt: info.geo.heightPt };
     for (const [z, ancla, dist] of [[sec.encabezados, 'arriba', sec.margenEncabezadoPt], [sec.pies, 'abajo', sec.margenPiePt]] as const) {
@@ -788,4 +804,56 @@ export function renderizarModeloDocx(modelo: ModeloDocx, medir: Medir): Resultad
   }
   const avisoEnlaces = rotos.size > 0 ? [omitido(mensajeEnlaceSinDestino(rotos.size))] : [];
   return { totalPaginas: res.totalPaginas, trazos, barras, imagenes, enlaces, enlacesAncla: res.enlacesAncla, marcadores: res.marcadores, enlacesInternos, advertencias: [...mensajesTabla(av), ...res.advertencias, ...avisoEnlaces], paginas: res.paginas };
+}
+
+/** Partes `pageref` (PAGEREF, E-111) de todo el cuerpo: del bloque, en orden. */
+function partesDeBloque(b: BloqueDocx): ParteParrafo[] {
+  return esParrafo(b) ? b.partes : b.filas.flatMap((f) => f.celdas.flatMap((c) => c.partes));
+}
+
+/** Copia del modelo con cada `pageref` resuelto al número de `numeros` (los marcadores que no están se dejan con su caché). */
+function conPageRefs(modelo: ModeloDocx, numeros: ReadonlyMap<string, string>): ModeloDocx {
+  const parte = (x: ParteParrafo): ParteParrafo => (x.tipo === 'texto' && x.pageref !== undefined && numeros.has(x.pageref) ? { ...x, texto: numeros.get(x.pageref)! } : x);
+  const bloque = (b: BloqueDocx): BloqueDocx => (esParrafo(b)
+    ? { ...b, partes: b.partes.map(parte) }
+    : { ...b, filas: b.filas.map((f) => ({ ...f, celdas: f.celdas.map((c) => ({ ...c, partes: c.partes.map(parte) })) })) });
+  return { ...modelo, bloques: modelo.bloques.map(bloque) };
+}
+
+const mismosNumeros = (a: ReadonlyMap<string, string>, b: ReadonlyMap<string, string>): boolean => a.size === b.size && [...a].every(([k, v]) => b.get(k) === v);
+
+/**
+ * Maqueta el modelo. Un `PAGEREF marcador` (índices TOC, referencias cruzadas) muestra el número de página de NUESTRA paginación, no
+ * el que Word guardó (E-111): se maqueta con la caché, se leen las páginas de los marcadores y se vuelve a maquetar con esos números
+ * (que pueden cambiar el ancho de una línea y mover un salto). A lo sumo dos pasadas de resolución; si aun así no converge se queda la
+ * segunda y se avisa. Un marcador que no existe conserva la caché y avisa.
+ */
+export function renderizarModeloDocx(modelo: ModeloDocx, medir: Medir): ResultadoDocx {
+  const refs = modelo.bloques.flatMap(partesDeBloque).filter((x): x is Extract<ParteParrafo, { tipo: 'texto' }> => x.tipo === 'texto' && x.pageref !== undefined);
+  let res = renderizarUnaVez(modelo, medir);
+  if (refs.length === 0) return res;
+  const nombres = new Set(refs.map((r) => r.pageref!));
+  const secciones = seccionesDe(modelo);
+  const numerosDe = (r: ResultadoDocx): Map<string, string> => {
+    const visibles = numerosVisibles(r, secciones);
+    const out = new Map<string, string>();
+    for (const n of nombres) { const m = r.marcadores.get(n); if (m) out.set(n, String(visibles[m.page] ?? m.page + 1)); }
+    return out;
+  };
+  let usados = new Map<string, string>();
+  let converge = false;
+  for (let pasada = 0; pasada < 2 && !converge; pasada++) {
+    const num = numerosDe(res);
+    if (mismosNumeros(num, usados)) { converge = true; break; }
+    usados = num;
+    res = renderizarUnaVez(conPageRefs(modelo, usados), medir);
+  }
+  converge = converge || mismosNumeros(numerosDe(res), usados);
+  const extra: Advertencia[] = [];
+  const sinMarcador = refs.filter((r) => !res.marcadores.has(r.pageref!));
+  const conCache = sinMarcador.filter((r) => r.texto !== '');
+  if (conCache.length > 0) extra.push(aproximado(conCache.length === 1 ? 'Un número de página de un índice o referencia apunta a un marcador que no existe: se dejó el número que Word guardó.' : `${conCache.length} números de página de índices o referencias apuntan a marcadores que no existen: se dejaron los números que Word guardó.`));
+  if (sinMarcador.length > conCache.length) extra.push(omitido('Se omitió un campo de número de página sin resultado guardado y con un marcador que no existe.'));
+  if (!converge) extra.push(aproximado('Los números de página de los índices o referencias cambian el reparto de líneas y no se estabilizaron en dos pasadas: pueden no coincidir con las páginas finales.'));
+  return extra.length > 0 ? { ...res, advertencias: [...res.advertencias, ...extra] } : res;
 }
