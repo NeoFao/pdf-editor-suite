@@ -151,7 +151,9 @@ export interface BgSeg { xPt: number; wPt: number; color: RGB }
 
 export interface FlowLine { kind: 'line'; height: number; segs: Seg[]; bars: BarSeg[]; bg?: BgSeg; keepWithNextHeight?: number;
   /** Marcadores que empiezan en esta línea aunque no haya texto tras ellos (párrafo vacío o marcador al final de un párrafo): se registran en el borde superior de la línea. */
-  marcas?: string[] }
+  marcas?: string[];
+  /** Línea que es una IMAGEN dentro de una celda de tabla (E-110): `height` es el alto de la imagen; `xPt` es x absoluto de página (pt), `wPt` su ancho. */
+  imagen?: { xPt: number; wPt: number; imgId: string } }
 export interface FlowGap { kind: 'gap'; height: number; bars: BarSeg[] }
 export interface FlowRule { kind: 'rule'; height: number; xPt: number; wPt: number; color: RGB; bars: BarSeg[] }
 /** Salto de página explícito (`w:br w:type="page"` o `w:pageBreakBefore` en DOCX). Markdown no lo usa. */
@@ -162,6 +164,8 @@ export interface FlowImage { kind: 'image'; height: number; xPt: number; wPt: nu
 
 /** Línea de texto de una celda, POSICIONADA en x absoluto de página pero en y RELATIVO al borde SUPERIOR de la fila (positivo hacia abajo) — `paginar` no conoce la posición vertical de la fila hasta que le toca el turno. */
 export interface RelLinea { relYPt: number; segs: Seg[] }
+/** Imagen de una celda (E-110): `xPt` absoluto de página; `relYPt` es el borde SUPERIOR de la imagen respecto al borde superior de la fila (positivo hacia abajo, pt). */
+export interface RelImagen { relYPt: number; xPt: number; wPt: number; hPt: number; imgId: string }
 /** Rectángulo relleno (fondo de celda o segmento de borde) relativo al borde SUPERIOR de la fila, igual convención que `RelLinea`. */
 export interface RelBarra { relYPt: number; hPt: number; xPt: number; wPt: number; color: RGB }
 
@@ -176,7 +180,7 @@ export interface RelBarra { relYPt: number; hPt: number; xPt: number; wPt: numbe
  * `FlowTableEnd` correspondiente).
  */
 export interface FlowTableRow {
-  kind: 'tableRow'; height: number; lineas: RelLinea[]; fondos: RelBarra[]; bordes: RelBarra[]; esEncabezado: boolean;
+  kind: 'tableRow'; height: number; lineas: RelLinea[]; /** Imágenes en línea de las celdas (E-110). */ imagenes?: RelImagen[]; fondos: RelBarra[]; bordes: RelBarra[]; esEncabezado: boolean;
   /** Ids de combinaciones verticales (`w:vMerge`) que EMPIEZAN en esta fila. */
   mergeInicio?: number[];
   /** Ids de combinaciones verticales que CONTINÚAN en esta fila (la celda ocupa también las filas anteriores del grupo). `paginar` avisa si la fila cae en una página distinta a la del inicio del grupo. */
@@ -749,6 +753,9 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
         registrarMarcas(seg.marcas, baseline + seg.sizePt); // celda: borde superior aproximado del texto (línea base + cuerpo)
         barras.push(...barrasDeSeg(seg, baseline));
       }
+    }
+    for (const im of row.imagenes ?? []) {
+      imagenes.push({ page, xPt: im.xPt, yPt: cursor - im.relYPt - im.hPt, wPt: im.wPt, hPt: im.hPt, imgId: im.imgId });
     }
     for (const b of row.bordes) {
       barras.push({ page, xPt: b.xPt, yPt: cursor - b.relYPt - b.hPt, wPt: b.wPt, hPt: b.hPt, color: b.color });

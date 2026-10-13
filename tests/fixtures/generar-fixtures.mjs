@@ -1204,6 +1204,34 @@ function docxParrafoCelda() {
 }
 
 /**
+ * `word-imagen-celda.docx` (E-110): una tabla de UNA fila y 2 columnas de 150 pt (x = 72 y 222; relleno 5 pt => interior de 140 pt),
+ * columnas de ancho automático. Celda A: una imagen PNG de 40 x 20 pt CENTRADA. Celda B: una imagen PNG de 280 x 70 pt, más ancha
+ * que el interior (se escala a 140 x 35 pt). Altura de fila esperada: max(20, 35) + 2 x 5 de relleno = 45 pt; detrás, un párrafo "Despues" para medirla. Sin avisos.
+ */
+export const DOCX_IMAGEN_CELDA = { colX: [72, 222], interiorPt: 140, rellenoPt: 5, a: { wPt: 40, hPt: 20 }, b: { wPt: 280, hPt: 70 } };
+function docxImagenCelda() {
+  const emu = (pt) => pt * 12700;
+  const p = (jc, rId, w, h) => `<w:p><w:pPr>${ESP_EXACTO}<w:jc w:val="${jc}"/></w:pPr><w:r>${drawingInline(rId, emu(w), emu(h))}</w:r></w:p>`;
+  const { a, b } = DOCX_IMAGEN_CELDA;
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  <w:tbl><w:tblGrid><w:gridCol w:w="3000"/><w:gridCol w:w="3000"/></w:tblGrid><w:tr>
+    <w:tc>${p('center', 'rId1', a.wPt, a.hPt)}</w:tc>
+    <w:tc>${p('left', 'rId2', b.wPt, b.hPt)}</w:tc>
+  </w:tr></w:tbl>
+  <w:p><w:pPr>${ESP_EXACTO}</w:pPr><w:r>${RPR_10}<w:t>Despues</w:t></w:r></w:p>
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/_rels/document.xml.rels', datos: Buffer.from(relsXml([relacion('rId1', 'image', 'media/image1.png', false), relacion('rId2', 'image', 'media/image2.png', false)]), 'utf-8') },
+    { nombre: 'word/media/image1.png', datos: pngSolido(16, 16, [255, 0, 0]) },
+    { nombre: 'word/media/image2.png', datos: pngSolido(16, 8, [0, 0, 255]) }
+  ]);
+}
+
+/**
  * `word-enlaces-internos.docx`: página 1 con dos enlaces internos (`w:hyperlink w:anchor`): uno al marcador `conclusion` (que cae en
  * la 6.ª línea de la página 3, línea exacta de 12 pt, página Carta con margen de 72 pt: borde superior de esa línea en
  * y = 792 - 72 - 5 x 12 = 660) y otro a un marcador que no existe. Cada página termina con un salto de página.
@@ -1995,6 +2023,7 @@ async function main() {
     'word-numeracion-tabs.docx': docxNumeracionTabs(),
     'word-listas-celda.docx': docxListasCelda(),
     'word-parrafo-celda.docx': docxParrafoCelda(),
+    'word-imagen-celda.docx': docxImagenCelda(),
     'word-rpr-estilo.docx': docxRprEstilo(),
     'word-rpr-efectos.docx': docxRprEfectos(),
     'word-enlaces-internos.docx': docxEnlacesInternos(),
