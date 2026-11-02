@@ -73,7 +73,8 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
   let seEmitioAlgunaLinea = false;
   let huboImagen = false;
   // Marcadores (`w:bookmarkStart`) vistos y aún sin átomo al que colgarse: se adhieren al PRIMER átomo que venga después.
-  let marcasPendientes: string[] = [];
+  // La marca interna de un título (E-114) va delante de todo: su posición es la de la primera línea del párrafo.
+  let marcasPendientes: string[] = p.titulo ? [p.titulo.marca] : [];
   const empujar = (a: Atom): void => {
     if (marcasPendientes.length > 0) { a.marcas = marcasPendientes; marcasPendientes = []; }
     bufferAtomos.push(a);
