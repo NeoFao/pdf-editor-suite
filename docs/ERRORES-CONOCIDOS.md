@@ -3645,4 +3645,32 @@ de código fiable.
 **Cómo se detecta ahora.** `tests/unit/conversores-lineal.test.ts` (Markdown y Word, motor real, sin reloj, E-040): espía `applyPageOps` y suma, en cada llamada, las páginas del documento sobre el que se aplica; con 4× párrafos la suma debe crecer menos de 6× (antes del arreglo: 14× y 15×). `tests/unit/PdfiumEngine.buildDocument.test.ts`: mismas páginas, textos, posiciones y enlaces que la ruta antigua, con tamaños mixtos y páginas sin ops. Sin regla guard: depende de qué documento recibe la llamada, no de un patrón léxico.
 
 **Límites.** Quien aplique ops sobre un documento ya grande (editar un PDF abierto) sigue pagando el coste de PDFium; esto cubre la construcción desde cero de los conversores. Un documento de miles de páginas sigue ocupando el hilo principal en bloques de ~50 ms (no en un bloque único), sin cancelación.
+### E-123 · Insertar texto en una página girada lo dejaba vertical o boca abajo, y el texto recortado por la CropBox seguía como línea editable
+
+**Síntoma.** (D2) Con «Insertar texto» en una página `/Rotate` 90 o 270 el texto salía vertical, y con 180 boca abajo, aunque el origen sí caía en
+el clic. (D4) El texto fuera de la CropBox (invisible) aparecía como línea editable fuera de la página y entraba en la selección y la búsqueda.
+
+**Causa raíz.** (D2) `handleInsert` escribía el objeto con la matriz identidad en el espacio de USUARIO (sin girar); el OCR ya compensaba el giro
+(E-089) pero la inserción manual no. (D4) `getPageText`/`getCharBoxes` devuelven todo el texto del contenido, también el que cae fuera de la caja
+visible, y la capa de texto lo pintaba tal cual.
+
+**Arreglo.** (D2) `handleInsert` pasa `giroGrados = /Rotate` de la página (antihorario, igual que el OCR). (D4) `EditSession` descarta, al cargar runs y
+caracteres, los que no solapan la caja visible (`src/texto/visibilidad.ts`, pt de usuario sin girar con `pageBox`); NO se borra nada del PDF (§2.3) y los
+`runId` no cambian.
+
+**Cómo se detecta ahora.** `tests/e2e/next/insertar-girado-y-crop.spec.ts`: insertar en 0/90/180/270, releer el PDF guardado y comprobar que el texto es
+más ancho que alto en pantalla, con los caracteres de izquierda a derecha y el origen en el clic; y PDF con texto fuera de la CropBox (con origen
+desplazado y /Rotate 90): ninguna caja de la capa queda fuera de la página y el PDF guardado conserva ese texto.
+
+**Límites.** Una línea que solapa parcialmente la CropBox se sigue ofreciendo entera. Notas, sellos y firma no usan este camino (anotaciones/imágenes).
 **Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
+
+### E-128 · `/legacy` sin barra final servía la app vieja sin CSS ni JS (5 recursos 404)
+
+**Síntoma.** En producción, `/legacy` mostraba el HTML de la app vieja pero sin estilos ni scripts: sus rutas relativas (`css/…`, `js/…`) se resolvían contra `/` en vez de `/legacy/` y daban 404. `/legacy/` y `/` funcionaban. (QA-06.)
+
+**Causa raíz.** `vercel.json` tenía un `rewrite` `/legacy` → `/legacy/index.html`: la URL del navegador seguía siendo `/legacy` y, para el navegador, el documento vive en `/`, así que toda URL relativa se resuelve mal. Un rewrite no cambia la URL base. El proyecto `deploy` no lo detectaba porque solo probaba `/legacy/` (el caso sin barra se dejó sin probar).
+
+**Arreglo.** El `rewrite` se sustituye por `redirects` `/legacy` → `/legacy/` con `permanent: true` (308). Solo toca el enrutado de `/legacy` (CSP y cabeceras intactas, dentro del cutover autorizado). `scripts/servir-despliegue.mjs` aplica ahora también los `redirects` de `vercel.json` para que el entorno local sea fiel. Sin bucle: el `source` se ancla estricto, `/legacy` no casa con `/legacy/`, y `/legacy/` se sirve por índice de directorio; `cleanUrls` solo reescribe `*.html`/`index` hacia su forma limpia y no añade ni quita barra final con `trailingSlash` sin definir (semántica de `redirects`, `cleanUrls` y `trailingSlash` en la documentación de Vercel, "Configuring projects with vercel.json"; no se ha podido contrastar contra el despliegue real aquí, se verifica en la preview del PR).
+
+**Cómo se detecta ahora.** `tests/e2e/deploy/humo.spec.ts` (`/legacy` acaba en `/legacy/`, cero 404, CSS aplicado, un PDF abre en la app vieja, cero violaciones de CSP; visto fallar antes) y `scripts/servir-despliegue.test.mjs` (`aplicarRedirects`, 308, sin bucle). Sin regla guard.

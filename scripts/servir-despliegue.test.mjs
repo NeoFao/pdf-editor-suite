@@ -21,6 +21,7 @@ import {
   cargarConfiguracion,
   cabecerasPara,
   aplicarRewrites,
+  aplicarRedirects,
   resolverArchivo,
   crearServidor,
   RAIZ
@@ -116,6 +117,23 @@ describe('cabecerasPara — orden de fusión (config sintética)', () => {
   });
 });
 
+describe('aplicarRedirects (E-128)', () => {
+  const config = { redirects: [{ source: '/legacy', destination: '/legacy/', permanent: true }] };
+
+  test('/legacy redirige 308 a /legacy/', () => {
+    assert.deepEqual(aplicarRedirects(config, '/legacy'), { destino: '/legacy/', estado: 308 });
+  });
+
+  test('/legacy/ NO redirige (sin bucle) ni /legacy/index.html', () => {
+    assert.equal(aplicarRedirects(config, '/legacy/'), null);
+    assert.equal(aplicarRedirects(config, '/legacy/index.html'), null);
+  });
+
+  test('sin `permanent` es 307', () => {
+    assert.equal(aplicarRedirects({ redirects: [{ source: '/a', destination: '/b' }] }, '/a').estado, 307);
+  });
+});
+
 describe('aplicarRewrites', () => {
   const config = { cleanUrls: true, rewrites: [{ source: '/legacy', destination: '/legacy/index.html' }], headers: [] };
 
@@ -200,7 +218,8 @@ describe('crearServidor — extremo a extremo con HTTP real', () => {
 
     const config = {
       cleanUrls: true,
-      rewrites: [{ source: '/legacy', destination: '/legacy/index.html' }],
+      rewrites: [],
+      redirects: [{ source: '/legacy', destination: '/legacy/', permanent: true }],
       headers: [
         { source: '/(.*)', headers: [{ key: 'Content-Security-Policy', value: "default-src 'self'" }] },
         { source: '/(.*)\\.(wasm)', headers: [{ key: 'Cache-Control', value: 'public, max-age=31536000, immutable' }] }
@@ -236,10 +255,10 @@ describe('crearServidor — extremo a extremo con HTTP real', () => {
     assert.match(r.cuerpo.toString('utf8'), /app nueva/);
   });
 
-  test('GET /legacy (rewrite) sirve legacy/index.html', async () => {
+  test('GET /legacy redirige 308 a /legacy/ (E-128: rutas relativas)', async () => {
     const r = await get('/legacy');
-    assert.equal(r.status, 200);
-    assert.match(r.cuerpo.toString('utf8'), /app vieja/);
+    assert.equal(r.status, 308);
+    assert.equal(r.headers.location, '/legacy/');
   });
 
   test('GET /legacy/ (índice de directorio) también sirve legacy/index.html', async () => {
