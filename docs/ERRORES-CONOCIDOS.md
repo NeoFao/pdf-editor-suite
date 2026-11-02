@@ -3632,8 +3632,6 @@ de código fiable.
 
 **Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
 
----
-
 ### E-120 · Word/Markdown → PDF: todo carácter fuera de WinAnsi salía como `ÿ` SIN aviso, y un NUL colgaba la conversión
 
 **Síntoma.** Polaco (Ł ą č), cirílico, griego, CJK, emoji, flechas y símbolos matemáticos salían como `ÿ` (`advertencias=[]`): un documento ruso, griego o chino quedaba ilegible sin que nadie lo supiera. Además un `U+0000` en el texto hacía lanzar `RuntimeError: unreachable` al motor (WASM muerto) y la app se quedaba en «Convirtiendo…» (`App.openFile` solo capturaba `DocxError`); con el NUL dentro de una línea se truncaba el resto.
@@ -3664,6 +3662,35 @@ Las tablas de glifos se midieron en PDFium (viaje de ida y vuelta por fuente), n
 **Cómo se detecta ahora.** `tests/unit/conversores-lineal.test.ts` (Markdown y Word, motor real, sin reloj, E-040): espía `applyPageOps` y suma, en cada llamada, las páginas del documento sobre el que se aplica; con 4× párrafos la suma debe crecer menos de 6× (antes del arreglo: 14× y 15×). `tests/unit/PdfiumEngine.buildDocument.test.ts`: mismas páginas, textos, posiciones y enlaces que la ruta antigua, con tamaños mixtos y páginas sin ops. Sin regla guard: depende de qué documento recibe la llamada, no de un patrón léxico.
 
 **Límites.** Quien aplique ops sobre un documento ya grande (editar un PDF abierto) sigue pagando el coste de PDFium; esto cubre la construcción desde cero de los conversores. Un documento de miles de páginas sigue ocupando el hilo principal en bloques de ~50 ms (no en un bloque único), sin cancelación.
+### E-122 · En páginas con `/Rotate` 90 copiar y marcar con arrastre daba el tramo complementario y el resaltado salía en un rectángulo por carácter
+
+**Síntoma.** En un PDF con `/Rotate 90`, arrastrar de la línea 1 a la 3 copiaba (y marcaba) «cola de la 3, línea 2, cabeza de la 1»: orden
+inverso y extremos cambiados, en ambos sentidos de arrastre. Con 0, 180 y 270 iba bien. Además, con 90 y 270 el resaltado tenía un `.sel-rect`
+por carácter (24 para 3 líneas) en vez de uno por línea. Lo halló el QA del núcleo (D1 y D3).
+
+**Causa raíz.** Dos causas, ambas por razonar en el espacio equivocado. (1) PDFium entrega los caracteres de una página `/Rotate 90` con las
+LÍNEAS en orden inverso (L4, L3, L2, L1; por dentro cada línea sale bien) porque ordena el texto en el espacio girado, donde el texto normal queda
+vertical. La selección trabaja con rangos de ÍNDICES entre ancla y foco, así que con ese orden el rango entre la línea 1 y la 3 era el tramo
+complementario. (2) `bandasDeLinea` agrupaba los caracteres en líneas por solape vertical en el espacio VISUAL (ya girado); en 90/270 el texto
+normal queda vertical en pantalla, así que dos caracteres consecutivos no solapaban nunca y cada uno era su propia línea.
+
+**Arreglo.** (1) `ordenLecturaCaracteres` (`src/texto/seleccionTexto.ts`), aplicada UNA vez en `EditSession.ensureChars` (única vía a los
+caracteres para selección, copia y texto bajo un marcado): con `/Rotate 90`, líneas horizontales en usuario y el primer bloque debajo del último,
+invierte el orden de los bloques (no el de los caracteres de cada uno); en cualquier otro caso devuelve el mismo array. (2) `bandasDeLinea`
+agrupa en pt de USUARIO (sin girar), decidiendo con el primer par de caracteres si la línea avanza en X o en Y; `quadsDeRango` entrega las cajas
+con el id de su línea y `quadsPorLinea` (`CajaMarcable.linea`) las funde por id sin adivinar por solape. Vale con cualquier `/Rotate`, texto
+contragirado y CropBox desplazado.
+
+**Cómo se detecta ahora.** `tests/e2e/next/seleccion-paginas-giradas.spec.ts` (fixture `seleccion-giros.pdf`: 4 líneas en `/Rotate` 0, 90, 180, 270
+y 90 con CropBox desplazado; arrastre de la línea 1 a la 3 en ambos sentidos copia cola, línea 2 y cabeza en orden, y pinta 3 rectángulos sobre
+las líneas 1, 2 y 3; visto fallar en 90, 270 y 90+CropBox antes del arreglo) y `tests/unit/seleccionGiros.test.ts` (orden y quads con PDFium
+real en las cuatro rotaciones y en 90 con CropBox, más casos puros). Sin regla guard: no hay patrón de código fiable.
+
+**Límites.** La detección del orden inverso es heurística (líneas horizontales en usuario, primera debajo de la última): un `/Rotate 90` con
+varias columnas o bloques mezclados puede quedar con el orden de PDFium. La navegación por líneas con Mayús+↓/↑ en texto vertical en pantalla
+sigue usando la columna visual `x` (no la distancia a lo largo de la línea).
+---
+
 ### E-123 · Insertar texto en una página girada lo dejaba vertical o boca abajo, y el texto recortado por la CropBox seguía como línea editable
 
 **Síntoma.** (D2) Con «Insertar texto» en una página `/Rotate` 90 o 270 el texto salía vertical, y con 180 boca abajo, aunque el origen sí caía en
@@ -3682,6 +3709,7 @@ más ancho que alto en pantalla, con los caracteres de izquierda a derecha y el 
 desplazado y /Rotate 90): ninguna caja de la capa queda fuera de la página y el PDF guardado conserva ese texto.
 
 **Límites.** Una línea que solapa parcialmente la CropBox se sigue ofreciendo entera. Notas, sellos y firma no usan este camino (anotaciones/imágenes).
+**Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
 **Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
 
 ### E-127 · Accesibilidad ronda 3 (QA transversal): diálogo de firma sin semántica, líneas sin foco visible, foco perdido, pestañas sin roles, barra recortada a 375 px

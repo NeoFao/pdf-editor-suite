@@ -15,9 +15,14 @@ export function rectToQuad(r: RectPt): QuadPt {
 }
 
 /** Una caja de texto a marcar: `boxPt` en pt de usuario; `sizePt` es el cuerpo de la fuente (pt). */
-export interface CajaMarcable { boxPt: RectPt; sizePt: number }
+export interface CajaMarcable {
+  boxPt: RectPt;
+  sizePt: number;
+  /** Si se da, las cajas con el mismo `linea` son de la misma línea y se funden sin mirar el solape visual (E-122: texto vertical en pantalla). */
+  linea?: number;
+}
 
-interface Banda { left: number; top: number; right: number; bottom: number } // px CSS visuales (escala 1)
+interface Banda { left: number; top: number; right: number; bottom: number; linea?: number } // px CSS visuales (escala 1)
 
 /**
  * Quads de un marcado: UNO POR LÍNEA VISUAL, no una caja gorda.
@@ -39,7 +44,7 @@ export function quadsPorLinea(cajas: readonly CajaMarcable[], geo: PageGeometry)
     const cuerpo = Math.max(1, c.sizePt);
     const n = alto > cuerpo * 1.7 ? Math.max(2, Math.round(alto / (cuerpo * 1.2))) : 1;
     for (let i = 0; i < n; i++) {
-      bandas.push({ left: r.left, right: r.left + r.width, top: r.top + (alto * i) / n, bottom: r.top + (alto * (i + 1)) / n });
+      bandas.push({ left: r.left, right: r.left + r.width, top: r.top + (alto * i) / n, bottom: r.top + (alto * (i + 1)) / n, linea: c.linea });
     }
   }
   bandas.sort((a, b) => a.top - b.top || a.left - b.left);
@@ -47,6 +52,7 @@ export function quadsPorLinea(cajas: readonly CajaMarcable[], geo: PageGeometry)
   const lineas: Banda[] = [];
   for (const b of bandas) {
     const l = lineas.find((x) => {
+      if (x.linea !== undefined || b.linea !== undefined) return x.linea === b.linea; // línea conocida (E-122): no se adivina por solape
       const solape = Math.min(x.bottom, b.bottom) - Math.max(x.top, b.top);
       return solape > 0.5 * Math.min(x.bottom - x.top, b.bottom - b.top);
     });
@@ -55,7 +61,7 @@ export function quadsPorLinea(cajas: readonly CajaMarcable[], geo: PageGeometry)
       l.top = Math.min(l.top, b.top); l.bottom = Math.max(l.bottom, b.bottom);
     } else lineas.push({ ...b });
   }
-  lineas.sort((a, b) => a.top - b.top);
+  lineas.sort((a, b) => a.top - b.top || a.left - b.left);
 
   return lineas.map((l) => {
     const si = geo.cssToPt(l.left, l.top);      // visual sup-izq

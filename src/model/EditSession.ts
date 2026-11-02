@@ -2,6 +2,7 @@ import type { PdfEngine, DocHandle, TextRun, CharBox, RectPt } from '../engine/P
 import { DocumentModel } from './DocumentModel';
 import type { PageModel } from './types';
 import { contarGetPageText } from '../diagnostico';
+import { ordenLecturaCaracteres } from '../texto/seleccionTexto';
 import { cajaVisible } from '../texto/visibilidad';
 
 /**
@@ -97,7 +98,14 @@ export class EditSession {
   ensureChars(pageIndex: number): CharBox[] {
     if (!this.model.pages[pageIndex]) return [];
     let c = this.chars.get(pageIndex);
-    if (!c) { c = this.soloVisibles(pageIndex, this.engine.getCharBoxes(this.doc, pageIndex)); this.chars.set(pageIndex, c); }
+    if (!c) {
+      // Primero se descartan los caracteres fuera de la CropBox (E-123) y DESPUÉS se reordena (E-122): el orden de
+      // lectura se decide con las líneas que de verdad se ven (la primera y la última visibles), no con texto recortado.
+      // PDFium entrega las líneas al revés en /Rotate 90; se normaliza aquí, una sola vez.
+      const visibles = this.soloVisibles(pageIndex, this.engine.getCharBoxes(this.doc, pageIndex));
+      c = ordenLecturaCaracteres(visibles, this.model.pages[pageIndex]!.rotation);
+      this.chars.set(pageIndex, c);
+    }
     return c;
   }
 
