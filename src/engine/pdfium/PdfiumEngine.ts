@@ -646,9 +646,9 @@ export class PdfiumEngine implements PdfEngine {
           (buf, len) => this.p.FPDFBookmark_GetTitle(marcador, buf, len),
           (ptr) => this.mem.readU16(ptr)
         );
-        const { pageIndex, accion } = this.bookmarkTarget(doc, marcador);
+        const { pageIndex, yPt, accion } = this.bookmarkTarget(doc, marcador);
         const children = leerHermanos(marcador, profundidad + 1);
-        items.push(accion ? { title, pageIndex, children, accion } : { title, pageIndex, children });
+        items.push({ title, pageIndex, ...(yPt !== undefined ? { yPt } : {}), children, ...(accion ? { accion } : {}) });
         marcador = this.p.FPDFBookmark_GetNextSibling(doc, marcador);
       }
       return items;
@@ -697,9 +697,15 @@ export class PdfiumEngine implements PdfEngine {
           const page = this.p.FPDF_LoadPage(doc, item.pageIndex);
           if (page) {
             try {
-              const params = this.mem.malloc(4);
-              const dest = this.p.EPDFDest_CreateView(page, 2 /* Fit */, params, 0);
-              this.mem.free(params);
+              // Con `yPt` (E-114): [página /XYZ null y null] (solo fija la altura, pt PDF origen ABAJO); sin él, [página /Fit].
+              let dest: number;
+              if (item.yPt !== undefined && Number.isFinite(item.yPt)) {
+                dest = this.p.EPDFDest_CreateXYZ(page, false, 0, true, item.yPt, false, 0);
+              } else {
+                const params = this.mem.malloc(4);
+                dest = this.p.EPDFDest_CreateView(page, 2 /* Fit */, params, 0);
+                this.mem.free(params);
+              }
               if (dest) this.p.EPDFBookmark_SetDest(doc, marcador, dest);
             } finally {
               this.p.FPDF_ClosePage(page);
@@ -738,11 +744,22 @@ export class PdfiumEngine implements PdfEngine {
    * Solo se LEE: ninguna acción se ejecuta jamás. Sin destino ni acción:
    * `{ pageIndex: null }` sin `accion`.
    */
-  private bookmarkTarget(doc: DocHandle, marcador: number): { pageIndex: number | null; accion?: AccionMarcador } {
+  private bookmarkTarget(doc: DocHandle, marcador: number): { pageIndex: number | null; yPt?: number; accion?: AccionMarcador } {
     const noSop = (descripcion: string) => ({ pageIndex: null, accion: { tipo: 'no-soportada', descripcion } as AccionMarcador });
     const paginaDe = (dest: number): number | null => {
       const i = this.p.FPDFDest_GetDestPageIndex(doc, dest);
       return i >= 0 ? i : null;
+    };
+    /** Altura del destino (pt PDF, origen abajo) si el destino la fija (`/XYZ` con `top`); `{}` si no (E-114). */
+    const alturaDe = (dest: number): { yPt?: number } => {
+      const buf = this.mem.malloc(24); // hasX, hasY, hasZoom (int) + x, y, zoom (float)
+      try {
+        const ok = this.p.FPDFDest_GetLocationInPage(dest, buf, buf + 4, buf + 8, buf + 12, buf + 16, buf + 20);
+        const hasY = ok && this.mem.getValue(buf + 4, 'i32') !== 0;
+        return hasY ? { yPt: this.mem.getValue(buf + 16, 'float') } : {};
+      } finally {
+        this.mem.free(buf);
+      }
     };
     // Primero la acción: `FPDFBookmark_GetDest` también devuelve el `/D` de una
     // acción GoToR (otro documento) y lo resolvería, falsamente, contra ESTE
@@ -752,13 +769,13 @@ export class PdfiumEngine implements PdfEngine {
       const dirigido = this.p.FPDFBookmark_GetDest(doc, marcador);
       if (!dirigido) return { pageIndex: null };
       const i = paginaDe(dirigido);
-      return i === null ? noSop('Destino sin página resoluble') : { pageIndex: i };
+      return i === null ? noSop('Destino sin página resoluble') : { pageIndex: i, ...alturaDe(dirigido) };
     }
     switch (this.p.FPDFAction_GetType(action)) {
       case PDFACTION_GOTO: {
         const dest = this.p.FPDFAction_GetDest(doc, action);
         const i = dest ? paginaDe(dest) : null;
-        return i === null ? noSop('Acción GoTo sin página resoluble') : { pageIndex: i };
+        return i === null || !dest ? noSop('Acción GoTo sin página resoluble') : { pageIndex: i, ...alturaDe(dest) };
       }
       case PDFACTION_URI: {
         // ASCII de 7 bits según la especificación; patrón de dos llamadas (E-028).

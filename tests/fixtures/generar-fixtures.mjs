@@ -1312,6 +1312,53 @@ function docxEnlacesInternos() {
 }
 
 /**
+ * `word-outline.docx` (E-114): Carta con margen de 72 pt y líneas exactas de 12 pt (borde superior de la línea n de una página en
+ * y = 720 - (n - 1) x 12). Cinco títulos H1, H2, H2, H1, H3 repartidos en 3 páginas, con estilos de nombre LOCALIZADO («Título N»,
+ * ninguno se llama «heading»): el nivel sale de `w:outlineLvl` (Titulo2 lo hereda por `basedOn`, Titulo3 lo trae directo en el
+ * párrafo). Un párrafo de cuerpo que se llama «heading 4» pero no tiene `outlineLvl` NO es título.
+ */
+export const DOCX_OUTLINE = {
+  lineaPt: 12,
+  titulos: [
+    { texto: 'Introduccion', nivel: 0, pagina: 1, yPt: 720 },
+    { texto: 'Contexto', nivel: 1, pagina: 1, yPt: 684 },
+    { texto: 'Alcance', nivel: 1, pagina: 1, yPt: 648 },
+    { texto: 'Desarrollo', nivel: 0, pagina: 2, yPt: 672 },
+    { texto: 'Detalle', nivel: 2, pagina: 3, yPt: 648 }
+  ]
+};
+function docxOutline() {
+  const p = (t, ppr = '') => `<w:p><w:pPr>${ppr}${ESP_EXACTO}</w:pPr><w:r>${RPR_10}<w:t>${t}</w:t></w:r></w:p>`;
+  const estilo = (id) => `<w:pStyle w:val="${id}"/>`;
+  const relleno = (n, pref) => Array.from({ length: n }, (_v, i) => p(`${pref} ${i + 1}`)).join('');
+  const salto = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  ${p('Introduccion', estilo('Ttulo1'))}${relleno(2, 'a')}
+  ${p('Contexto', estilo('Titulo2'))}${relleno(2, 'b')}
+  ${p('Alcance', estilo('Titulo2'))}${p('No soy titulo', estilo('Heading4Falso'))}${relleno(2, 'c')}
+  ${salto}
+  ${relleno(4, 'd')}${p('Desarrollo', estilo('Ttulo1'))}${relleno(2, 'e')}
+  ${salto}
+  ${relleno(6, 'f')}${p('Detalle', '<w:outlineLvl w:val="2"/>')}${relleno(2, 'g')}
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  const styles = `<?xml version="1.0" encoding="UTF-8"?>
+<w:styles>
+  <w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style>
+  <w:style w:type="paragraph" w:styleId="Ttulo1"><w:name w:val="Título 1"/><w:basedOn w:val="Normal"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr></w:style>
+  <w:style w:type="paragraph" w:styleId="BaseNivel2"><w:name w:val="Base nivel 2"/><w:basedOn w:val="Normal"/><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style>
+  <w:style w:type="paragraph" w:styleId="Titulo2"><w:name w:val="Título 2"/><w:basedOn w:val="BaseNivel2"/></w:style>
+  <w:style w:type="paragraph" w:styleId="Heading4Falso"><w:name w:val="heading 4"/><w:basedOn w:val="Normal"/></w:style>
+</w:styles>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/styles.xml', datos: Buffer.from(styles, 'utf-8') }
+  ]);
+}
+
+/**
  * `word-campos.docx` (E-111): Carta con margen de 72 pt y líneas exactas de 12 pt. La página 1 trae un índice TOC de 3 entradas
  * (hipervínculos a `_Toc1`..`_Toc3`, cada uno con su PAGEREF y relleno de puntos hasta una tabulación derecha) cuyos números
  * guardados son 7, 8 y 9 A PROPÓSITO (los títulos caen en las páginas 1, 2 y 3), un REF (texto guardado "Texto referenciado"),
@@ -2120,6 +2167,7 @@ async function main() {
     'word-enlaces-internos.docx': docxEnlacesInternos(),
     'word-notas.docx': docxNotas(),
     'word-campos.docx': docxCampos(),
+    'word-outline.docx': docxOutline(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {
