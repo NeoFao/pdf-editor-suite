@@ -1495,7 +1495,7 @@ export const conPuertosE2eSincronizados = {
     }
     if (tieneDeuda(rutaConfig, this.id)) return [];
     const modulo = leer(rutaModulo);
-    const bloque = modulo.match(/PUERTOS_E2E\s*=\s*Object\.freeze\(\{([\s\S]*?)\}\)/);
+    const bloque = modulo.match(/PUERTOS_E2E_BASE\s*=\s*Object\.freeze\(\{([\s\S]*?)\}\)/);
     const pares = bloque ? [...bloque[1].matchAll(/(\w+)\s*:\s*(\d+)/g)] : [];
     const claves = pares.map((m) => m[1]);
     const puertos = pares.map((m) => Number(m[2]));
@@ -1531,6 +1531,49 @@ export const sinPromptNativo = {
     'src/ui/NotaDialogo.ts.',
   ejecutar() {
     return recorrerFuentesTs((rel, contenido) => analizarPromptNativo(rel, contenido));
+  }
+};
+
+/* ── E-113 · ni tests/ ni playwright.config.js escriben puertos de E2E a mano ── */
+/**
+ * Pura: hallazgos de puertos E2E escritos a mano (3100/4173/4174 o `127.0.0.1:<n>` / `localhost:<n>`) fuera de
+ * comentarios. Con E2E_PUERTO_BASE los puertos cambian: un literal haría que el test hable con el servidor de otro
+ * worktree. Se usa `baseURL` de Playwright o `PUERTOS_E2E` / `urlLocal` de scripts/puertos-e2e.mjs.
+ */
+export function analizarPuertosAMano(rel, contenido) {
+  const exentas = lineasExentas(contenido, 'sin-puerto-a-mano-en-tests');
+  const hallazgos = [];
+  contenido.split('\n').forEach((linea, i) => {
+    if (esComentario(linea) || exentas.has(i + 1)) return;
+    if (/\b(?:3100|4173|4174)\b|\b(?:127\.0\.0\.1|localhost|\[::1\]):\d{2,5}\b/.test(linea)) {
+      hallazgos.push(hallazgo(rel, i + 1, 'puerto de E2E escrito a mano: usa baseURL o PUERTOS_E2E/urlLocal (scripts/puertos-e2e.mjs)'));
+    }
+  });
+  return hallazgos;
+}
+
+export const sinPuertoE2eAMano = {
+  id: 'sin-puerto-a-mano-en-tests',
+  titulo: 'ningún test ni playwright.config.js escribe un puerto de E2E a mano',
+  comoArreglar:
+    'Usa el `baseURL` del proyecto de Playwright (page.goto("/ruta")) o importa PUERTOS_E2E / urlLocal de ' +
+    'scripts/puertos-e2e.mjs. Con E2E_PUERTO_BASE (varios worktrees en paralelo, E-113) los puertos se desplazan ' +
+    'y un literal apunta al servidor de otro.',
+  ejecutar() {
+    const hallazgos = [];
+    const revisar = (rel) => hallazgos.push(...analizarPuertosAMano(rel, leer(rel)));
+    if (existe('playwright.config.js')) revisar('playwright.config.js');
+    const recorrer = (dir) => {
+      if (!fs.existsSync(dir)) return;
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { recorrer(full); continue; }
+        if (!/\.[cm]?[jt]s$/.test(e.name)) continue;
+        revisar(path.relative(RAIZ, full).replace(/\\/g, '/'));
+      }
+    };
+    recorrer(path.join(RAIZ, 'tests'));
+    return hallazgos;
   }
 };
 
@@ -1572,6 +1615,7 @@ export const TODAS = [
   capaTextoSinRotacionPorRun,
   conRegistroSinDuplicados,
   conPuertosE2eSincronizados,
+  sinPuertoE2eAMano,
   sinPromptNativo,
   sinEsperaFijaEnE2e
 ];

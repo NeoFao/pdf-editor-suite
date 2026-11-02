@@ -52,7 +52,7 @@ npm run test:e2e        # suite completa
 npm run test:e2e:ui     # modo interactivo, para depurar un test concreto
 npm run test:unit       # tests de las reglas, sin navegador (rápido)
 npm run verify          # TODO: lo mismo que corre CI
-npm run e2e:liberar     # libera 3100/4173/4174 y cierra procesos huérfanos de este repo (ver abajo)
+npm run e2e:liberar     # libera los puertos E2E (3100/4173/4174 o desplazados) y cierra procesos huérfanos de este repo (ver abajo)
 ```
 
 ## El webServer de la app nueva nunca reutiliza un proceso vivo (E-033)
@@ -93,6 +93,32 @@ como `node` o `vite` — si no logra determinar el nombre, avisa y lo deja
 vivo. No forma parte de `npm run verify`: matar procesos automáticamente en
 un pipeline es invasivo, y el propio mensaje de error de Playwright ya dice
 qué hacer.
+
+## E2E en paralelo en varios worktrees (E-113)
+
+Los puertos por defecto (3100, 4173, 4174) son fijos, así que dos worktrees no
+pueden correr Playwright a la vez. Dale a cada worktree una `E2E_PUERTO_BASE`
+distinta: es un desplazamiento (entero entre 1 y 61361) que se suma a los tres
+puertos, y debe ser el mismo en TODOS los comandos de esa sesión.
+
+```bash
+# worktree A                                    # worktree B
+export E2E_PUERTO_BASE=10000                    export E2E_PUERTO_BASE=20000
+npx playwright test --project=next              npx playwright test --project=next
+npm run e2e:liberar   # solo 13100/14173/14174  npm run e2e:liberar   # solo 23100/24173/24174
+```
+
+En PowerShell: `$env:E2E_PUERTO_BASE = '10000'`. Un valor no válido (texto,
+negativo, decimal, fuera de rango) aborta con un error claro. Sin la variable
+no cambia nada, ni en local ni en CI.
+
+`npm run e2e:liberar` solo libera los puertos del desplazamiento activo y,
+además de exigir `node`/`vite` del propio repo, no cierra procesos cuya línea de
+comandos cite OTRO worktree (ni el checkout principal desde un worktree). No
+ejecutes `e2e:liberar` sin la variable si otro worktree usa los puertos por
+defecto. En los tests no escribas puertos: usa el `baseURL` de Playwright
+(`page.goto('/ruta')`) o `urlLocal` de `scripts/puertos-e2e.mjs`; la regla
+`sin-puerto-a-mano-en-tests` lo vigila.
 
 Para un solo archivo o un solo test:
 
