@@ -2,6 +2,7 @@ import type { ConversorDocumento, ResultadoConversion } from './ConversorDocumen
 import type { PdfEngine, DocHandle, PageOp } from '../engine/PdfEngine';
 import { omitido, type Advertencia } from './advertencia';
 import { abrirZip } from './docx/zip';
+import { decodificarXml } from './codificacion';
 import { DocxError } from './docx/DocxError';
 import { construirModeloDocx } from './docx/modelo';
 import { leerRelaciones, rutaMediaDesdeWord } from './docx/rels';
@@ -57,7 +58,8 @@ export class ConversorDocxNavegador implements ConversorDocumento {
     if (!documentXmlBytes) {
       throw new DocxError('El archivo no es un documento de Word válido: falta word/document.xml.');
     }
-    const decodificador = new TextDecoder('utf-8', { fatal: false });
+    // Las partes XML son UTF-8 o UTF-16 (BOM o declaración) por especificación; `decodificarXml` respeta ambas (E-124).
+    const decodificador = { decode: decodificarXml };
     const documentXml = decodificador.decode(documentXmlBytes);
     const stylesBytes = await zip.leer('word/styles.xml');
     const stylesXml = stylesBytes ? decodificador.decode(stylesBytes) : null;

@@ -1,6 +1,7 @@
 import type { ConversorDocumento, ResultadoConversion } from './ConversorDocumento';
 import { aproximado, type Advertencia } from './advertencia';
 import { parseMarkdown } from './markdown/parse';
+import { decodificarTexto, advertenciasDeCodificacion } from './codificacion';
 import { layoutMarkdown, PAGE_WIDTH_PT, PAGE_HEIGHT_PT, type TituloColocado } from './markdown/layout';
 import type { Block, Inline } from './markdown/ast';
 import { decodificarImagenDocx, MAX_IMG_BYTES } from './imagenes/decodificarImagenDocx';
@@ -35,7 +36,9 @@ export class ConversorMarkdownNavegador implements ConversorDocumento {
   constructor(private readonly engine: PdfEngine) {}
 
   async convertir(_nombre: string, bytes: Uint8Array): Promise<ResultadoConversion> {
-    const texto = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    // Codificación detectada (BOM / UTF-8 estricto / UTF-16 sin BOM / cp1252) y NUL descartados: nunca un éxito silencioso con basura (E-124).
+    const decodificado = decodificarTexto(bytes);
+    const texto = decodificado.texto;
     const ast = parseMarkdown(texto);
     // El maquetador mide CADA palabra (y el espacio tras ella) para el
     // ajuste de línea; un documento normal repite muchísimas palabras
@@ -96,7 +99,7 @@ export class ConversorMarkdownNavegador implements ConversorDocumento {
       this.engine.addInternalLink(doc, e.page, { xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt }, e.destPage, e.destYPt);
     }
 
-    const avisos: Advertencia[] = [...advertencias];
+    const avisos: Advertencia[] = [...advertenciasDeCodificacion(decodificado), ...advertencias];
     const outline = construirOutline(titulos);
     if (outline.items.length > 0) {
       try { this.engine.setOutline(doc, outline.items); }
