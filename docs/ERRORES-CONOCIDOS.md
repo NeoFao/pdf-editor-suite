@@ -3592,6 +3592,22 @@ de código fiable.
 **Límites.** Una selección de ratón de un solo carácter hecha hacia atrás se trata como directa al extenderla con el teclado (el modelo del ratón no guarda
 `inversa`). Al cruzar, `goToPage` coloca la página del foco al principio de la vista.
 
+### E-116 · Los enlaces externos (`/URI`) de un PDF no hacían nada en el visor, y los de esquema peligroso se descartaban en silencio
+
+**Síntoma.** Un PDF con un enlace a una web o a un correo (los de Word, de un informe, de una factura) no se podía seguir desde el visor; Acrobat lo abre con Ctrl+clic tras un aviso de seguridad. Además `getLinks` degradaba un `javascript:` o `file:` a `otro`, igual que un `/Launch`: la UI no podía distinguir "enlace bloqueado" de "no es un enlace".
+
+**Causa raíz.** `Viewer.drawLinks` solo pintaba los destinos `pagina` (E-106). El motor ya validaba el esquema al leer (`validarUrlEnlace`) pero perdía la URI de las acciones no permitidas.
+
+**Arreglo.** `drawLinks` pinta también `uri` y el nuevo destino `bloqueado`, con el patrón de E-106: clic normal edita o selecciona (cajas `pointer-events: none`); Ctrl+clic o Intro con el foco sigue el enlace. `src/ui/enlaceExterno.ts` decide (`decidirEnlaceExterno`, pura) y muestra un `<dialog>` (`mostrarModal`) con la URL COMPLETA como `textContent` (§2.2), botones Abrir/Cancelar y la casilla "No volver a preguntar para <dominio>" (conjunto en memoria, sin `localStorage`). Solo http, https y mailto (los de `validarUrlEnlace`, sin ampliar) se pueden abrir, con `window.open(url, '_blank', 'noopener,noreferrer')`. Un `bloqueado` abre un aviso sin "Abrir" ni casilla, ni aunque su dominio estuviera omitido. `/Launch`, `/GoToR` y JavaScript siguen siendo `otro`: sin caja ni acción. Etiqueta de la caja: "Ctrl+clic para abrir <dominio>".
+
+**Cómo se detecta ahora.** `tests/e2e/next/enlaces-externos.spec.ts` (Chromium real, red interceptada): clic normal edita sin abrir, Ctrl+clic muestra la URL exacta, Cancelar no abre página, Abrir abre una pestaña con esa URL y sin `opener`, casilla de dominio, mailto, `javascript:` sin "Abrir", `/Launch` inerte, Intro con el foco. `tests/unit/enlaceExterno.test.ts` (decisión y dominio, incluido el subdominio engañoso) y `tests/unit/PdfiumEngine.enlacesInternos.test.ts` (`bloqueado`). Fixture `enlaces-externos.pdf`.
+
+**Suplantación (revisión de seguridad).** La URL se analiza UNA vez con `new URL` y ese `href` normalizado es a la vez lo que se valida, se muestra y se abre (antes se mostraba la cadena del PDF y se abría otra). El diálogo destaca el `hostname` (punycode si es IDN) y debajo el `href`; los bidi y de control (U+200E-F, U+202A-E, U+2066-9, C0/C1) se escapan y avisan, y con ellos no se ofrece la casilla ni se omite la pregunta; una URL con usuario o contraseña (`user@evil.com`) se bloquea sin "Abrir". Tests unitarios de IDN, U+202E, credenciales y coincidencia mostrado/abierto, y el E2E compara lo abierto con el href mostrado.
+
+**mailto.** Se analiza decodificado (lo que lee el usuario): bidi/control se buscan ahí (`%E2%80%AE` ya no pasa), todo lo mostrado, `dominio` incluido, pasa por `escaparPeligrosos`, cada dominio debe ser un hostname válido (punycode si IDN) o el enlace se bloquea sin "Abrir", y varias direcciones o `?cc=`/`?bcc=`/`?body=` se muestran enteros y nunca omiten la pregunta.
+
+**Límites.** La casilla vale para la sesión y por host exacto (`a.test` no cubre `x.a.test`). El dominio mostrado de un mailto es el de la dirección. Nada de esto envía datos del documento a ningún sitio: solo se abre la URL que el usuario aprueba.
+
 ### E-118 · Word → PDF: las columnas de sección (`w:cols`) se maquetaban a una sola columna con aviso, y el salto de columna era un salto de línea
 
 **Síntoma.** Un documento con texto en dos o tres columnas (boletines, artículos, cartas con cuadro lateral) salía con el texto a todo el ancho de la página, con un aviso `aproximado` («Se omitió la distribución en columnas»). Un `w:br w:type="column"` se convertía en un salto de línea y el separador entre columnas (`w:sep`) no se dibujaba. Una sección continua que pasaba de 1 a 2 columnas en la misma página no se distinguía de una sola columna.
