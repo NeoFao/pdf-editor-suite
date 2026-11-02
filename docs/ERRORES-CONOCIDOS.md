@@ -3631,3 +3631,23 @@ de código fiable.
 **Cómo se detecta ahora.** `tests/unit/markdown-parse-fidelidad.test.ts`, `markdown-layout-fidelidad.test.ts` y `ConversorMarkdownNavegador-fidelidad.test.ts` (motor real: texto, anotaciones Link con destino, outline y avisos del corpus). Vistos fallar antes del arreglo. Sin regla guard.
 
 **Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
+
+### E-123 · Insertar texto en una página girada lo dejaba vertical o boca abajo, y el texto recortado por la CropBox seguía como línea editable
+
+**Síntoma.** (D2) Con «Insertar texto» en una página `/Rotate` 90 o 270 el texto salía vertical, y con 180 boca abajo, aunque el origen sí caía en
+el clic. (D4) El texto fuera de la CropBox (invisible) aparecía como línea editable fuera de la página y entraba en la selección y la búsqueda.
+
+**Causa raíz.** (D2) `handleInsert` escribía el objeto con la matriz identidad en el espacio de USUARIO (sin girar); el OCR ya compensaba el giro
+(E-089) pero la inserción manual no. (D4) `getPageText`/`getCharBoxes` devuelven todo el texto del contenido, también el que cae fuera de la caja
+visible, y la capa de texto lo pintaba tal cual.
+
+**Arreglo.** (D2) `handleInsert` pasa `giroGrados = /Rotate` de la página (antihorario, igual que el OCR). (D4) `EditSession` descarta, al cargar runs y
+caracteres, los que no solapan la caja visible (`src/texto/visibilidad.ts`, pt de usuario sin girar con `pageBox`); NO se borra nada del PDF (§2.3) y los
+`runId` no cambian.
+
+**Cómo se detecta ahora.** `tests/e2e/next/insertar-girado-y-crop.spec.ts`: insertar en 0/90/180/270, releer el PDF guardado y comprobar que el texto es
+más ancho que alto en pantalla, con los caracteres de izquierda a derecha y el origen en el clic; y PDF con texto fuera de la CropBox (con origen
+desplazado y /Rotate 90): ninguna caja de la capa queda fuera de la página y el PDF guardado conserva ese texto.
+
+**Límites.** Una línea que solapa parcialmente la CropBox se sigue ofreciendo entera. Notas, sellos y firma no usan este camino (anotaciones/imágenes).
+**Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
