@@ -3663,3 +3663,13 @@ desplazado y /Rotate 90): ninguna caja de la capa queda fuera de la página y el
 **Cómo se detecta ahora.** `tests/e2e/next/accesibilidad-ronda3.spec.ts` (Chromium real; vistos fallar antes del arreglo) y la regla guard `sin-dialogo-casero` (un velo `position:'fixed'` + `inset:'0'` a mano en `src/` rompe el build), con su test en `reglas.test.mjs`.
 
 **Límites.** Los 4 defectos BAJOS del informe QA se perdieron con el worktree del agente; solo se repasó lo evidente. El foco restaurado tras repintar se identifica por página + posición de la línea, no por identidad. QA-12 (contraste, dos casos) no se localizó.
+
+### E-128 · `/legacy` sin barra final servía la app vieja sin CSS ni JS (5 recursos 404)
+
+**Síntoma.** En producción, `/legacy` mostraba el HTML de la app vieja pero sin estilos ni scripts: sus rutas relativas (`css/…`, `js/…`) se resolvían contra `/` en vez de `/legacy/` y daban 404. `/legacy/` y `/` funcionaban. (QA-06.)
+
+**Causa raíz.** `vercel.json` tenía un `rewrite` `/legacy` → `/legacy/index.html`: la URL del navegador seguía siendo `/legacy` y, para el navegador, el documento vive en `/`, así que toda URL relativa se resuelve mal. Un rewrite no cambia la URL base. El proyecto `deploy` no lo detectaba porque solo probaba `/legacy/` (el caso sin barra se dejó sin probar).
+
+**Arreglo.** El `rewrite` se sustituye por `redirects` `/legacy` → `/legacy/` con `permanent: true` (308). Solo toca el enrutado de `/legacy` (CSP y cabeceras intactas, dentro del cutover autorizado). `scripts/servir-despliegue.mjs` aplica ahora también los `redirects` de `vercel.json` para que el entorno local sea fiel. Sin bucle: el `source` se ancla estricto, `/legacy` no casa con `/legacy/`, y `/legacy/` se sirve por índice de directorio; `cleanUrls` solo reescribe `*.html`/`index` hacia su forma limpia y no añade ni quita barra final con `trailingSlash` sin definir (semántica de `redirects`, `cleanUrls` y `trailingSlash` en la documentación de Vercel, "Configuring projects with vercel.json"; no se ha podido contrastar contra el despliegue real aquí, se verifica en la preview del PR).
+
+**Cómo se detecta ahora.** `tests/e2e/deploy/humo.spec.ts` (`/legacy` acaba en `/legacy/`, cero 404, CSS aplicado, un PDF abre en la app vieja, cero violaciones de CSP; visto fallar antes) y `scripts/servir-despliegue.test.mjs` (`aplicarRedirects`, 308, sin bucle). Sin regla guard.
