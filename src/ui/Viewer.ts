@@ -1312,6 +1312,20 @@ export class Viewer {
     this.rendered.delete(i);
   }
 
+  /** Marcador de error de una página con tamaño absurdo (E-129): sin bitmap ni capas; el resto del documento sigue igual. */
+  private pintarPaginaInvalida(wrapper: HTMLElement): void {
+    wrapper.textContent = '';
+    const m =document.createElement('div');
+    m.className = 'pagina-invalida';
+    m.setAttribute('role', 'alert');
+    m.textContent = 'El tamaño de esta página no es válido y no se puede mostrar. El resto del documento no se ve afectado.';
+    Object.assign(m.style, {
+      position: 'absolute', inset: '0', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center',
+      padding: '16px', font: '14px sans-serif', color: '#842029', background: '#f8d7da', border: '2px dashed #dc3545', boxSizing: 'border-box'
+    });
+    wrapper.appendChild(m);
+  }
+
   private renderPage(i: number): void {
     const page = this.session.model.pages[i]!;
     // Texto perezoso (E-043, docs/ERRORES-CONOCIDOS.md): esta es la primera
@@ -1320,8 +1334,9 @@ export class Viewer {
     // que ya se vio no vuelve a pedirlo al motor. `page.runs` se muta EN
     // SITIO (mismo objeto que `this.session.model.pages[i]`), así que
     // `page` sigue viendo los runs recién cargados más abajo.
-    this.session.ensureText(i);
     const wrapper = this.wrappers[i]!;
+    if (page.tamanoInvalido) { this.pintarPaginaInvalida(wrapper); return; }
+    this.session.ensureText(i);
     if (this.textoSel.esExtremo(i) && wrapper.querySelector('canvas')) this.textoSel.limpiar(); // repintar un extremo con DOM descarta la selección (E-057); la primera pintura (E-115) o una intermedia solo recupera su capa al final
     if (this.marcadoSel?.pageIndex === i) { this.marcadoSel = null; this.cb.onMarcadoSelect?.(null); }
     wrapper.textContent = '';
@@ -1331,7 +1346,8 @@ export class Viewer {
     const cssAncho = page.sizePt.widthPt * escala, cssAlto = page.sizePt.heightPt * escala;
     this.dprPintado = window.devicePixelRatio;
     const factor = factorNitidez(this.dprPintado, cssAncho, cssAlto);
-    const { width, height, data } = this.session.engine.renderPage(this.session.doc, i, escala * factor);
+    // E-129: el motor acota el bitmap (píxeles y lado); `reducida` lo avisa. El CSS de abajo no cambia: geometría exacta.
+    const { width, height, data, reducida } = this.session.engine.renderPage(this.session.doc, i, escala * factor);
     const canvas = document.createElement('canvas');
     canvas.width = width; canvas.height = height;
     canvas.style.display = 'block';
@@ -1342,6 +1358,19 @@ export class Viewer {
     const img = new ImageData(width, height);
     img.data.set(data);
     canvas.getContext('2d')!.putImageData(img, 0, 0);
+    if (reducida) {
+      // Pegajoso arriba-izquierda de la página mientras se recorre; margen negativo para no empujar el canvas.
+      const aviso = document.createElement('div');
+      aviso.className = 'aviso-resolucion';
+      aviso.setAttribute('role', 'note');
+      aviso.textContent = 'Página muy grande, mostrada a resolución reducida';
+      Object.assign(aviso.style, {
+        position: 'sticky', top: '4px', left: '4px', zIndex: '5', width: 'fit-content', height: '22px', marginBottom: '-22px',
+        padding: '0 8px', lineHeight: '22px', font: '12px/22px sans-serif', background: '#fff3cd', color: '#664d03',
+        border: '1px solid #ffda6a', borderRadius: '4px', pointerEvents: 'none', boxSizing: 'border-box'
+      });
+      wrapper.appendChild(aviso);
+    }
     wrapper.appendChild(canvas);
     const layer = document.createElement('div');
     layer.className = 'text-layer';

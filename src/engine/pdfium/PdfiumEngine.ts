@@ -3,6 +3,7 @@ import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
 import { validarUrlEnlace } from '../validarUrlEnlace';
 import { leerUserUnits } from '../userUnit';
+import { escalaAcotada, tamanoPaginaValido } from '../limiteBitmap';
 import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
 import { BEARING_EM } from '../../texto/lineasEditables';
 import { aVisual, claseBidi, logicoDeCajas, tieneRtl } from '../../texto/bidi';
@@ -309,8 +310,16 @@ export class PdfiumEngine implements PdfEngine {
   renderPage(doc: DocHandle, pageIndex: number, scale: number): RenderResult {
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
-    const width = Math.max(1, Math.round(this.p.FPDF_GetPageWidthF(page) * scale));
-    const height = Math.max(1, Math.round(this.p.FPDF_GetPageHeightF(page) * scale));
+    const wPt = this.p.FPDF_GetPageWidthF(page), hPt = this.p.FPDF_GetPageHeightF(page);
+    // E-129: tamaño absurdo (NaN, ≤ 0, > 14400 pt × UserUnit) -> error claro, no un typed array de 4e18 bytes.
+    if (!tamanoPaginaValido(wPt, hPt, this.userUnit(doc, pageIndex))) {
+      this.p.FPDF_ClosePage(page);
+      throw new Error(`Tamaño de página no válido (${wPt} x ${hPt} pt)`);
+    }
+    // E-129: tope absoluto de píxeles/lado del bitmap; solo baja la RESOLUCIÓN (el llamador fija el tamaño CSS aparte).
+    const lim = escalaAcotada(wPt, hPt, scale);
+    const width = Math.max(1, Math.round(wPt * lim.escala));
+    const height = Math.max(1, Math.round(hPt * lim.escala));
     // Bitmap BGRA, fondo blanco; el /Rotate de la página lo aplica PDFium con rotate=0.
     const bmp = this.p.FPDFBitmap_Create(width, height, 0);
     try {
@@ -331,7 +340,7 @@ export class PdfiumEngine implements PdfEngine {
           rgba[dst + 3] = this.mem.HEAPU8[src + 3]!; // A
         }
       }
-      return { width, height, data: rgba };
+      return lim.reducida ? { width, height, data: rgba, reducida: true } : { width, height, data: rgba };
     } finally {
       this.p.FPDFBitmap_Destroy(bmp);
       this.p.FPDF_ClosePage(page);

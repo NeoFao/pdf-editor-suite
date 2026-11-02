@@ -191,7 +191,13 @@ export interface FormField {
 }
 
 /** Bitmap RGBA listo para volcar en un canvas. */
-export interface RenderResult { width: number; height: number; data: Uint8ClampedArray }
+export interface RenderResult {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+  /** `true` si el motor bajó la escala pedida para no pasar del tope de píxeles del bitmap (E-129). El tamaño CSS no cambia. */
+  reducida?: boolean;
+}
 
 /** Píxeles RGBA de un objeto imagen, a su resolución NATIVA (no la de render en pantalla). */
 export interface ImagePixels { rgba: Uint8Array; width: number; height: number }

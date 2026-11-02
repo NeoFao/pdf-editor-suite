@@ -23,14 +23,17 @@ export class OcrPageCmd implements Command {
 
   async execute(c: Ctx): Promise<void> {
     this.before = c.engine.save(c.doc);
-    const { width, height, data } = c.engine.renderPage(c.doc, this.pageIndex, this.scale);
+    const { width, height, data, reducida } = c.engine.renderPage(c.doc, this.pageIndex, this.scale);
     const lines = await this.provider.recognize({ rgba: new Uint8Array(data), width, height }, this.lang);
     // E-084/E-089: el bitmap es la página VISUAL (caja visible, ya girada por /Rotate); sus px pasan a pt de usuario con la
     // geometría común (rotación y origen de la caja). `tamanoPt` de `pageBox` es el de la caja SIN girar.
     const caja = c.engine.pageBox(c.doc, this.pageIndex);
     const gira = caja.rotacion === 90 || caja.rotacion === 270;
-    const specs = mapOcrLines(lines, this.scale, {
-      anchoVisualPt: gira ? caja.tamanoPt.heightPt : caja.tamanoPt.widthPt,
+    const anchoVisual = gira ? caja.tamanoPt.heightPt : caja.tamanoPt.widthPt;
+    // E-129: si el motor acotó el bitmap, los px del OCR están a la escala EFECTIVA (px de bitmap por pt), no a la pedida.
+    const escalaReal = reducida ? width / anchoVisual : this.scale;
+    const specs = mapOcrLines(lines, escalaReal, {
+      anchoVisualPt: anchoVisual,
       altoVisualPt: gira ? caja.tamanoPt.widthPt : caja.tamanoPt.heightPt,
       rotacion: caja.rotacion,
       origenPt: caja.origenPt

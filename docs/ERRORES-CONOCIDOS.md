@@ -3759,3 +3759,31 @@ desplazado y /Rotate 90): ninguna caja de la capa queda fuera de la página y el
 **Arreglo.** El `rewrite` se sustituye por `redirects` `/legacy` → `/legacy/` con `permanent: true` (308). Solo toca el enrutado de `/legacy` (CSP y cabeceras intactas, dentro del cutover autorizado). `scripts/servir-despliegue.mjs` aplica ahora también los `redirects` de `vercel.json` para que el entorno local sea fiel. Sin bucle: el `source` se ancla estricto, `/legacy` no casa con `/legacy/`, y `/legacy/` se sirve por índice de directorio; `cleanUrls` solo reescribe `*.html`/`index` hacia su forma limpia y no añade ni quita barra final con `trailingSlash` sin definir (semántica de `redirects`, `cleanUrls` y `trailingSlash` en la documentación de Vercel, "Configuring projects with vercel.json"; no se ha podido contrastar contra el despliegue real aquí, se verifica en la preview del PR).
 
 **Cómo se detecta ahora.** `tests/e2e/deploy/humo.spec.ts` (`/legacy` acaba en `/legacy/`, cero 404, CSS aplicado, un PDF abre en la app vieja, cero violaciones de CSP; visto fallar antes) y `scripts/servir-despliegue.test.mjs` (`aplicarRedirects`, 308, sin bucle). Sin regla guard.
+
+### E-129 · Una página de 7200–14400 pt bloqueaba el hilo 4–23 s y un `MediaBox` de 1e9 dejaba la página en blanco sin aviso (A-2/A-3)
+
+**Síntoma.** Páginas válidas de 7200x7200 y 14400x14400 pt: 3,7 s y 15 s de apertura (hasta 23 s), y 0,4–4 s más por cada paso de zoom. Un
+`MediaBox [0 0 1e9 1e9]` lanzaba «Invalid typed array length: 4000000000000000000», la página quedaba en blanco y `#status` vacío.
+
+**Causa raíz (medida).** El bitmap por página no tenía tope ABSOLUTO. E-078 (`factorNitidez`) solo acotaba el factor de DPR y nunca baja de 1;
+el visor se construye a escala 1 y solo después `fitWidth` la corrige, así que el primer render de la página de 14400 pt pedía 207 Mpx
+(830 MB RGBA) y cada zoom otros ~13 Mpx. El motor (`PdfiumEngine.renderPage`) reservaba `width*height*4` sin comprobar nada: con 1e9 pt, un
+`Uint8ClampedArray` de 4e18 bytes. Con el bitmap acotado (2826²) la apertura de 14400 pt baja de 15 s a 1 s; el coste es proporcional a píxeles, no a
+la página (el motor tarda ~1 s en 3600²).
+
+**Arreglo.** `src/engine/limiteBitmap.ts` (función pura): `escalaAcotada(wPt, hPt, escala)` baja la escala para que el bitmap no pase de
+`MAX_PIXELES_BITMAP` = 8 Mpx (el mismo límite de E-078, ahora `MAX_PIXELES_PAGINA = MAX_PIXELES_BITMAP`) ni de `MAX_LADO_BITMAP` = 16384 px por
+lado (el menor soportado por navegadores). Lo aplica `PdfiumEngine.renderPage`, el punto único de visor, miniaturas y OCR, y devuelve
+`reducida: true`; el `Viewer` pinta el aviso `.aviso-resolucion` («Página muy grande, mostrada a resolución reducida»). El canvas sigue con su
+tamaño CSS exacto (`style.width/height`), así que `PageGeometry`, la capa de texto y la edición no cambian. `OcrPage` convierte px a pt con la
+escala efectiva. Tamaño absurdo (no finito, ≤ 0 o > 14400 pt × `/UserUnit`, `tamanoPaginaValido`): `EditSession` lo sustituye por un A4 y marca
+`PageModel.tamanoInvalido`; el visor pinta `.pagina-invalida` (rol `alert`) sin llamar al motor, la miniatura queda en blanco y el resto del
+documento sigue funcionando. El motor lanza un error claro si se le pide renderizar una página así.
+
+**Cómo se detecta ahora.** `tests/unit/limiteBitmap.test.ts` (7200, 14400, 1e9, NaN, 0; vistos fallar antes) y
+`tests/e2e/next/paginas-enormes.spec.ts` (canvas ≤ 8 Mpx con tinta alineada a la capa de texto ±1 px de bitmap, aviso visible; 1e9: marcador visible,
+sin `pageerror` y demás páginas pintadas). Mide trabajo, no tiempo (E-040). Sin regla guard.
+
+**Límites.** No hay render por zonas (tiles): una página enorme a zoom alto se ve a resolución reducida en vez de nítida. Propuesto, no hecho:
+pintar solo la zona visible. El primer render a escala 1 antes de `fitWidth` sigue existiendo (ahora acotado a 8 Mpx).
+---
