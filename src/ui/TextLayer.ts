@@ -15,6 +15,8 @@ export interface TextLayerCallbacks {
   onMove: (pageIndex: number, runId: number, dxCss: number, dyCss: number, runIds: readonly number[]) => void;
   /** true si hay una herramienta de colocación activa (nota, insertar…): un clic sobre la línea coloca, no edita (N7). */
   colocando?: () => boolean;
+  /** Se pidió editar una línea que no se puede reescribir con fidelidad (texto RTL, E-117): el aviso `aproximado` a mostrar. */
+  onAviso?: (mensaje: string) => void;
 }
 
 /**
@@ -126,6 +128,10 @@ export class TextLayer {
       block.dataset.runId = String(run.runId);
       block.dataset.lineaId = linea.lineaId;
       block.textContent = texto;
+      // E-117: la dirección de la línea manda sobre el editor (cursor, flechas, alineación); `dir` evita que el
+      // navegador la deduzca del primer carácter fuerte de un texto mixto.
+      block.dir = linea.direccion;
+      if (linea.aviso) { block.dataset.aviso = linea.aviso.tipo; block.title = linea.aviso.mensaje; }
       block.setAttribute('role', 'textbox');
       block.setAttribute('aria-readonly', 'true');
       block.setAttribute('aria-label', `Línea de texto ${this.bloques.length + 1}`);
@@ -159,6 +165,8 @@ export class TextLayer {
         block.classList.add('selected');
         this.cb.onSelect(this.page.index, run.runId);
         if (block.isContentEditable) return;
+        // E-117: una línea que no se puede reescribir con fidelidad se selecciona (copiar, buscar, mover) pero no se abre.
+        if (linea.aviso) { this.cb.onAviso?.(linea.aviso.mensaje); return; }
         oldText = block.textContent ?? '';
         block.style.font = editFont;
         block.style.color = editColor;
@@ -190,6 +198,11 @@ export class TextLayer {
           transformOrigin: `0px ${ascentCss}px`,
           transform: anguloCss === 0 ? '' : `rotate(${-anguloCss}deg)`
         });
+        // E-117: una línea RTL conserva su borde DERECHO al editarse (igual que el motor al escribir): el editor se ancla a
+        // él y crece hacia la izquierda.
+        if (linea.direccion === 'rtl' && anguloCss === 0) {
+          Object.assign(block.style, { left: `${r.left + r.width}px`, transformOrigin: `100% ${ascentCss}px`, transform: 'translateX(-100%)' });
+        }
 
         mask.classList.add('active');
         block.classList.add('editing');

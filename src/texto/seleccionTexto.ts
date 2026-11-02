@@ -1,5 +1,6 @@
 import type { CharBox } from '../engine/PdfEngine';
 import type { PageGeometry } from '../coords/PageGeometry';
+import { logicoDeCajas, tieneRtl } from './bidi';
 import { puntoEnQuad, quadsPorLinea, rectToQuad, type QuadPt } from '../coords/quads';
 
 /**
@@ -89,12 +90,37 @@ function bandasDeLinea(chars: readonly CharBox[], geo: PageGeometry): ([number, 
   return out;
 }
 
-/** Texto del rango [a, b] (inclusive), con los saltos de línea de PDFium (\r\n) normalizados a \n. */
+/**
+ * Texto del rango [a, b] (inclusive), con los saltos de línea de PDFium (CR LF) normalizados a LF. Una línea con
+ * escritura de derecha a izquierda (E-117) se devuelve en orden LÓGICO: PDFium ordena los caracteres de un tramo RTL pero
+ * deja mal las cifras y palabras latinas que lleva dentro, así que esa línea se reconstruye desde la posición de cada
+ * carácter (`logicoDeCajas`). Sin RTL, el texto sale tal cual lo da el motor.
+ */
 export function textoDeRango(chars: readonly CharBox[], a: number, b: number): string {
   const desde = Math.max(0, Math.min(a, b)), hasta = Math.min(chars.length - 1, Math.max(a, b));
+  const sel = chars.slice(desde, hasta + 1);
   let s = '';
-  for (let i = desde; i <= hasta; i++) s += chars[i]!.ch;
+  if (!sel.some((c) => tieneRtl(c.ch))) {
+    for (const c of sel) s += c.ch;
+    return s.replace(/\r\n?/g, '\n');
+  }
+  let linea: CharBox[] = [];
+  const cerrar = (): void => { s += textoLineaLogico(linea); linea = []; };
+  for (const c of sel) {
+    if (c.ch === '\r' || c.ch === '\n') { cerrar(); s += c.ch; } else linea.push(c);
+  }
+  cerrar();
   return s.replace(/\r\n?/g, '\n');
+}
+
+/** Texto lógico de los caracteres de UNA línea visual; si no son una línea horizontal fiable, el orden del motor. */
+function textoLineaLogico(linea: readonly CharBox[]): string {
+  const delMotor = linea.map((c) => c.ch).join('');
+  if (!linea.some((c) => tieneRtl(c.ch)) || !linea.every(tieneCaja)) return delMotor;
+  const y0 = Math.min(...linea.map((c) => c.boxPt.yPt)), y1 = Math.max(...linea.map((c) => c.boxPt.yPt));
+  const alto = Math.max(...linea.map((c) => c.boxPt.hPt)); // el espacio tiene alto casi nulo: manda la letra más alta
+  if (y1 - y0 > 0.5 * alto) return delMotor; // no es una sola línea horizontal (texto girado, columnas)
+  return logicoDeCajas(linea.map((c) => ({ ch: c.ch, x: c.boxPt.xPt })));
 }
 
 // ---------------------------------------------------------------------------------------------
