@@ -80,6 +80,7 @@ export function cargarConfiguracion(rutaJson) {
   return {
     cleanUrls: Boolean(config.cleanUrls),
     rewrites: Array.isArray(config.rewrites) ? config.rewrites : [],
+    redirects: Array.isArray(config.redirects) ? config.redirects : [],
     headers: Array.isArray(config.headers) ? config.headers : []
   };
 }
@@ -106,6 +107,27 @@ export function cabecerasPara(config, pathname) {
     }
   }
   return resultado;
+}
+
+/**
+ * Aplica los `redirects` de `vercel.json` a `pathname`. Devuelve
+ * `{ destino, estado }` (308 si `permanent`, 307 si no) o `null`. Mismo
+ * ancla estricta que el resto: `/legacy` NO casa con `/legacy/`, así que no
+ * hay bucle (E-128).
+ */
+export function aplicarRedirects(config, pathname) {
+  for (const { source, destination, permanent } of config.redirects ?? []) {
+    let regex;
+    try {
+      regex = compilarPatron(source);
+    } catch {
+      continue;
+    }
+    if (regex.test(pathname)) {
+      return { destino: pathname.replace(regex, destination), estado: permanent ? 308 : 307 };
+    }
+  }
+  return null;
 }
 
 /** Aplica los `rewrites` de `vercel.json` a `pathname`. Devuelve la ruta reescrita. */
@@ -215,6 +237,14 @@ export function crearServidor(dir, config) {
     // matcheó la URL pedida.
     const cabeceras = cabecerasPara(config, decodificada);
     for (const [clave, valor] of cabeceras) res.setHeader(clave, valor);
+
+    // Los redirects van antes que el sistema de ficheros, como en Vercel.
+    const redireccion = aplicarRedirects(config, decodificada);
+    if (redireccion) {
+      res.writeHead(redireccion.estado, { Location: redireccion.destino });
+      res.end();
+      return;
+    }
 
     const pathnameFinal = aplicarRewrites(config, decodificada);
     const archivo = resolverArchivo(dir, pathnameFinal);
