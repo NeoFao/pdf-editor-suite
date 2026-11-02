@@ -566,7 +566,8 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   /* `display: contents`: los grupos fluyen en la MISMA envoltura que ☰ y ⋯ (sin hueco central desperdiciado). */
   .topbar-scroll { display: contents; }
   .topbar { row-gap: 0; padding-top: 2px; padding-bottom: 2px; }
-  .topbar #btn-replace-toggle, .topbar .search-box, .topbar #btn-shortcuts { flex: 0 0 auto; white-space: nowrap; }
+  .topbar #btn-replace-toggle, .topbar .search-box, .topbar #btn-shortcuts { flex: 0 0 auto; white-space: nowrap; order: 2; }
+  .topbar #btn-more { order: 1; margin-left: auto; }
   .topbar-sep { display: none; }
   .topbar-spacer { display: none; }
   .search-box { height: 32px; }
