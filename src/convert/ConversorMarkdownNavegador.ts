@@ -1,7 +1,7 @@
 import type { ConversorDocumento, ResultadoConversion } from './ConversorDocumento';
 import { aproximado, type Advertencia } from './advertencia';
 import { parseMarkdown } from './markdown/parse';
-import { decodificarTexto, advertenciasDeCodificacion } from './codificacion';
+import { decodificarTexto, advertenciasDeCodificacion } from './decodificarEntrada';
 import { layoutMarkdown, PAGE_WIDTH_PT, PAGE_HEIGHT_PT, type TituloColocado } from './markdown/layout';
 import type { Block, Inline } from './markdown/ast';
 import { decodificarImagenDocx, MAX_IMG_BYTES } from './imagenes/decodificarImagenDocx';

@@ -2,7 +2,7 @@ import type { ConversorDocumento, ResultadoConversion } from './ConversorDocumen
 import type { PdfEngine, DocHandle, PageOp } from '../engine/PdfEngine';
 import { omitido, type Advertencia } from './advertencia';
 import { abrirZip } from './docx/zip';
-import { decodificarXml } from './codificacion';
+import { decodificarXml } from './decodificarEntrada';
 import { DocxError } from './docx/DocxError';
 import { construirModeloDocx } from './docx/modelo';
 import { leerRelaciones, rutaMediaDesdeWord } from './docx/rels';

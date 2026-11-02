@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { decodificarTexto, decodificarXml } from '../../src/convert/codificacion';
+import { decodificarTexto, decodificarXml } from '../../src/convert/decodificarEntrada';
 
 /** E-124: la codificación de un .md/.xml se detecta (BOM, UTF-8 estricto, UTF-16 sin BOM, cp1252) y nunca produce basura en silencio. */
 const TEXTO = '# Título\n\nAño nuevo, señor.';
