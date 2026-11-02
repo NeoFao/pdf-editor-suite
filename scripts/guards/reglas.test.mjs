@@ -873,20 +873,27 @@ describe('registro-sin-duplicados', () => {
   const regla = detectarEn('registro-sin-duplicados');
 
   test('detecta un número duplicado', () => {
-    const p = analizarRegistroErrores('### E-001 · a\n\n### E-002 · b\n\n### E-002 · c\n');
+    const p = analizarRegistroErrores('### E-001 · a\nx\n### E-002 · b\nx\n### E-002 · c\nx\n');
     assert.equal(p.length, 1);
     assert.match(p[0].mensaje, /E-002 está duplicado/);
     assert.equal(p[0].linea, 5);
   });
 
   test('detecta un número fuera de orden', () => {
-    const p = analizarRegistroErrores('### E-001 · a\n### E-003 · b\n### E-002 · c\n');
+    const p = analizarRegistroErrores('### E-001 · a\nx\n### E-003 · b\nx\n### E-002 · c\nx\n');
     assert.equal(p.length, 1);
     assert.match(p[0].mensaje, /E-002 está fuera de orden/);
   });
 
+  test('detecta una entrada cortada (encabezado sin cuerpo)', () => {
+    const p = analizarRegistroErrores('### E-001 · a\ntexto\n---\n### E-002 · b\n### E-003 · c\ncuerpo\n');
+    assert.equal(p.length, 1);
+    assert.match(p[0].mensaje, /E-002 no tiene cuerpo/);
+    assert.equal(analizarRegistroErrores('### E-001 · a\ntexto\n### E-002 · b\n').length, 1);
+  });
+
   test('no señala un registro correcto (con huecos permitidos) ni texto que no es encabezado', () => {
-    assert.deepEqual(analizarRegistroErrores('### E-001 · a\nver E-001 de nuevo\n### E-004 · b\n'), []);
+    assert.deepEqual(analizarRegistroErrores('### E-001 · a\nver E-001 de nuevo\n### E-004 · b\nx\n'), []);
   });
 
   test('sobre el repo real no encuentra nada', () => {
