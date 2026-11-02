@@ -51,6 +51,22 @@ export interface TextLayerCallbacks {
  * nunca reposicionado — es quien garantiza que el texto original quede tapado
  * (E-002): el bloque puede moverse o cambiar de alto sin destapar nada.
  */
+/**
+ * Foco que debe recuperar una línea tras re-renderizarse la página al confirmar una edición con Enter/Escape
+ * (el bloque que lo tenía deja de existir). Se consume en cuanto aparece la línea equivalente (página + posición
+ * dentro de la capa) o caduca. Un solo hueco porque solo hay un foco en el documento.
+ */
+let focoPendiente: { pagina: number; indice: number; hasta: number } | null = null;
+function restaurarFocoPendiente(raiz: ParentNode): void {
+  const p = focoPendiente;
+  if (!p) return;
+  if (Date.now() > p.hasta) { focoPendiente = null; return; }
+  const destino = raiz.querySelector<HTMLElement>(`.run[data-pagina="${p.pagina}"][data-indice-linea="${p.indice}"]`);
+  if (!destino) return;
+  focoPendiente = null;
+  destino.focus();
+}
+
 export class TextLayer {
   constructor(
     private readonly host: HTMLElement,
@@ -126,6 +142,8 @@ export class TextLayer {
       const block = document.createElement('div');
       block.className = 'run';
       block.dataset.runId = String(run.runId);
+      block.dataset.pagina = String(this.page.index);
+      block.dataset.indiceLinea = String(this.bloques.length);
       block.dataset.lineaId = linea.lineaId;
       block.textContent = texto;
       // E-117: la dirección de la línea manda sobre el editor (cursor, flechas, alineación); `dir` evita que el
@@ -158,7 +176,6 @@ export class TextLayer {
       const editColor = `rgb(${run.color[0]}, ${run.color[1]}, ${run.color[2]})`;
 
       let oldText = texto;
-      let editadoConTeclado = false;
       let conTramos = false;
       const empezarEdicion = (): void => {
         for (const el of Array.from(this.host.querySelectorAll<HTMLElement>('.run'))) el.classList.remove('selected');
@@ -225,7 +242,6 @@ export class TextLayer {
         // N7: con una herramienta de colocación activa el clic sube al fondo de la página (que coloca) y no edita.
         if (!block.isContentEditable && this.cb.colocando?.()) return;
         e.stopPropagation();
-        editadoConTeclado = false;
         empezarEdicion();
       });
       const commit = (): void => {
@@ -256,12 +272,15 @@ export class TextLayer {
         }
       };
       block.addEventListener('blur', commit);
-      // Devuelve el foco al run tras editar SOLO si la edición empezó con
-      // teclado (A-03): con ratón no se pinta anillo de foco tras Enter/Escape
-      // (prueba de oro de reposo, E-029).
+      // Devuelve el foco al run tras confirmar/cancelar con Enter/Escape (A-03).
       const salirDeEdicion = (): void => {
         block.blur();
-        if (editadoConTeclado) { editadoConTeclado = false; if (block.isConnected) block.focus(); }
+        // QA ronda 3: Enter/Escape es una acción de teclado; el foco vuelve SIEMPRE a la línea (antes, si la edición
+        // empezó con ratón, caía en body y el usuario de teclado perdía su posición).
+        if (block.isConnected) { block.focus(); return; }
+        // La edición re-renderizó la página (el bloque ya no está en el DOM): el foco pasa a la línea equivalente.
+        focoPendiente = { pagina: this.page.index, indice: this.bloques.indexOf(block), hasta: Date.now() + 2000 };
+        restaurarFocoPendiente(document);
       };
       block.addEventListener('keydown', (e) => {
         if (block.isContentEditable) {
@@ -277,12 +296,13 @@ export class TextLayer {
         else if (e.key === 'ArrowUp') { e.preventDefault(); this.moverTabstop(this.bloques[i - 1]); }
         else if (e.key === 'Home') { e.preventDefault(); this.moverTabstop(this.bloques[0]); }
         else if (e.key === 'End') { e.preventDefault(); this.moverTabstop(this.bloques[this.bloques.length - 1]); }
-        else if (e.key === 'Enter') { e.preventDefault(); editadoConTeclado = true; empezarEdicion(); }
+        else if (e.key === 'Enter') { e.preventDefault(); empezarEdicion(); }
       });
 
       block.appendChild(this.makeDragHandle(block, run.runId, linea.runIds));
       this.host.appendChild(block);
     }
+    restaurarFocoPendiente(this.host);
   }
 
   /**

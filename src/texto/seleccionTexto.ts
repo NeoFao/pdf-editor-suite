@@ -38,53 +38,133 @@ export function indiceCaracterMasCercano(chars: readonly CharBox[], xPt: number,
 }
 
 /**
+ * Orden de lectura de los caracteres de una página (E-122). En una página con `/Rotate 90` PDFium entrega las
+ * LÍNEAS en orden inverso (la última de abajo primero: L4, L3, L2, L1, cada una por dentro en su orden) porque
+ * ordena el texto en el espacio girado, donde el texto normal queda vertical. Con 0, 180 y 270 el orden ya es
+ * el natural. La selección, la copia y el marcado trabajan con rangos de ÍNDICES, así que con ese orden un
+ * arrastre de la línea 1 a la 3 seleccionaba el tramo complementario (cola de la 3, la 2, cabeza de la 1).
+ *
+ * Solo se actúa si (a) la página está girada 90, (b) todas las líneas (bloques separados por saltos de línea sin
+ * caja) son horizontales en el espacio de usuario (texto contragirado, que PDFium ya ordena bien, no se toca) y
+ * (c) el primer bloque queda DEBAJO del último (el orden ya natural no se toca). Entonces se invierte el orden de
+ * los bloques, no el de los caracteres dentro de cada uno. Pura: devuelve el mismo array si no hay nada que hacer.
+ */
+export function ordenLecturaCaracteres(chars: CharBox[], rotation: 0 | 90 | 180 | 270): CharBox[] {
+  if (rotation !== 90) return chars;
+  const esSalto = (c: CharBox): boolean => !tieneCaja(c) && /[\r\n]/.test(c.ch);
+  const bloques: CharBox[][] = [[]];
+  let separador: CharBox[] | null = null; // el primer grupo de saltos (p. ej. \r\n) que aparezca
+  let capturando = false, enSalto = false;
+  for (const c of chars) {
+    if (esSalto(c)) {
+      if (!enSalto) { bloques.push([]); capturando = separador === null; if (capturando) separador = []; }
+      if (capturando) separador!.push(c);
+      enSalto = true;
+    } else { enSalto = false; capturando = false; bloques[bloques.length - 1]!.push(c); }
+  }
+  const llenos = bloques.filter((b) => b.some(tieneCaja));
+  if (llenos.length < 2) return chars;
+  const caja = (b: CharBox[]): { x0: number; x1: number; y0: number; y1: number } => {
+    const bs = b.filter(tieneCaja).map((c) => c.boxPt);
+    return { x0: Math.min(...bs.map((r) => r.xPt)), x1: Math.max(...bs.map((r) => r.xPt + r.wPt)), y0: Math.min(...bs.map((r) => r.yPt)), y1: Math.max(...bs.map((r) => r.yPt + r.hPt)) };
+  };
+  const cajas = llenos.map(caja);
+  // (b) alguna línea de varios caracteres más alta que ancha en el espacio de usuario: escritura vertical, no se toca.
+  if (llenos.some((b, i) => b.filter(tieneCaja).length > 1 && cajas[i]!.x1 - cajas[i]!.x0 < cajas[i]!.y1 - cajas[i]!.y0)) return chars;
+  // (c) el orden natural empieza arriba (y mayor).
+  const primera = cajas[0]!, ultima = cajas[cajas.length - 1]!;
+  if (primera.y0 + primera.y1 >= ultima.y0 + ultima.y1) return chars;
+  const sep = separador !== null && separador.length > 0 ? separador : [{ ch: '\r', boxPt: { xPt: 0, yPt: 0, wPt: 0, hPt: 0 } }, { ch: '\n', boxPt: { xPt: 0, yPt: 0, wPt: 0, hPt: 0 } }];
+  const out: CharBox[] = [];
+  llenos.reverse().forEach((b, i) => { if (i > 0) out.push(...sep); out.push(...b); });
+  return out;
+}
+
+/**
  * Quads de un rango de caracteres [a, b] (inclusive, en cualquier orden): UNO
  * POR LÍNEA VISUAL, recortados al tramo. Cada carácter con caja se entrega a
- * `quadsPorLinea` (que agrupa por línea visual en el espacio ya girado, E-053);
- * su `sizePt` es su propio alto VISUAL, así que nunca se trocea como multilínea.
+ * `quadsPorLinea` con el identificador de su línea (agrupada en pt de usuario, E-122);
+ * nunca se trocea como multilínea.
  */
 export function quadsDeRango(chars: readonly CharBox[], a: number, b: number, geo: PageGeometry): QuadPt[] {
   const desde = Math.max(0, Math.min(a, b)), hasta = Math.min(chars.length - 1, Math.max(a, b));
-  const banda = bandasDeLinea(chars, geo);
+  const banda = bandasDeLinea(chars);
   const cajas = [];
   for (let i = desde; i <= hasta; i++) {
     const c = chars[i]!;
     if (!tieneCaja(c)) continue;
-    // Horizontal: la del propio carácter (recorte exacto). Vertical: la de su LÍNEA entera,
-    // porque la caja de un glifo depende de su forma ("a" baja, "l" alta) y un marcado
-    // debe tener la altura de la línea, no la del glifo.
-    const r = geo.rectPtToCss(c.boxPt);
-    const [top, bottom] = banda[i]!;
-    const p = geo.cssToPt(r.left, top), q = geo.cssToPt(r.left + r.width, bottom);
-    cajas.push({
-      boxPt: { xPt: Math.min(p.xPt, q.xPt), yPt: Math.min(p.yPt, q.yPt), wPt: Math.abs(q.xPt - p.xPt), hPt: Math.abs(q.yPt - p.yPt) },
-      sizePt: bottom - top
-    });
+    // Along: la del propio carácter (recorte exacto). Across: la de su LÍNEA entera, porque la caja de un
+    // glifo depende de su forma ("a" baja, "l" alta) y un marcado debe tener el grosor de la línea, no el
+    // del glifo. Todo en pt de usuario; `rectPtToCss` solo se usa para medir el tamaño visual.
+    const bd = banda[i]!, bx = c.boxPt;
+    const boxPt = bd.vertical
+      ? { xPt: bd.ini, yPt: bx.yPt, wPt: bd.fin - bd.ini, hPt: bx.hPt }
+      : { xPt: bx.xPt, yPt: bd.ini, wPt: bx.wPt, hPt: bd.fin - bd.ini };
+    const r = geo.rectPtToCss(boxPt);
+    // `sizePt` grande a propósito: la caja de un carácter nunca es multilínea (no se trocea en bandas).
+    cajas.push({ boxPt, sizePt: Math.max(r.width, r.height), linea: bd.id });
   }
   return quadsPorLinea(cajas, geo);
 }
 
+/** Banda de una línea de texto en pt de usuario: su rango en el eje perpendicular a la escritura. */
+interface BandaLinea {
+  /** Identificador de la línea (los caracteres de una misma línea comparten la banda). */
+  id: number;
+  /** Escritura vertical en el espacio de usuario (la línea avanza en Y): la banda es un rango de X; si no, de Y. */
+  vertical: boolean;
+  ini: number;
+  fin: number;
+}
+
+/** Solape (pt) de dos rangos [a0,a1] y [b0,b1]. */
+const solape = (a0: number, a1: number, b0: number, b1: number): number => Math.min(a1, b1) - Math.max(a0, b0);
+
 /**
- * Para cada carácter con caja: [top, bottom] en px CSS visuales de su línea,
- * es decir, la envolvente vertical de los caracteres consecutivos (en orden de
- * lectura) que solapan con ella más de la mitad del alto del menor. En espacio
- * visual (ya girado, E-053) el texto es horizontal aunque la página esté girada.
+ * Para cada carácter con caja: la banda de su línea, es decir, la envolvente de los caracteres consecutivos (en
+ * orden de lectura) que solapan con ella más de la mitad del grosor del menor.
+ *
+ * La agrupación se hace en pt de USUARIO (sin girar), no en el espacio visual girado (E-122): en una página
+ * /Rotate 90/270 el texto normal queda vertical en pantalla y agrupar por solape vertical visual dejaba cada
+ * carácter en su propia banda (un rectángulo por carácter). La dirección de la línea sale de cada par de
+ * caracteres consecutivos: avanzan en X (línea horizontal, banda en Y) o en Y (línea vertical, banda en X);
+ * así vale con cualquier /Rotate y también con texto contragirado.
  */
-function bandasDeLinea(chars: readonly CharBox[], geo: PageGeometry): ([number, number] | undefined)[] {
-  const out: ([number, number] | undefined)[] = new Array(chars.length);
+function bandasDeLinea(chars: readonly CharBox[]): (BandaLinea | undefined)[] {
+  const out: (BandaLinea | undefined)[] = new Array(chars.length);
   let grupo: number[] = [];
-  let top = 0, bottom = 0;
-  const cerrar = (): void => { const b: [number, number] = [top, bottom]; for (const i of grupo) out[i] = b; grupo = []; }; // misma referencia = misma línea
+  let banda: BandaLinea | null = null;
+  let prev: CharBox | null = null;
+  let siguienteId = 0;
+  const cerrar = (): void => { if (banda) for (const i of grupo) out[i] = banda; grupo = []; banda = null; }; // misma referencia = misma línea
   chars.forEach((c, i) => {
     if (!tieneCaja(c)) return;
-    const r = geo.rectPtToCss(c.boxPt);
-    const t = r.top, bo = r.top + r.height;
-    if (grupo.length > 0) {
-      const solape = Math.min(bottom, bo) - Math.max(top, t);
-      if (solape > 0.5 * Math.min(bottom - top, bo - t)) { top = Math.min(top, t); bottom = Math.max(bottom, bo); grupo.push(i); return; }
-      cerrar();
+    const { xPt: x, yPt: y, wPt: w, hPt: h } = c.boxPt;
+    if (banda && prev) {
+      const p = prev.boxPt;
+      if (grupo.length === 1) { // la dirección de la línea se decide con el primer par
+        const oy = solape(y, y + h, p.yPt, p.yPt + p.hPt) / Math.min(h, p.hPt);
+        const ox = solape(x, x + w, p.xPt, p.xPt + p.wPt) / Math.min(w, p.wPt);
+        const vertical = ox > oy && ox > 0.5;
+        if (vertical || oy > 0.5) {
+          banda.vertical = vertical;
+          banda.ini = vertical ? Math.min(p.xPt, x) : Math.min(p.yPt, y);
+          banda.fin = vertical ? Math.max(p.xPt + p.wPt, x + w) : Math.max(p.yPt + p.hPt, y + h);
+          grupo.push(i); prev = c; return;
+        }
+        cerrar();
+      } else {
+        const vertical = banda.vertical;
+        const a0 = vertical ? x : y, a1 = vertical ? x + w : y + h;
+        if (solape(banda.ini, banda.fin, a0, a1) > 0.5 * Math.min(banda.fin - banda.ini, a1 - a0)) {
+          banda.ini = Math.min(banda.ini, a0); banda.fin = Math.max(banda.fin, a1); grupo.push(i); prev = c; return;
+        }
+        cerrar();
+      }
     }
-    top = t; bottom = bo; grupo = [i];
+    banda = { id: siguienteId++, vertical: false, ini: y, fin: y + h };
+    grupo = [i];
+    prev = c;
   });
   cerrar();
   return out;
@@ -163,7 +243,7 @@ export function caretSiguiente(chars: readonly CharBox[], caret: number, dir: 1 
 function estructuraLineas(chars: readonly CharBox[], geo: PageGeometry): {
   idxCaja: number[]; lineas: number[][]; izq: (i: number) => number; der: (i: number) => number;
 } {
-  const banda = bandasDeLinea(chars, geo);
+  const banda = bandasDeLinea(chars);
   const idxCaja: number[] = [];
   chars.forEach((c, i) => { if (tieneCaja(c)) idxCaja.push(i); });
   // Líneas: caracteres con caja consecutivos que comparten la misma banda (misma referencia).
@@ -215,7 +295,7 @@ export function caretEnLineaPorX(chars: readonly CharBox[], linea: number, x: nu
 /**
  * Caret tras mover el foco UNA línea visual arriba (`dir` -1) o abajo (+1) conservando la columna
  * (x visual en px CSS). Sin línea siguiente/anterior va al final/inicio del texto, como un campo de
- * texto. La agrupación en líneas es la de `bandasDeLinea` (espacio visual, E-053), y `geo` es la
+ * texto. La agrupación en líneas es la de `bandasDeLinea` (espacio de usuario, E-122), y `geo` es la
  * geometría a escala 1 (px CSS = pt visuales).
  */
 export function caretLinea(chars: readonly CharBox[], caret: number, dir: 1 | -1, geo: PageGeometry): number {
