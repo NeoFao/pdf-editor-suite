@@ -22,7 +22,7 @@ export class EditarLineaCmd implements Command {
   ok = false;
   sinCambios = false;
   fontName: string | null = null;
-  razon: 'glyph-missing' | 'not-a-text-run' | 'empty-text' | 'stale' | null = null;
+  razon: 'glyph-missing' | 'not-a-text-run' | 'empty-text' | 'stale' | 'bidi-no-fiel' | null = null;
   lineaRunIdInicial: number;
 
   constructor(

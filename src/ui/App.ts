@@ -1232,6 +1232,7 @@ export class App {
     this.scale = 1;
     this.viewer = new Viewer(this.viewerEl, this.session, {
       onEdit: (req) => this.handleEdit(req),
+      onAviso: (mensaje) => this.setStatus(mensaje),
       onSelect: (pageIndex, runId) => {
         this.selection = { pageIndex, runId };
         this.appliedFontLabel = null;
@@ -1460,7 +1461,9 @@ export class App {
         ? 'Una línea no puede quedar vacía; selecciónala y usa Borrar para quitarla.'
         : cmd.razon === 'stale'
           ? 'La línea cambió mientras se editaba; vuelve a intentarlo.'
-          : 'No se puede editar ese elemento.');
+          : cmd.razon === 'bidi-no-fiel'
+            ? 'Esa línea de derecha a izquierda no se puede reescribir con fidelidad; edición no aplicada.'
+            : 'No se puede editar ese elemento.');
   }
 
   private async handleInsert(pageIndex: number, at: PtPoint): Promise<void> {
