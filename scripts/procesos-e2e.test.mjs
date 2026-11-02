@@ -5,7 +5,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   clasificarProceso, seleccionarHuerfanos, pidsProtegidos,
-  parsearProcesosWindows, parsearProcesosUnix
+  parsearProcesosWindows, parsearProcesosUnix, perteneceAOtroWorktree, decidirLiberacionPuerto
 } from './procesos-e2e.mjs';
 import { PUERTOS_E2E, LISTA_PUERTOS_E2E } from './puertos-e2e.mjs';
 
@@ -85,6 +85,59 @@ describe('parsers de la lista de procesos', () => {
     const r = parsearProcesosUnix('  42     1 /usr/bin/node /repo/server.js\n  7 1 [kworker]\n\nbasura\n');
     assert.deepEqual(r[0], { pid: 42, ppid: 1, nombre: 'node', cmd: '/usr/bin/node /repo/server.js' });
     assert.equal(r.length, 2);
+  });
+});
+
+describe('protección entre worktrees (E-112)', () => {
+  const PRINCIPAL = 'C:\\Users\\andre\\Documents\\BIBLIOTECA APPS\\PDF Editor';
+  const WT_A = `${PRINCIPAL}\\.claude\\worktrees\\agent-aaa`;
+  const WT_B = `${PRINCIPAL}\\.claude\\worktrees\\agent-bbb`;
+
+  test('desde un worktree, un node del OTRO worktree es de otro worktree', () => {
+    assert.equal(perteneceAOtroWorktree(`node ${WT_B}\\node_modules\\vite\\bin\\vite.js preview`, WT_A), true);
+  });
+  test('desde un worktree, un node del checkout principal es de otro worktree', () => {
+    assert.equal(perteneceAOtroWorktree(`node ${PRINCIPAL}\\server.js`, WT_A), true);
+  });
+  test('desde el checkout principal, un node de un worktree es de otro worktree', () => {
+    assert.equal(perteneceAOtroWorktree(`node ${WT_A}\\server.js`, PRINCIPAL), true);
+  });
+  test('un proceso del propio worktree no lo es, ni uno con ruta relativa', () => {
+    assert.equal(perteneceAOtroWorktree(`node ${WT_A}\\server.js`, WT_A), false);
+    assert.equal(perteneceAOtroWorktree('node server.js', WT_A), false);
+    assert.equal(perteneceAOtroWorktree(`node ${PRINCIPAL}\\server.js`, PRINCIPAL), false);
+  });
+  test('un worktree cuyo nombre es prefijo del otro no se confunde', () => {
+    assert.equal(perteneceAOtroWorktree(`node ${WT_A}2\\server.js`, WT_A), true);
+  });
+
+  test('clasificarProceso trata un proceso de otro worktree como ajeno (no se cierra)', () => {
+    const p = { pid: 1, nombre: 'node.exe', cmd: `node ${WT_A}\\server.js` };
+    assert.equal(clasificarProceso(p, PRINCIPAL), 'ajeno');
+    assert.equal(clasificarProceso(p, WT_A), 'repo');
+  });
+
+  test('decidirLiberacionPuerto: mata solo node/vite propios; respeta otro worktree, ajenos y desconocidos', () => {
+    const procesos = [
+      { pid: 100, ppid: 1, nombre: 'node.exe', cmd: `node ${WT_A}\\node_modules\\vite\\bin\\vite.js preview` },
+      { pid: 101, ppid: 1, nombre: 'node.exe', cmd: `node ${WT_B}\\node_modules\\vite\\bin\\vite.js preview` },
+      { pid: 102, ppid: 1, nombre: 'node.exe', cmd: 'node server.js' },
+      { pid: 103, ppid: 1, nombre: 'java.exe', cmd: 'java -jar x.jar' },
+      { pid: 104, ppid: 1, nombre: 'node.exe', cmd: null },
+      { pid: 105, ppid: 1, nombre: 'node.exe', cmd: `node ${PRINCIPAL}\\server.js` }
+    ];
+    const r = decidirLiberacionPuerto([100, 101, 102, 103, 104, 105, 999], procesos, WT_A, new Set());
+    assert.deepEqual(r.matar.map((p) => p.pid), [100, 102]);
+    assert.deepEqual(r.omitir.map((o) => [o.pid, o.motivo]), [
+      [101, 'otro-worktree'], [103, 'no-permitido'], [104, 'desconocido'], [105, 'otro-worktree'], [999, 'desconocido']
+    ]);
+  });
+
+  test('decidirLiberacionPuerto nunca incluye PIDs protegidos', () => {
+    const procesos = [{ pid: 7, ppid: 1, nombre: 'node.exe', cmd: `node ${WT_A}\\x.js` }];
+    const r = decidirLiberacionPuerto([7], procesos, WT_A, new Set([7]));
+    assert.deepEqual(r.matar, []);
+    assert.equal(r.omitir[0].motivo, 'protegido');
   });
 });
 

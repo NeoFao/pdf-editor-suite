@@ -17,13 +17,14 @@
  * MIME y la misma protección anti path-traversal que `server.js`.
  *
  * Uso:
- *   node scripts/servir-despliegue.mjs [--port 4174] [--dir dist-deploy] [--config vercel.json]
- *   PORT=4174 DIST_DIR=dist-deploy VERCEL_JSON=vercel.json node scripts/servir-despliegue.mjs
+ *   node scripts/servir-despliegue.mjs [--port <puerto>] [--dir dist-deploy] [--config vercel.json]
+ *   PORT=<puerto> DIST_DIR=dist-deploy VERCEL_JSON=vercel.json node scripts/servir-despliegue.mjs
  */
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { PUERTOS_E2E } from './puertos-e2e.mjs';
 
 export const RAIZ = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -257,7 +258,7 @@ function parsearArgv(argv) {
 
 function main() {
   const argv = parsearArgv(process.argv.slice(2));
-  const PORT = Number(argv.port ?? process.env.PORT ?? 4174);
+  const PORT = Number(argv.port ?? process.env.PORT ?? PUERTOS_E2E.despliegue);
   const DIST_DIR = path.resolve(RAIZ, argv.dir ?? process.env.DIST_DIR ?? 'dist-deploy');
   const VERCEL_JSON = path.resolve(RAIZ, argv.config ?? process.env.VERCEL_JSON ?? 'vercel.json');
 

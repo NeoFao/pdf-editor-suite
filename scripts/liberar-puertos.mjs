@@ -1,22 +1,27 @@
 /**
- * Libera los puertos que usan los servidores de test E2E (3100 app vieja,
- * 4173 app nueva, 4174 despliegue; la lista sale de scripts/puertos-e2e.mjs,
- * la misma que usa playwright.config.js — E-062) y cierra los procesos
- * huérfanos de ESTE repo (node/vite/vitest/chrome cuya línea de comandos cita
- * la ruta del repo; nunca el propio script ni sus ancestros). Pensado sobre todo para 4173: playwright.config.js fija
- * `reuseExistingServer: false` en el webServer de la app nueva (E-033), así
- * que un `vite preview` que quedó vivo de una sesión anterior hace que
- * Playwright falle con "puerto ya en uso" en vez de reconstruir. Este script
- * lo libera para que ese fallo no sea un obstáculo.
+ * Libera los puertos que usan los servidores de test E2E (por defecto 3100 app
+ * vieja, 4173 app nueva, 4174 despliegue; con E2E_PUERTO_BASE se desplazan y
+ * SOLO se liberan los desplazados — E-112; la lista sale de
+ * scripts/puertos-e2e.mjs, la misma que usa playwright.config.js — E-062) y
+ * cierra los procesos huérfanos de ESTE repo (node/vite/vitest/chrome cuya
+ * línea de comandos cita la ruta del repo; nunca el propio script ni sus
+ * ancestros). Pensado sobre todo para la app nueva: playwright.config.js fija
+ * `reuseExistingServer: false` en su webServer (E-033), así que un
+ * `vite preview` que quedó vivo de una sesión anterior hace que Playwright
+ * falle con "puerto ya en uso" en vez de reconstruir. Este script lo libera
+ * para que ese fallo no sea un obstáculo.
  *
  * SOLO mata el proceso que escucha en el puerto si su nombre es node o vite
- * (el propio `vite preview`, o `node server.js`). Nunca mata un proceso
- * ajeno: si no se puede averiguar su nombre, avisa y lo deja vivo.
+ * (el propio `vite preview`, o `node server.js`), si se puede leer su línea de
+ * comandos y si ésta no cita OTRO worktree ni el checkout principal (E-112).
+ * Nunca mata un proceso ajeno: si no se puede identificar, avisa y lo deja
+ * vivo. La decisión es una función pura (`decidirLiberacionPuerto`).
  *
  * Multiplataforma, sin dependencias externas: netstat + taskkill en Windows,
  * lsof + kill en el resto (Unix/macOS).
  *
- * Uso: `npm run e2e:liberar` (o `node scripts/liberar-puertos.mjs`).
+ * Uso: `npm run e2e:liberar` (o `node scripts/liberar-puertos.mjs`). En un
+ * worktree con puertos desplazados: `E2E_PUERTO_BASE=10000 npm run e2e:liberar`.
  * NO se llama desde `npm run verify`: matar procesos automáticamente en un
  * pipeline es invasivo. Es una herramienta manual para desatascar el entorno
  * local; el error de Playwright ya explica qué comando ejecutar.
@@ -26,7 +31,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { LISTA_PUERTOS_E2E } from './puertos-e2e.mjs';
 import {
-  parsearProcesosWindows, parsearProcesosUnix, pidsProtegidos, seleccionarHuerfanos
+  parsearProcesosWindows, parsearProcesosUnix, pidsProtegidos, seleccionarHuerfanos, decidirLiberacionPuerto
 } from './procesos-e2e.mjs';
 
 // Misma lista que usa playwright.config.js (E-062): nunca una copia a mano.
@@ -56,18 +61,6 @@ function pidsEnPuertoWindows(puerto) {
   return [...pids];
 }
 
-/** Nombre del ejecutable de un PID en Windows (tasklist). */
-function nombreProcesoWindows(pid) {
-  try {
-    const salida = execSync(`tasklist /FI "PID eq ${pid}" /FO CSV /NH`, { encoding: 'utf8' });
-    // "node.exe","12345","Console","1","45,678 K"
-    const m = salida.match(/^"([^"]+)"/);
-    return m ? m[1] : null;
-  } catch {
-    return null;
-  }
-}
-
 function matarWindows(pid) {
   execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore' });
 }
@@ -83,35 +76,11 @@ function pidsEnPuertoUnix(puerto) {
   }
 }
 
-/** Nombre del comando de un PID en Unix (ps). */
-function nombreProcesoUnix(pid) {
-  try {
-    const salida = execSync(`ps -p ${pid} -o comm=`, { encoding: 'utf8' });
-    return salida.trim() || null;
-  } catch {
-    return null;
-  }
-}
-
 function matarUnix(pid) {
   execSync(`kill -9 ${pid}`, { stdio: 'ignore' });
 }
 
-/**
- * ¿Es seguro matar este proceso? Solo node o vite. `vite preview` corre
- * dentro de un proceso node en ambas plataformas, así que basta con mirar el
- * nombre reportado por el sistema — nunca inspeccionamos la línea de
- * comandos completa, así que un `node` ajeno (que no sea un servidor de
- * este repo) también se libera si escucha en 4173/3100; es el límite
- * consciente de esta heurística: identifica el PUERTO correcto, no el
- * proceso exacto que arrancó Playwright.
- */
-function esProcesoPermitido(nombre) {
-  if (!nombre) return false;
-  return /node|vite/i.test(nombre);
-}
-
-function liberarPuerto(puerto) {
+function liberarPuerto(puerto, procesos, protegidos) {
   // Los PIDs vienen de netstat/lsof, no de entrada de usuario, pero se
   // interpolan en comandos de shell (execSync): se validan como enteros
   // puros antes de usarlos en cualquier comando, defensa en profundidad
@@ -122,20 +91,19 @@ function liberarPuerto(puerto) {
     console.log(`  puerto ${puerto}: libre`);
     return;
   }
-  for (const pid of pids) {
-    const nombre = esWindows ? nombreProcesoWindows(pid) : nombreProcesoUnix(pid);
-    if (!esProcesoPermitido(nombre)) {
-      console.warn(
-        `  puerto ${puerto}: PID ${pid} (${nombre ?? 'nombre desconocido'}) no parece ` +
-        'node/vite — no se mata. Si es un servidor de test, ciérralo a mano.'
-      );
-      continue;
-    }
+  const { matar, omitir } = decidirLiberacionPuerto(pids, procesos ?? [], RAIZ_REPO, protegidos);
+  for (const o of omitir) {
+    console.warn(
+      `  puerto ${puerto}: PID ${o.pid} (${o.nombre ?? 'nombre desconocido'}) no se mata (${o.motivo}). ` +
+      'Si es un servidor de test tuyo, ciérralo a mano.'
+    );
+  }
+  for (const p of matar) {
     try {
-      if (esWindows) matarWindows(pid); else matarUnix(pid);
-      console.log(`  puerto ${puerto}: PID ${pid} (${nombre}) liberado`);
+      if (esWindows) matarWindows(String(p.pid)); else matarUnix(String(p.pid));
+      console.log(`  puerto ${puerto}: PID ${p.pid} (${p.nombre}) liberado`);
     } catch (e) {
-      console.warn(`  puerto ${puerto}: no se pudo matar el PID ${pid}: ${e.message}`);
+      console.warn(`  puerto ${puerto}: no se pudo matar el PID ${p.pid}: ${e.message}`);
     }
   }
 }
@@ -155,16 +123,14 @@ function listarProcesos() {
       execSync('ps -eo pid=,ppid=,args=', { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
     );
   } catch (e) {
-    console.warn(`  no se pudo listar los procesos (${e.message.split('\n')[0]}): no se buscan huérfanos.`);
+    console.warn(`  no se pudo listar los procesos (${e.message.split('\n')[0]}): no se mata nada.`);
     return null;
   }
 }
 
-/** Cierra los procesos node/vite/vitest/chrome cuya línea de comandos cita este repo. */
-function liberarHuerfanos() {
-  const procesos = listarProcesos();
+/** Cierra los procesos node/vite/vitest/chrome cuya línea de comandos cita este repo (no otro worktree). */
+function liberarHuerfanos(procesos, protegidos) {
   if (!procesos) return;
-  const protegidos = pidsProtegidos(procesos, process.pid);
   const { cerrar, desconocidos } = seleccionarHuerfanos(procesos, RAIZ_REPO, protegidos);
   for (const p of desconocidos) {
     console.warn(`  PID ${p.pid} (${p.nombre}): no se puede leer su línea de comandos — no se cierra.`);
@@ -185,7 +151,11 @@ function liberarHuerfanos() {
   }
 }
 
-console.log(`Liberando puertos de test E2E (${PUERTOS.join(', ')})...`);
-for (const puerto of PUERTOS) liberarPuerto(puerto);
+// Sin la lista de procesos no se puede identificar a nadie: no se mata nada (listarProcesos ya avisó).
+const procesos = listarProcesos();
+const protegidos = procesos ? pidsProtegidos(procesos, process.pid) : new Set([process.pid]);
+const base = process.env.E2E_PUERTO_BASE ? ` (E2E_PUERTO_BASE=${process.env.E2E_PUERTO_BASE})` : '';
+console.log(`Liberando puertos de test E2E${base}: ${PUERTOS.join(', ')}...`);
+for (const puerto of PUERTOS) liberarPuerto(puerto, procesos, protegidos);
 console.log('Buscando procesos huérfanos de este repo...');
-liberarHuerfanos();
+liberarHuerfanos(procesos, protegidos);

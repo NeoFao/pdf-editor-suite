@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 /**
  * Smoke del cutover de despliegue (spec §4): corre contra `dist-deploy/`
- * servido estático por `vite preview` (proyecto `deploy`, :4174) — el MISMO
+ * servido estático por `vite preview` (proyecto `deploy`, PUERTOS_E2E.despliegue) — el MISMO
  * árbol que `scripts/construir-despliegue.mjs` produce y que Vercel publica
  * (`vercel.json`: buildCommand `npm run build:deploy`, outputDirectory
  * `dist-deploy`). No es un test de comportamiento de ninguna de las dos
@@ -37,7 +37,7 @@ test('/ enlaza a la versión anterior en /legacy/', async ({ page }) => {
 });
 
 test('/legacy/ sirve la app vieja completa, sin 404 de recursos locales', async ({ page, baseURL }) => {
-  const origenEsperado = new URL(baseURL ?? 'http://127.0.0.1:4174').origin;
+  const origenEsperado = new URL(baseURL!).origin;
   const recursosRotos: string[] = [];
   page.on('response', (respuesta) => {
     if (new URL(respuesta.url()).origin !== origenEsperado) return; // ignora CDN externo
