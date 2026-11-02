@@ -1551,6 +1551,36 @@ export const sinPromptNativo = {
   }
 };
 
+/* ── E-127 · ningún diálogo casero (velo `position: fixed; inset: 0` hecho a mano) en src/ ── */
+/**
+ * Pura: hallazgos de velos a pantalla completa construidos a mano (`position: 'fixed'` con `inset: '0'` en la
+ * misma línea de un `Object.assign(x.style, {...})`). Un `<div>` así no es un diálogo: sin `role`, sin foco inicial,
+ * sin trampa de Tab, sin Escape, sin devolver el foco (QA-04, «Dibuja tu firma»). Los diálogos van con `<dialog>` +
+ * `mostrarModal` (src/ui/dialogo.ts).
+ */
+export function analizarDialogoCasero(rel, contenido) {
+  const exentas = lineasExentas(contenido, 'sin-dialogo-casero');
+  const hallazgos = [];
+  contenido.split('\n').forEach((linea, i) => {
+    if (esComentario(linea) || exentas.has(i + 1)) return;
+    if (/position\s*:\s*['"]fixed['"]/.test(linea) && /inset\s*:\s*['"]0(?:px)?['"]/.test(linea)) {
+      hallazgos.push(hallazgo(rel, i + 1, 'velo a pantalla completa hecho a mano: usa un <dialog> con mostrarModal'));
+    }
+  });
+  return hallazgos;
+}
+
+export const sinDialogoCasero = {
+  id: 'sin-dialogo-casero',
+  titulo: 'ningún fichero de src/ monta un diálogo como <div> con velo position:fixed',
+  comoArreglar:
+    'Un <div> con velo no es un diálogo: no tiene role, ni foco inicial, ni trampa de Tab, ni Escape, ni devuelve ' +
+    'el foco (QA-04, E-127). Usa un <dialog> con mostrarModal (src/ui/dialogo.ts), como SignaturePad o NotaDialogo.',
+  ejecutar() {
+    return recorrerFuentesTs((rel, contenido) => analizarDialogoCasero(rel, contenido));
+  }
+};
+
 /* ── E-113 · ni tests/ ni playwright.config.js escriben puertos de E2E a mano ── */
 /**
  * Pura: hallazgos de puertos E2E escritos a mano (3100/4173/4174 o `127.0.0.1:<n>` / `localhost:<n>`) fuera de
@@ -1634,5 +1664,6 @@ export const TODAS = [
   conPuertosE2eSincronizados,
   sinPuertoE2eAMano,
   sinPromptNativo,
+  sinDialogoCasero,
   sinEsperaFijaEnE2e
 ];

@@ -452,6 +452,11 @@ select, input[type="text"], input[type="search"], input[type="number"] {
 .run.selected {
   outline: 1px dashed var(--ed-accent);
 }
+.run:focus-visible {
+  /* QA-05 (WCAG 2.4.7): la línea enfocada con teclado se ve. Va tras :hover/.selected para ganarles. */
+  outline: 2px solid var(--ed-focus-ring);
+  outline-offset: 1px;
+}
 .run.editing {
   background: #fff;
   outline: 1px solid var(--ed-accent);
@@ -554,38 +559,19 @@ select, input[type="text"], input[type="search"], input[type="number"] {
 
 @media (max-width: 768px) {
   #toolbar { flex-direction: column; align-items: stretch; }
-  .topbar { flex-wrap: nowrap; width: 100%; box-sizing: border-box; }
-  .topbar-scroll {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    position: relative; /* ancla el degradado de ::after, ver abajo */
-    /* Desplazamiento táctil normal, sin la barra nativa (fea, con flechas
-       en algunos navegadores de escritorio) — el degradado de ::after ya
-       avisa de que hay más contenido a un lado. */
-    scrollbar-width: none;
-  }
-  .topbar-scroll::-webkit-scrollbar { display: none; }
-  /*
-   * Degradado sutil al final de `.topbar-scroll`: insinúa que la fila sigue
-   * más allá del borde visible, sin una barra de scroll nativa. Como
-   * `#btn-more` ya NO vive dentro de esta fila (ver el comentario de
-   * `topbarScroll` en App.ts — así se evita que un `sticky` en un flex que
-   * desborda tape el control de al lado, el defecto real de la revisión),
-   * este degradado no tapa ningún control: cae en el propio borde de
-   * `.topbar-scroll`, después del último botón.
-   */
-  .topbar-scroll::after {
-    content: '';
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    right: 0;
-    width: 20px;
-    background: linear-gradient(to right, transparent, var(--ed-surface));
-    pointer-events: none;
-  }
+  /* QA ronda 3: antes la fila desplazaba en horizontal y a 375 px la mitad de los controles (imprimir, zoom,
+     búsqueda, atajos) quedaban recortados fuera de la pantalla. Ahora la barra envuelve en varias filas: todos
+     los controles son visibles y alcanzables sin desplazar. */
+  .topbar { flex-wrap: wrap; width: 100%; box-sizing: border-box; height: auto; min-height: var(--ed-topbar-h); padding: var(--ed-sp-1) var(--ed-sp-2); }
+  /* `display: contents`: los grupos fluyen en la MISMA envoltura que ☰ y ⋯ (sin hueco central desperdiciado). */
+  .topbar-scroll { display: contents; }
+  .topbar { row-gap: 0; padding-top: 2px; padding-bottom: 2px; }
+  .topbar #btn-replace-toggle, .topbar .search-box, .topbar #btn-shortcuts { flex: 0 0 auto; white-space: nowrap; order: 2; }
+  .topbar #btn-more { order: 1; margin-left: auto; }
+  .topbar-sep { display: none; }
   .topbar-spacer { display: none; }
-  .search-box input { width: 90px; }
+  .search-box { height: 32px; }
+  .search-box input { width: 70px; height: 24px; }
   .doc-name { display: none; }
   .tablist { display: none; }
 
@@ -678,6 +664,11 @@ select, input[type="text"], input[type="search"], input[type="number"] {
    * selector personalizado, justo al lado) sigue en 40px.
    */
   #swatches button.swatch { min-width: 24px; min-height: 24px; }
+  /* QA ronda 3: los controles secundarios de la barra (imprimir, ajustar, buscar, atajos) miden 32 px (>= 24, WCAG
+     2.5.8) para que la barra quepa en 3 filas sin recortes; los primarios (guardar, deshacer, zoom, ☰, ⋯) siguen en 40. */
+  .topbar #btn-print, .topbar #btn-fit-width, .topbar #btn-shortcuts,
+  .topbar .search-nav-btn { min-width: 32px; min-height: 32px; width: 32px; height: 32px; }
+  .topbar #btn-replace-toggle { min-height: 32px; height: 32px; width: auto; padding: 0 var(--ed-sp-2); }
 
   /*
    * Hermanos normales de `.topbar-scroll` (ver `topbarScroll` en App.ts), no
@@ -830,4 +821,13 @@ dialog.encabezado-panel::backdrop { background: rgba(0, 0, 0, .12); }
 .link-box:focus-visible {
   outline: 2px solid var(--ed-accent);
   outline-offset: 1px;
+}
+
+/* QA ronda 3: la capa de texto es solo un hitbox invisible. En modo de alto contraste (forced-colors) el
+   navegador repintaría ese texto con CanvasText encima del PDF rasterizado; se desactiva el ajuste forzado
+   para mantenerlo transparente y solo se fuerzan (con colores del sistema) el foco y la selección. */
+@media (forced-colors: active) {
+  .run { forced-color-adjust: none; color: transparent; }
+  .run:focus-visible, .run.selected { outline-color: Highlight; }
+  .sel-rect { forced-color-adjust: none; }
 }

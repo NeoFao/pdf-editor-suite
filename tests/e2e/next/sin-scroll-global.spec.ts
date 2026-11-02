@@ -46,16 +46,14 @@ for (const vp of [{ width: 390, height: 844 }, { width: 1440, height: 900 }]) {
   });
 }
 
-test('móvil: la fila de herramientas oculta la barra de scroll horizontal nativa pero conserva el desplazamiento táctil', async ({ page }) => {
+// QA ronda 3 (E-127): la barra ya NO desplaza en horizontal (recortaba controles a 375 px); envuelve en filas.
+test('móvil: la barra superior envuelve en filas y no desborda en horizontal', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(FIXTURE);
   await expect(page.locator('.run').first()).toBeVisible();
 
-  const fila = page.locator('.topbar-scroll');
-  await expect(fila).toHaveCSS('scrollbar-width', 'none');
-
-  // El desplazamiento táctil sigue funcionando: fuerza el scroll y comprueba que avanza.
-  await fila.evaluate((el) => { el.scrollLeft = 200; });
-  await expect.poll(() => fila.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
+  const barra = page.locator('.topbar');
+  expect(await barra.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+  await expect(page.locator('.topbar-scroll')).toHaveCSS('display', 'contents');
 });

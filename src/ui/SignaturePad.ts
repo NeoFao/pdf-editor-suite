@@ -1,26 +1,23 @@
+import { mostrarModal } from './dialogo';
+
 /**
- * Pad de firma: un modal con un lienzo transparente donde el usuario dibuja.
+ * Pad de firma: un `<dialog>` modal (QA-04: `mostrarModal` da foco inicial, trampa de Tab, Esc y foco devuelto) con un lienzo transparente donde el usuario dibuja.
  * Al confirmar entrega los píxeles RGBA (fondo transparente, trazo negro) para
  * insertarlos como imagen. No depende del motor.
  */
 export class SignaturePad {
   /** `guardar` es null salvo que el usuario marque la casilla (por defecto desmarcada: nada se guarda sin pedirlo). */
   static open(onConfirm: (rgba: Uint8Array, width: number, height: number, guardar: { nombre: string } | null) => void): void {
-    const overlay = document.createElement('div');
-    overlay.id = 'signature-pad';
-    Object.assign(overlay.style, {
-      position: 'fixed', inset: '0', background: 'rgba(0,0,0,.45)', display: 'flex',
-      alignItems: 'center', justifyContent: 'center', zIndex: '1000'
-    });
-
-    const panel = document.createElement('div');
-    Object.assign(panel.style, { background: '#fff', padding: '16px', borderRadius: '8px', font: '14px sans-serif' });
+    const dialog = document.createElement('dialog');
+    dialog.id = 'signature-pad';
+    Object.assign(dialog.style, { padding: '16px', borderRadius: '8px', font: '14px sans-serif', maxWidth: '92vw', boxSizing: 'border-box' });
 
     const title = document.createElement('div');
+    title.id = 'signature-pad-titulo';
     title.textContent = 'Dibuja tu firma'; title.style.marginBottom = '8px'; title.style.fontWeight = 'bold';
 
     const canvas = document.createElement('canvas');
-    canvas.id = 'sig-canvas'; canvas.width = 400; canvas.height = 150;
+    canvas.id = 'sig-canvas'; canvas.style.maxWidth = '100%'; canvas.width = 400; canvas.height = 150;
     Object.assign(canvas.style, { border: '1px solid #cbd5e1', borderRadius: '4px', touchAction: 'none', cursor: 'crosshair', display: 'block' });
     const ctx = canvas.getContext('2d')!;
     ctx.strokeStyle = '#000'; ctx.lineWidth = 3; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
@@ -28,7 +25,8 @@ export class SignaturePad {
     let drawing = false;
     const pos = (e: PointerEvent): [number, number] => {
       const r = canvas.getBoundingClientRect();
-      return [e.clientX - r.left, e.clientY - r.top];
+      // px CSS del puntero -> px del lienzo (el lienzo se encoge con maxWidth en pantallas estrechas).
+      return [(e.clientX - r.left) * (canvas.width / r.width), (e.clientY - r.top) * (canvas.height / r.height)];
     };
     canvas.addEventListener('pointerdown', (e) => { drawing = true; const [x, y] = pos(e); ctx.beginPath(); ctx.moveTo(x, y); });
     canvas.addEventListener('pointermove', (e) => { if (!drawing) return; const [x, y] = pos(e); ctx.lineTo(x, y); ctx.stroke(); });
@@ -60,11 +58,11 @@ export class SignaturePad {
 
     const barra = document.createElement('div');
     Object.assign(barra.style, { display: 'flex', gap: '8px', marginTop: '8px', justifyContent: 'flex-end' });
-    const btnCancel = document.createElement('button'); btnCancel.id = 'sig-cancel'; btnCancel.textContent = 'Cancelar';
-    const btnClear = document.createElement('button'); btnClear.id = 'sig-clear'; btnClear.textContent = 'Limpiar';
-    const btnOk = document.createElement('button'); btnOk.id = 'sig-confirm'; btnOk.textContent = 'Insertar firma';
+    const btnCancel = document.createElement('button'); btnCancel.type = 'button'; btnCancel.id = 'sig-cancel'; btnCancel.textContent = 'Cancelar';
+    const btnClear = document.createElement('button'); btnClear.type = 'button'; btnClear.id = 'sig-clear'; btnClear.textContent = 'Limpiar';
+    const btnOk = document.createElement('button'); btnOk.type = 'button'; btnOk.id = 'sig-confirm'; btnOk.textContent = 'Insertar firma';
 
-    const close = (): void => overlay.remove();
+    const close = (): void => dialog.close();
     btnCancel.addEventListener('click', close);
     btnClear.addEventListener('click', () => ctx.clearRect(0, 0, canvas.width, canvas.height));
     btnOk.addEventListener('click', () => {
@@ -74,8 +72,7 @@ export class SignaturePad {
     });
 
     barra.append(btnClear, btnCancel, btnOk);
-    panel.append(title, canvas, guardarFila, nombreFila, privacidad, barra);
-    overlay.appendChild(panel);
-    document.body.appendChild(overlay);
+    dialog.append(title, canvas, guardarFila, nombreFila, privacidad, barra);
+    mostrarModal(dialog, { tituloId: 'signature-pad-titulo' });
   }
 }
