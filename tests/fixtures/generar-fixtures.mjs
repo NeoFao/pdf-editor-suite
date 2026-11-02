@@ -1264,6 +1264,48 @@ function docxEnlacesInternos() {
 }
 
 /**
+ * `word-campos.docx` (E-111): Carta con margen de 72 pt y líneas exactas de 12 pt. La página 1 trae un índice TOC de 3 entradas
+ * (hipervínculos a `_Toc1`..`_Toc3`, cada uno con su PAGEREF y relleno de puntos hasta una tabulación derecha) cuyos números
+ * guardados son 7, 8 y 9 A PROPÓSITO (los títulos caen en las páginas 1, 2 y 3), un REF (texto guardado "Texto referenciado"),
+ * un DATE (guardado "01/02/2020") y un campo desconocido sin resultado cuyo código es `ZZCODIGO`.
+ */
+export const DOCX_CAMPOS = {
+  titulos: ['Introduccion', 'Desarrollo', 'Conclusiones'], numerosGuardados: ['7', '8', '9'], textoRef: 'Texto referenciado', fecha: '01/02/2020', codigoDesconocido: 'ZZCODIGO'
+};
+function docxCampos() {
+  const p = (contenido, ppr = '') => `<w:p><w:pPr>${ppr}${ESP_EXACTO}</w:pPr>${contenido}</w:p>`;
+  const r = (t) => `<w:r>${RPR_10}<w:t xml:space="preserve">${t}</w:t></w:r>`;
+  const begin = '<w:r><w:fldChar w:fldCharType="begin"/></w:r>';
+  const sep = '<w:r><w:fldChar w:fldCharType="separate"/></w:r>';
+  const end = '<w:r><w:fldChar w:fldCharType="end"/></w:r>';
+  const instr = (i) => `<w:r><w:instrText xml:space="preserve"> ${i} </w:instrText></w:r>`;
+  const salto = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+  const tabs = '<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="9000"/></w:tabs>';
+  const entrada = (i, abre = '') => p(`${abre}<w:hyperlink w:anchor="_Toc${i + 1}">${r(DOCX_CAMPOS.titulos[i])}<w:r><w:tab/></w:r>${begin}${instr(`PAGEREF _Toc${i + 1} \\h`)}${sep}${r(DOCX_CAMPOS.numerosGuardados[i])}${end}</w:hyperlink>`, tabs);
+  const titulo = (i) => p(`<w:bookmarkStart w:id="${i + 1}" w:name="_Toc${i + 1}"/>${r(`Capitulo ${DOCX_CAMPOS.titulos[i]}`)}<w:bookmarkEnd w:id="${i + 1}"/>`);
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  ${entrada(0, `${begin}${instr('TOC \\o "1-3" \\h \\z \\u')}${sep}`)}
+  ${entrada(1)}
+  ${entrada(2)}
+  ${p(end)}
+  ${p(`${begin}${instr('REF _Toc2 \\h')}${sep}${r(DOCX_CAMPOS.textoRef)}${end}`)}
+  ${p(`<w:fldSimple w:instr=" DATE \\@ &quot;dd/MM/yyyy&quot; ">${r(DOCX_CAMPOS.fecha)}</w:fldSimple>`)}
+  ${p(`${begin}${instr(`FOOBAR ${DOCX_CAMPOS.codigoDesconocido}`)}${end}`)}
+  ${titulo(0)}
+  ${salto}
+  ${titulo(1)}
+  ${salto}
+  ${titulo(2)}
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') }
+  ]);
+}
+
+/**
  * `word-notas.docx` (E-109): 70 líneas de 12 pt exactos (10 pt de letra) en Carta con margen de 72 pt (54 líneas por página),
  * 3 notas al pie y 2 notas al final. Las notas ocupan 1 línea (12 pt) más el separador (12 pt):
  * - nota al pie 1 en la línea 2 (página 1): reserva 24 pt, así que la página 1 admite hasta la línea 52;
@@ -2028,6 +2070,7 @@ async function main() {
     'word-rpr-efectos.docx': docxRprEfectos(),
     'word-enlaces-internos.docx': docxEnlacesInternos(),
     'word-notas.docx': docxNotas(),
+    'word-campos.docx': docxCampos(),
     'word-hostil.docx': docxHostil()
   };
   for (const [nombre, bytes] of Object.entries(archivos)) {
