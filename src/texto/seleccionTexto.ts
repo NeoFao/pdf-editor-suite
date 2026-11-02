@@ -13,7 +13,7 @@ import { puntoEnQuad, quadsPorLinea, rectToQuad, type QuadPt } from '../coords/q
  * (\r, \n) que PDFium genera entre líneas no tienen caja y solo cuentan para el
  * texto copiado, no para apuntar ni para marcar.
  */
-const tieneCaja = (c: CharBox): boolean => c.boxPt.wPt > 0 && c.boxPt.hPt > 0;
+export const tieneCaja = (c: CharBox): boolean => c.boxPt.wPt > 0 && c.boxPt.hPt > 0;
 
 /**
  * Índice del carácter con caja más cercano al punto (pt PDF). Distancia
@@ -133,17 +133,13 @@ export function caretSiguiente(chars: readonly CharBox[], caret: number, dir: 1 
   return j < 0 ? caret : j + 1; // justo detrás del último carácter visible anterior
 }
 
-/**
- * Caret tras mover el foco UNA línea visual arriba (`dir` -1) o abajo (+1) conservando la columna
- * (x visual en px CSS). Sin línea siguiente/anterior va al final/inicio del texto, como un campo de
- * texto. La agrupación en líneas es la de `bandasDeLinea` (espacio visual, E-053), y `geo` es la
- * geometría a escala 1 (px CSS = pt visuales).
- */
-export function caretLinea(chars: readonly CharBox[], caret: number, dir: 1 | -1, geo: PageGeometry): number {
+/** Líneas visuales de una página (caracteres con caja consecutivos de la misma banda) y sus medidas en px CSS a escala 1. */
+function estructuraLineas(chars: readonly CharBox[], geo: PageGeometry): {
+  idxCaja: number[]; lineas: number[][]; izq: (i: number) => number; der: (i: number) => number;
+} {
   const banda = bandasDeLinea(chars, geo);
   const idxCaja: number[] = [];
   chars.forEach((c, i) => { if (tieneCaja(c)) idxCaja.push(i); });
-  if (idxCaja.length === 0) return caret;
   // Líneas: caracteres con caja consecutivos que comparten la misma banda (misma referencia).
   const lineas: number[][] = [];
   for (const i of idxCaja) {
@@ -152,22 +148,11 @@ export function caretLinea(chars: readonly CharBox[], caret: number, dir: 1 | -1
   }
   const izq = (i: number): number => geo.rectPtToCss(chars[i]!.boxPt).left;
   const der = (i: number): number => { const r = geo.rectPtToCss(chars[i]!.boxPt); return r.left + r.width; };
-  // Carácter de referencia del caret: el que tiene justo delante; si no hay (fin de línea), el de detrás.
-  let x: number, linea: number;
-  if (caret < chars.length && tieneCaja(chars[caret]!)) {
-    x = izq(caret);
-    linea = lineas.findIndex((l) => l.includes(caret));
-  } else {
-    let k = caret - 1;
-    while (k >= 0 && !tieneCaja(chars[k]!)) k--;
-    if (k < 0) return caret;
-    x = der(k);
-    linea = lineas.findIndex((l) => l.includes(k));
-  }
-  const destino = linea + dir;
-  if (destino < 0) return idxCaja[0]!;
-  if (destino >= lineas.length) return idxCaja[idxCaja.length - 1]! + 1;
-  const l = lineas[destino]!;
+  return { idxCaja, lineas, izq, der };
+}
+
+/** Caret de la línea `l` (índices de carácter) más cercano a la columna `x` (px CSS), incluido su final. */
+function caretEnColumna(l: readonly number[], x: number, izq: (i: number) => number, der: (i: number) => number): number {
   let mejor = l[0]!, mejorD = Math.abs(izq(l[0]!) - x);
   for (const i of l) {
     const d = Math.abs(izq(i) - x);
@@ -176,6 +161,45 @@ export function caretLinea(chars: readonly CharBox[], caret: number, dir: 1 | -1
   const fin = l[l.length - 1]! + 1;
   if (Math.abs(der(fin - 1) - x) < mejorD) mejor = fin;
   return mejor;
+}
+
+/**
+ * Línea visual (índice y total) y columna (x en px CSS a escala 1) de un caret, o `null` si la página no tiene
+ * caracteres con caja. Es la base de Mayús+↓/↑ y de cruzar a la página contigua conservando la x (E-115).
+ */
+export function lineaYColumnaDeCaret(chars: readonly CharBox[], caret: number, geo: PageGeometry): { linea: number; total: number; x: number } | null {
+  const { idxCaja, lineas, izq, der } = estructuraLineas(chars, geo);
+  if (idxCaja.length === 0) return null;
+  // Carácter de referencia del caret: el que tiene justo delante; si no hay (fin de línea), el de detrás.
+  if (caret < chars.length && tieneCaja(chars[caret]!)) return { linea: lineas.findIndex((l) => l.includes(caret)), total: lineas.length, x: izq(caret) };
+  let k = caret - 1;
+  while (k >= 0 && !tieneCaja(chars[k]!)) k--;
+  if (k < 0) return null;
+  return { linea: lineas.findIndex((l) => l.includes(k)), total: lineas.length, x: der(k) };
+}
+
+/** Caret de la línea visual `linea` (0 = primera; negativo = última) más cercano a la columna `x` (px CSS a escala 1); -1 si no hay líneas. */
+export function caretEnLineaPorX(chars: readonly CharBox[], linea: number, x: number, geo: PageGeometry): number {
+  const { lineas, izq, der } = estructuraLineas(chars, geo);
+  if (lineas.length === 0) return -1;
+  const l = lineas[linea < 0 ? lineas.length - 1 : linea];
+  return l ? caretEnColumna(l, x, izq, der) : -1;
+}
+
+/**
+ * Caret tras mover el foco UNA línea visual arriba (`dir` -1) o abajo (+1) conservando la columna
+ * (x visual en px CSS). Sin línea siguiente/anterior va al final/inicio del texto, como un campo de
+ * texto. La agrupación en líneas es la de `bandasDeLinea` (espacio visual, E-053), y `geo` es la
+ * geometría a escala 1 (px CSS = pt visuales).
+ */
+export function caretLinea(chars: readonly CharBox[], caret: number, dir: 1 | -1, geo: PageGeometry): number {
+  const pos = lineaYColumnaDeCaret(chars, caret, geo);
+  if (!pos) return caret;
+  const { idxCaja, lineas, izq, der } = estructuraLineas(chars, geo);
+  const destino = pos.linea + dir;
+  if (destino < 0) return idxCaja[0]!;
+  if (destino >= lineas.length) return idxCaja[idxCaja.length - 1]! + 1;
+  return caretEnColumna(lineas[destino]!, pos.x, izq, der);
 }
 
 /**
