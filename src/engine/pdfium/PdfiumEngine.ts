@@ -1,3 +1,4 @@
+import { PdfError, errorDeCodigoPdfium } from '../errores';
 import { loadEngine, type Pdfium } from './loadEngine';
 import { makeMem, leerCadenaPdfium, type Mem } from './mem';
 import { standardFontFor, STANDARD_FONTS } from '../standardFontFor';
@@ -81,6 +82,8 @@ const DESPLAZAMIENTO_MIN_EM = 0.15;
 
 export class PdfiumEngine implements PdfEngine {
   private readonly srcPtr = new Map<DocHandle, number>();
+  /** Handles cerrados con `close()` (E-125): una llamada posterior al motor es un error tipado, no un acceso OOB en WASM. Se quita al reabrir el mismo valor. */
+  private readonly cerrados = new Set<DocHandle>();
   /** `/UserUnit` ≠ 1 por número de objeto de página, por documento (E-099); ver `leerUserUnits`. */
   private readonly userUnits = new Map<DocHandle, Map<number, number>>();
   // Entorno de formularios (AcroForm), uno por documento. `info` es el struct
@@ -114,16 +117,41 @@ export class PdfiumEngine implements PdfEngine {
     return new PdfiumEngine(p, makeMem(p));
   }
 
-  async open(bytes: Uint8Array): Promise<DocHandle> {
+  /**
+   * Abre un documento. Si falla, no deja nada reservado y lanza un `PdfError` tipado (E-125): `PASSWORD` si hace falta
+   * contraseña (o la dada es incorrecta), `FORMAT` si no es un PDF o está dañado, etc. La contraseña solo viaja a
+   * `FPDF_LoadMemDocument`; no se guarda ni se incluye en ningún mensaje.
+   */
+  async open(bytes: Uint8Array, password = ''): Promise<DocHandle> {
+    if (bytes.length === 0) throw new PdfError('FORMAT', 'El archivo no es un PDF válido o está dañado');
     const ptr = this.mem.copyIn(bytes);
-    const doc = this.p.FPDF_LoadMemDocument(ptr, bytes.length, '') as DocHandle;
-    if (!doc) { this.mem.free(ptr); throw new Error('PDF no válido o cifrado no soportado'); }
+    const doc = this.p.FPDF_LoadMemDocument(ptr, bytes.length, password) as DocHandle;
+    if (!doc) {
+      const codigo = this.p.FPDF_GetLastError();
+      this.mem.free(ptr);
+      throw errorDeCodigoPdfium(codigo);
+    }
     this.srcPtr.set(doc, ptr);
-    const info = this.p.PDFiumExt_OpenFormFillInfo();
-    const form = info ? this.p.PDFiumExt_InitFormFillEnvironment(doc, info) : 0;
-    this.formEnv.set(doc, { info, form: form || 0 });
-    this.userUnits.set(doc, await leerUserUnits(bytes));
+    this.cerrados.delete(doc);
+    try {
+      const info = this.p.PDFiumExt_OpenFormFillInfo();
+      const form = info ? this.p.PDFiumExt_InitFormFillEnvironment(doc, info) : 0;
+      this.formEnv.set(doc, { info, form: form || 0 });
+      this.userUnits.set(doc, await leerUserUnits(bytes));
+    } catch (err) {
+      this.close(doc); // §2.6: nada se filtra si la inicialización falla a medias
+      throw err;
+    }
     return doc;
+  }
+
+  /**
+   * `FPDF_LoadPage` con guarda: un handle ya cerrado (visor o cola de render de un documento anterior, E-125) daba
+   * `memory access out of bounds` dentro de WASM; ahora es un error tipado claro y no se llama al motor.
+   */
+  private cargarPagina(doc: DocHandle, pageIndex: number): number {
+    if (this.cerrados.has(doc)) throw new PdfError('CLOSED', 'El documento ya está cerrado');
+    return this.p.FPDF_LoadPage(doc, pageIndex);
   }
 
   /** FPDF_FORMHANDLE del documento, o 0 si no hay entorno de formularios disponible. */
@@ -136,7 +164,7 @@ export class PdfiumEngine implements PdfEngine {
    * cuando existe, y la cierra en el orden inverso correcto (§2.6: cierra lo que abres).
    */
   private withFormPage<T>(doc: DocHandle, pageIndex: number, fn: (page: number, form: number) => T): T {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const form = this.formHandle(doc);
     if (form) this.p.FORM_OnAfterLoadPage(page, form);
@@ -149,11 +177,12 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   pageCount(doc: DocHandle): number {
+    if (this.cerrados.has(doc)) throw new PdfError('CLOSED', 'El documento ya está cerrado');
     return this.p.FPDF_GetPageCount(doc);
   }
 
   pageSize(doc: DocHandle, pageIndex: number): SizePt {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       return { widthPt: this.p.FPDF_GetPageWidthF(page), heightPt: this.p.FPDF_GetPageHeightF(page) };
@@ -165,7 +194,7 @@ export class PdfiumEngine implements PdfEngine {
   userUnit(doc: DocHandle, pageIndex: number): number {
     const mapa = this.userUnits.get(doc);
     if (!mapa || mapa.size === 0) return 1;
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       return mapa.get(this.p.EPDFPage_GetObjectNumber(page)) ?? 1;
@@ -175,7 +204,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   pageBox(doc: DocHandle, pageIndex: number): PageBox {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const mem = this.mem;
     const buf = mem.malloc(16);
@@ -202,7 +231,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   rotatePage(doc: DocHandle, pageIndex: number, deltaDeg: number): 0 | 90 | 180 | 270 {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const cur = this.p.FPDFPage_GetRotation(page); // 0..3
@@ -246,6 +275,7 @@ export class PdfiumEngine implements PdfEngine {
   imageToPdf(rgba: Uint8Array, imgWidth: number, imgHeight: number): Uint8Array<ArrayBuffer> {
     // Página del tamaño de la imagen (1 px = 1 pt), con la imagen a página completa.
     const doc = this.p.FPDF_CreateNewDocument();
+    this.cerrados.delete(doc as DocHandle);
     try {
       const page = this.p.FPDFPage_New(doc, 0, imgWidth, imgHeight);
       this.p.FPDF_ClosePage(page);
@@ -264,6 +294,7 @@ export class PdfiumEngine implements PdfEngine {
    */
   createBlank(widthPt: number, heightPt: number): Uint8Array<ArrayBuffer> {
     const doc = this.p.FPDF_CreateNewDocument();
+    this.cerrados.delete(doc as DocHandle);
     try {
       const page = this.p.FPDFPage_New(doc, 0, widthPt, heightPt);
       this.p.FPDF_ClosePage(page);
@@ -275,6 +306,7 @@ export class PdfiumEngine implements PdfEngine {
 
   extractPages(doc: DocHandle, pageIndices: number[]): Uint8Array<ArrayBuffer> {
     const dest = this.p.FPDF_CreateNewDocument();
+    this.cerrados.delete(dest as DocHandle);
     try {
       const range = pageIndices.map((i) => i + 1).join(','); // 1-based, "1,3,5"
       this.p.FPDF_ImportPages(dest, doc, range, 0);
@@ -295,7 +327,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   pageRotation(doc: DocHandle, pageIndex: number): 0 | 90 | 180 | 270 {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const grados = (this.p.FPDFPage_GetRotation(page) * 90) % 360;
@@ -306,7 +338,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   renderPage(doc: DocHandle, pageIndex: number, scale: number): RenderResult {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const width = Math.max(1, Math.round(this.p.FPDF_GetPageWidthF(page) * scale));
     const height = Math.max(1, Math.round(this.p.FPDF_GetPageHeightF(page) * scale));
@@ -339,7 +371,7 @@ export class PdfiumEngine implements PdfEngine {
 
   findText(doc: DocHandle, pageIndex: number, query: string, opciones?: { mayusculas?: boolean; palabraCompleta?: boolean }): RectPt[] {
     if (!query) return [];
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const textPage = this.p.FPDFText_LoadPage(page);
     const wq = this.mem.wide(query);
@@ -385,7 +417,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   getPageText(doc: DocHandle, pageIndex: number): TextRun[] {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const textPage = this.p.FPDFText_LoadPage(page);
     const runs: TextRun[] = [];
@@ -519,7 +551,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   getCharBoxes(doc: DocHandle, pageIndex: number): CharBox[] {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const textPage = this.p.FPDFText_LoadPage(page);
     const out: CharBox[] = [];
@@ -699,7 +731,7 @@ export class PdfiumEngine implements PdfEngine {
           const accion = this.p.EPDFAction_CreateURI(doc, item.accion.uri);
           if (!accion || !this.p.EPDFBookmark_SetAction(doc, marcador, accion)) throw new Error('PDFium no pudo escribir la acción URI del marcador');
         } else if (item.pageIndex !== null && item.pageIndex >= 0 && item.pageIndex < total) {
-          const page = this.p.FPDF_LoadPage(doc, item.pageIndex);
+          const page = this.cargarPagina(doc, item.pageIndex);
           if (page) {
             try {
               // Con `yPt` (E-114): [página /XYZ null y null] (solo fija la altura, pt PDF origen ABAJO); sin él, [página /Fit].
@@ -800,7 +832,7 @@ export class PdfiumEngine implements PdfEngine {
   editTextRun(doc: DocHandle, pageIndex: number, runId: number, newText: string): EditResult {
     // E-081: nunca se escribe la cadena vacía (bloquea el WASM); quitar una línea es eliminar el objeto.
     if (newText === '') return { ok: false, reason: 'empty-text' };
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const obj = this.p.FPDFPage_GetObject(page, runId);
@@ -838,7 +870,7 @@ export class PdfiumEngine implements PdfEngine {
       // el camino compuesto escribe las palabras como objetos separados por un hueco, conservando la fuente.
       if (r.reason !== 'glyph-missing' || !/\s/.test(textoNuevo)) return r;
     }
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       return this.editarLineaCompuesta(doc, page, linea, textoNuevo, opciones.fuenteEstandar === true);
@@ -1263,7 +1295,7 @@ export class PdfiumEngine implements PdfEngine {
    */
   replaceRunWithStandardFont(doc: DocHandle, pageIndex: number, runId: number, newText: string): ReplaceFontResult {
     const m = this.mem;
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const obj = this.p.FPDFPage_GetObject(page, runId);
@@ -1308,7 +1340,7 @@ export class PdfiumEngine implements PdfEngine {
       return { ok: false, reason: 'invalid-size' };
     }
     const m = this.mem;
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const textPage = this.p.FPDFText_LoadPage(page);
     try {
@@ -1353,7 +1385,7 @@ export class PdfiumEngine implements PdfEngine {
       return { ok: false, reason: 'invalid-font' };
     }
     const m = this.mem;
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const textPage = this.p.FPDFText_LoadPage(page);
     try {
@@ -1510,7 +1542,7 @@ export class PdfiumEngine implements PdfEngine {
     if (k !== undefined && (!Number.isFinite(k) || k <= 0)) return { ok: false, reason: 'invalid-size' };
     if (props.fuenteEstandar !== undefined && !(STANDARD_FONTS as readonly string[]).includes(props.fuenteEstandar)) return { ok: false, reason: 'invalid-font' };
     const m = this.mem;
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       let objs = linea.tramos.map((t) => this.p.FPDFPage_GetObject(page, t.runId));
@@ -1631,7 +1663,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   moveRun(doc: DocHandle, pageIndex: number, runId: number, dxPt: number, dyPt: number): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const obj = this.p.FPDFPage_GetObject(page, runId);
@@ -1645,7 +1677,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   moveRuns(doc: DocHandle, pageIndex: number, runIds: readonly number[], dxPt: number, dyPt: number): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const objs = runIds.map((id) => this.p.FPDFPage_GetObject(page, id));
@@ -1659,7 +1691,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   deleteRuns(doc: DocHandle, pageIndex: number, runIds: readonly number[]): number {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       // Primero los handles (los índices se desplazan al borrar), luego se eliminan.
@@ -1678,7 +1710,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   setRunColor(doc: DocHandle, pageIndex: number, runId: number, color: [number, number, number]): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const obj = this.p.FPDFPage_GetObject(page, runId);
@@ -1693,7 +1725,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   deleteRun(doc: DocHandle, pageIndex: number, runId: number): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const obj = this.p.FPDFPage_GetObject(page, runId);
@@ -1755,7 +1787,7 @@ export class PdfiumEngine implements PdfEngine {
 
   /** Objetos de página de tipo imagen, con su caja actual (puntos PDF, de `FPDFPageObj_GetBounds`). */
   listImageObjects(doc: DocHandle, pageIndex: number): { objIndex: number; rectPt: RectPt }[] {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const m = this.mem;
     const out: { objIndex: number; rectPt: RectPt }[] = [];
@@ -1784,7 +1816,7 @@ export class PdfiumEngine implements PdfEngine {
    * `false` sin modificar nada, documentado en el contrato de `PdfEngine`.
    */
   setObjectRect(doc: DocHandle, pageIndex: number, objIndex: number, rectPt: RectPt): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const m = this.mem;
     try {
@@ -1825,7 +1857,7 @@ export class PdfiumEngine implements PdfEngine {
     const handles: number[] = [];
     const pagesPtr = m.malloc(count * 4);
     for (let i = 0; i < count; i++) {
-      const pg = i === keepOpenPageIndex ? keepOpenPage : this.p.FPDF_LoadPage(doc, i);
+      const pg = i === keepOpenPageIndex ? keepOpenPage : this.cargarPagina(doc, i);
       handles.push(pg);
       m.setValue(pagesPtr + i * 4, pg, 'i32');
     }
@@ -1843,7 +1875,7 @@ export class PdfiumEngine implements PdfEngine {
    * Ver JSDoc del contrato (`PdfEngine.getImagePixels`).
    */
   getImagePixels(doc: DocHandle, pageIndex: number, objIndex: number): ImagePixels | null {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const heap = this.mem.HEAPU8;
     try {
@@ -1957,7 +1989,7 @@ export class PdfiumEngine implements PdfEngine {
    * matriz actual (posición/tamaño en la página). Ver JSDoc del contrato.
    */
   replaceImagePixels(doc: DocHandle, pageIndex: number, objIndex: number, rgba: Uint8Array, width: number, height: number): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const m = this.mem;
     try {
@@ -2002,7 +2034,7 @@ export class PdfiumEngine implements PdfEngine {
    * (`jpegBytes`), conservando su matriz actual. Ver JSDoc del contrato.
    */
   replaceImageJpeg(doc: DocHandle, pageIndex: number, objIndex: number, jpegBytes: Uint8Array): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const m = this.mem;
     let jpegPtr = 0;
@@ -2052,7 +2084,7 @@ export class PdfiumEngine implements PdfEngine {
 
   /** Tamaño en bytes del stream de imagen tal como está codificado hoy. Ver JSDoc del contrato. */
   getImageRawSize(doc: DocHandle, pageIndex: number, objIndex: number): number | null {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const obj = this.p.FPDFPage_GetObject(page, objIndex);
@@ -2065,7 +2097,7 @@ export class PdfiumEngine implements PdfEngine {
 
   /** Elimina el objeto de página en `objIndex` (cualquier tipo). RemoveObject transfiere la propiedad al llamante: hay que destruirlo (igual que deleteRun). */
   deleteObject(doc: DocHandle, pageIndex: number, objIndex: number): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const obj = this.p.FPDFPage_GetObject(page, objIndex);
@@ -2087,7 +2119,7 @@ export class PdfiumEngine implements PdfEngine {
   addInternalLink(doc: DocHandle, pageIndex: number, rectPt: RectPt, destPageIndex: number, destYPt: number): boolean {
     // Validar ANTES de crear nada: un destino roto dejaría una /Link muerta en el PDF.
     if (!Number.isInteger(destPageIndex) || destPageIndex < 0 || destPageIndex >= this.p.FPDF_GetPageCount(doc) || !Number.isFinite(destYPt)) return false;
-    const destPage = this.p.FPDF_LoadPage(doc, destPageIndex);
+    const destPage = this.cargarPagina(doc, destPageIndex);
     if (!destPage) return false;
     let accion = 0;
     try {
@@ -2098,7 +2130,7 @@ export class PdfiumEngine implements PdfEngine {
       this.p.FPDF_ClosePage(destPage);
     }
     if (!accion) return false;
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const annot = this.p.FPDFPage_CreateAnnot(page, FPDF_ANNOT_LINK);
@@ -2123,7 +2155,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   getLinks(doc: DocHandle, pageIndex: number): EnlaceLeido[] {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const out: EnlaceLeido[] = [];
     try {
@@ -2182,7 +2214,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   addNote(doc: DocHandle, pageIndex: number, spec: { xPt: number; yPt: number; text: string }): number {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const annot = this.p.FPDFPage_CreateAnnot(page, FPDF_ANNOT_TEXT);
@@ -2215,7 +2247,7 @@ export class PdfiumEngine implements PdfEngine {
 
   addMarkup(doc: DocHandle, pageIndex: number, tipo: MarkupKind, quads: readonly QuadPt[], color: [number, number, number], contenido = '', autor = ''): number {
     if (quads.length === 0) return -1;
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const subtipo = tipo === 'highlight' ? FPDF_ANNOT_HIGHLIGHT : tipo === 'underline' ? FPDF_ANNOT_UNDERLINE : FPDF_ANNOT_STRIKEOUT;
@@ -2292,7 +2324,7 @@ export class PdfiumEngine implements PdfEngine {
 
   /** Abre la anotación `index` de la página, ejecuta `fn` y la cierra siempre; null si no existe. */
   private conAnotacion<T>(doc: DocHandle, pageIndex: number, index: number, fn: (annot: number) => T): T | null {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       if (index < 0 || index >= this.p.FPDFPage_GetAnnotCount(page)) return null;
@@ -2305,7 +2337,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   getNotes(doc: DocHandle, pageIndex: number): NoteInfo[] {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const notes: NoteInfo[] = [];
     try {
@@ -2342,7 +2374,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   getComments(doc: DocHandle, pageIndex: number): CommentInfo[] {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const out: CommentInfo[] = [];
     try {
@@ -2385,7 +2417,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   setNoteText(doc: DocHandle, pageIndex: number, index: number, text: string): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       if (index < 0 || index >= this.p.FPDFPage_GetAnnotCount(page)) return false;
@@ -2409,7 +2441,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   removeNote(doc: DocHandle, pageIndex: number, index: number): boolean {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       return this.p.FPDFPage_RemoveAnnot(page, index);
@@ -2698,7 +2730,7 @@ export class PdfiumEngine implements PdfEngine {
    * duplicada entre la ruta "una op" y la ruta "en lote".
    */
   applyPageOps(doc: DocHandle, pageIndex: number, ops: PageOp[]): PageOpResult[] {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       const results: PageOpResult[] = [];
@@ -2909,7 +2941,7 @@ export class PdfiumEngine implements PdfEngine {
   }
 
   removeMarkedObjects(doc: DocHandle, pageIndex: number, valor?: string): number {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     try {
       let quitados = 0;
@@ -2930,7 +2962,7 @@ export class PdfiumEngine implements PdfEngine {
 
   /** Objetos PATH de la página, con su caja y si tienen trazo activo; ver el contrato en PdfEngine.ts. */
   listPathObjects(doc: DocHandle, pageIndex: number): { objIndex: number; rectPt: RectPt; hasStroke: boolean }[] {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const m = this.mem;
     const out: { objIndex: number; rectPt: RectPt; hasStroke: boolean }[] = [];
@@ -2960,7 +2992,7 @@ export class PdfiumEngine implements PdfEngine {
 
   /** Aristas rectas del contorno del path; ver el contrato en PdfEngine.ts (unidades: puntos PDF, matriz del objeto ya aplicada). */
   getPathSegments(doc: DocHandle, pageIndex: number, objIndex: number): { ax: number; ay: number; bx: number; by: number }[] {
-    const page = this.p.FPDF_LoadPage(doc, pageIndex);
+    const page = this.cargarPagina(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const m = this.mem;
     try {
@@ -3067,6 +3099,7 @@ export class PdfiumEngine implements PdfEngine {
       this.formEnv.delete(doc);
     }
     this.userUnits.delete(doc);
+    this.cerrados.add(doc);
     this.p.FPDF_CloseDocument(doc);
     const ptr = this.srcPtr.get(doc);
     if (ptr !== undefined) { this.mem.free(ptr); this.srcPtr.delete(doc); }
