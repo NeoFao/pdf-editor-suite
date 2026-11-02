@@ -996,6 +996,54 @@ function docxAjuste() {
 }
 
 /**
+ * `word-flotantes.docx`: TRES páginas Carta (márgenes de 72 pt), una por modo de ajuste, cada una con su imagen flotante.
+ * P1: cuadrado ROJO de 100 pt a la derecha del margen, anclado al tope de un párrafo largo, `wrapSquare` con 9 pt a su izquierda.
+ * P2: imagen VERDE de 200x80 pt centrada entre márgenes, anclada al tope del párrafo, `wrapTopAndBottom` con 10 pt debajo.
+ * P3: imagen AZUL 100x50 `wrapNone` `behindDoc="1"` en (300, 400) de la PÁGINA y imagen AMARILLA 100x50 `wrapNone` delante del
+ * texto en (330, 410): un párrafo largo pasa por debajo y por encima de ellas sin apartarse.
+ */
+export const DOCX_FLOTANTES = {
+  cuadrado: { lado: 100, distLPt: 9 },
+  arribaAbajo: { wPt: 200, hPt: 80, distBPt: 10 },
+  detras: { xPt: 300, desdeArribaPt: 400, wPt: 100, hPt: 50 },
+  delante: { xPt: 330, desdeArribaPt: 410, wPt: 100, hPt: 50 }
+};
+function docxFlotantes() {
+  const emu = (pt) => Math.round(pt * 12700);
+  const anchor = (rId, wPt, hPt, attrs, hPos, vPos, ajuste) =>
+    `<w:drawing><wp:anchor ${attrs}>${hPos}${vPos}<wp:extent cx="${emu(wPt)}" cy="${emu(hPt)}"/>${ajuste}<a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="${rId}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing>`;
+  const posH = (rel, cuerpo) => `<wp:positionH relativeFrom="${rel}">${cuerpo}</wp:positionH>`;
+  const posV = (rel, cuerpo) => `<wp:positionV relativeFrom="${rel}">${cuerpo}</wp:positionV>`;
+  const palabras = (pref, n) => Array.from({ length: n }, (_v, i) => `${pref}${i + 1}`).join(' ');
+  const parrafo = (dibujos, texto) => `<w:p><w:pPr><w:spacing w:before="0" w:after="120"/></w:pPr><w:r>${dibujos}<w:t xml:space="preserve">${texto}</w:t></w:r></w:p>`;
+  const salto = '<w:p><w:r><w:br w:type="page"/></w:r></w:p>';
+  const c = DOCX_FLOTANTES.cuadrado, t = DOCX_FLOTANTES.arribaAbajo, d = DOCX_FLOTANTES.detras, f = DOCX_FLOTANTES.delante;
+  const p1 = anchor('rIdRojo', c.lado, c.lado, `distT="0" distB="0" distL="${emu(c.distLPt)}" distR="0" behindDoc="0"`, posH('margin', '<wp:align>right</wp:align>'), posV('paragraph', '<wp:posOffset>0</wp:posOffset>'), '<wp:wrapSquare wrapText="bothSides"/>');
+  const p2 = anchor('rIdVerde', t.wPt, t.hPt, `distT="0" distB="${emu(t.distBPt)}" distL="0" distR="0" behindDoc="0"`, posH('margin', '<wp:align>center</wp:align>'), posV('paragraph', '<wp:posOffset>0</wp:posOffset>'), '<wp:wrapTopAndBottom/>');
+  const p3a = anchor('rIdAzul', d.wPt, d.hPt, 'distT="0" distB="0" distL="0" distR="0" behindDoc="1"', posH('page', `<wp:posOffset>${emu(d.xPt)}</wp:posOffset>`), posV('page', `<wp:posOffset>${emu(d.desdeArribaPt)}</wp:posOffset>`), '<wp:wrapNone/>');
+  const p3b = anchor('rIdAmarillo', f.wPt, f.hPt, 'distT="0" distB="0" distL="0" distR="0" behindDoc="0"', posH('page', `<wp:posOffset>${emu(f.xPt)}</wp:posOffset>`), posV('page', `<wp:posOffset>${emu(f.desdeArribaPt)}</wp:posOffset>`), '<wp:wrapNone/>');
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  ${parrafo(p1, palabras('cuad', 150))}${salto}
+  ${parrafo(p2, 'TITULOBAJO ' + palabras('bajo', 40))}${salto}
+  ${parrafo(p3a + p3b, palabras('fondo', 400))}
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+</w:body></w:document>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/_rels/document.xml.rels', datos: Buffer.from(relsXml([
+      relacion('rIdRojo', 'image', 'media/rojo.png', false), relacion('rIdVerde', 'image', 'media/verde.png', false),
+      relacion('rIdAzul', 'image', 'media/azul.png', false), relacion('rIdAmarillo', 'image', 'media/amarillo.png', false)
+    ]), 'utf-8') },
+    { nombre: 'word/media/rojo.png', datos: pngSolido(16, 16, [255, 0, 0]) },
+    { nombre: 'word/media/verde.png', datos: pngSolido(16, 16, [0, 200, 0]) },
+    { nombre: 'word/media/azul.png', datos: pngSolido(16, 16, [0, 0, 255]) },
+    { nombre: 'word/media/amarillo.png', datos: pngSolido(16, 16, [255, 255, 0]) }
+  ]);
+}
+
+/**
  * `word-tabs.docx`: un índice con líder de puntos ("Capítulo uno ........ 3", parada derecha a 9360 twips = 6,5"), una línea
  * "Nombre TAB Valor" con parada izquierda, una cifra con parada decimal y un pie "Informe TAB TAB Página X de Y" con las dos
  * paradas del estilo Footer (centrada y derecha).
@@ -2061,6 +2109,7 @@ async function main() {
     'word-secciones.docx': docxSecciones(),
     'word-encabezado-rico.docx': docxEncabezadoRico(),
     'word-ajuste.docx': docxAjuste(),
+    'word-flotantes.docx': docxFlotantes(),
     'word-tabs.docx': docxTabs(),
     'word-numeracion-tabs.docx': docxNumeracionTabs(),
     'word-listas-celda.docx': docxListasCelda(),

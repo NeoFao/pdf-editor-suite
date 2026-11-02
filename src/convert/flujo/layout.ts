@@ -92,7 +92,8 @@ export interface Barra {
 }
 
 /** Imagen ya colocada en una página concreta, en puntos PDF (origen abajo-izquierda). `imgId` referencia el registro de imágenes decodificadas del conversor. */
-export interface ImagenColocada { page: number; xPt: number; yPt: number; wPt: number; hPt: number; imgId: string }
+/** `capa` (solo flotantes sin ajuste): `detras` = bajo el texto, `delante` = sobre el texto; sin ella, la imagen va bajo el texto (orden de siempre). */
+export interface ImagenColocada { page: number; xPt: number; yPt: number; wPt: number; hPt: number; imgId: string; capa?: CapaFlotante }
 /** Enlace clicable ya colocado en una página concreta, en puntos PDF (origen abajo-izquierda) — listo para `PdfEngine.addLink`. */
 export interface EnlaceColocado { page: number; xPt: number; yPt: number; wPt: number; hPt: number; url: string }
 /** Enlace interno colocado (misma caja que `EnlaceColocado`, pt PDF), aún SIN resolver: `ancla` es el nombre del marcador de destino. */
@@ -214,7 +215,9 @@ export interface PosFlotanteV { rel: 'page' | 'margin' | 'topMargin' | 'bottomMa
  * coloca en la página del siguiente contenido, en su posición absoluta o
  * relativa al margen/párrafo.
  */
-export interface FlowFloatImage { kind: 'floatImage'; imgId: string; wPt: number; hPt: number; h: PosFlotanteH; v: PosFlotanteV; /** Fase 2c: si está, el texto rodea la imagen. */ ajuste?: AjusteFlotante }
+/** Capa de una flotante que el texto no aparta (`wrapNone`): bajo el texto o sobre él. */
+export type CapaFlotante = 'detras' | 'delante';
+export interface FlowFloatImage { kind: 'floatImage'; imgId: string; wPt: number; hPt: number; h: PosFlotanteH; v: PosFlotanteV; /** Fase 2c: si está, el texto rodea la imagen. */ ajuste?: AjusteFlotante; capa?: CapaFlotante }
 
 /**
  * Cómo el texto rodea una imagen flotante (fase 2c). `modo`: `square` = el texto se acorta a un lado de la caja;
@@ -813,7 +816,7 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     for (const f of flotantesPendientes) {
       const { x, yTop } = posicionFlotante(f, geoActual, cursor);
       const yPt = geoActual.heightPt - yTop - f.hPt;
-      imagenes.push({ page, xPt: x, yPt, wPt: f.wPt, hPt: f.hPt, imgId: f.imgId });
+      imagenes.push({ page, xPt: x, yPt, wPt: f.wPt, hPt: f.hPt, imgId: f.imgId, ...(f.capa ? { capa: f.capa } : {}) });
       pintadoEnPagina = true;
       if (f.ajuste) {
         const a = f.ajuste;
@@ -1025,7 +1028,7 @@ export function colocarZona(
   const topZona = ancla === 'arriba' ? pagina.heightPt - distanciaPt : distanciaPt + alto; // y PDF del borde superior de la zona (para rel paragraph)
   for (const f of flotantes) {
     const { x, yTop } = posicionFlotante(f, geoPagina!, topZona);
-    imagenes.push({ page, xPt: x, yPt: geoPagina!.heightPt - yTop - f.hPt, wPt: f.wPt, hPt: f.hPt, imgId: f.imgId });
+    imagenes.push({ page, xPt: x, yPt: geoPagina!.heightPt - yTop - f.hPt, wPt: f.wPt, hPt: f.hPt, imgId: f.imgId, ...(f.capa ? { capa: f.capa } : {}) });
   }
   return { trazos: mover(res.trazos), barras: mover(res.barras), imagenes, enlaces: mover(res.enlaces) };
 }

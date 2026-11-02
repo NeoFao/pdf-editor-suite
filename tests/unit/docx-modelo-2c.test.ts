@@ -166,12 +166,13 @@ test('wrapTight y wrapThrough (polígonos) se tratan como cuadrado con aviso "ap
   }
 });
 
-test('wrapNone (o sin elemento de ajuste) sigue SIN ajuste y con el aviso de siempre', () => {
-  for (const tag of ['<wp:wrapNone/>', '']) {
-    const { m, flotante: f } = flotante(tag);
-    expect(f!.ajuste).toBeUndefined();
-    expect(avisos(m)).toMatch(/sin ajuste de texto/i);
-  }
+test('wrapNone no lleva ajuste y NO avisa; sin elemento de ajuste tampoco lleva ajuste y sigue avisando', () => {
+  const sin = flotante('<wp:wrapNone/>');
+  expect(sin.flotante!.ajuste).toBeUndefined();
+  expect(avisos(sin.m)).toBe('');
+  const nada = flotante('');
+  expect(nada.flotante!.ajuste).toBeUndefined();
+  expect(avisos(nada.m)).toMatch(/sin ajuste de texto/i);
 });
 
 // ---------------------------------------------------------------------------
