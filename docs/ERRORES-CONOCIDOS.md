@@ -2407,7 +2407,7 @@ y el contorno solo existen mientras se usa la tecla (prueba de oro de E-029 inta
 conversión de rangos, orden de lectura, texto de una anotación), `anuncio.test.ts` (una regresión real: el
 colapso de blancos escrito sin la barra invertida se comía las "s"), `atajos.test.ts` (teclas nuevas y que
 no se interceptan en un campo editable) y `tests/e2e/next/teclado-seleccion.spec.ts`, que no usa el ratón.
-Límite conocido: la selección vive en UNA página; Mayús+↓ más allá de la última línea de la página selecciona
+Límite conocido (resuelto en E-115): la selección vive en UNA página; Mayús+↓ más allá de la última línea de la página selecciona
 hasta el final de su texto.
 
 ### E-062 · `npm run e2e:liberar` no conocía el puerto 4174 ni cerraba los procesos huérfanos
@@ -3319,7 +3319,7 @@ la primera y la última página de la selección se protegen; una intermedia des
 (`alRepintarPagina`), y repintar un extremo descarta la selección como antes (E-057). Mientras dura el arrastre el desalojo ya estaba
 bloqueado por `hayGestoEnCurso()` (E-034/E-045). Autoscroll: con el puntero a menos de 36 px del borde del visor, un temporizador
 (parado en `onSettle` del gesto) desplaza el scroll y recalcula el foco, para poder llegar con el ratón a páginas que no se ven.
-La selección por teclado (T16) sigue siendo de una página: Mayús+flecha sobre una selección multipágina la sustituye por una nueva.
+La selección por teclado (T16) sigue siendo de una página: Mayús+flecha sobre una selección multipágina la sustituye por una nueva (resuelto en E-115).
 
 **Cómo se detecta ahora.** `tests/e2e/next/seleccion-multipagina.spec.ts` (fixture `seleccion-multipagina.pdf`, 3 páginas × 3 líneas:
 texto copiado exacto en arrastre directo e inverso, una anotación por página con quads sobre las líneas correctas, deshacer las quita
@@ -3561,6 +3561,37 @@ no se modelan `w:spacing`/`w:position`/`w:w`/`w:kern`/`w:emboss`/`w:outline`/`w:
 
 **Límites.** El texto del marcador no incluye resultados de campos (Word sí los incluye). La jerarquía no inventa niveles intermedios. El tope es el del motor (10000 nodos): se trunca sin aviso. El panel de marcadores navega a la página del marcador; bajar hasta la altura (`yPt`) queda para el visor, que hoy solo la usa en los enlaces internos. Los títulos dentro de cuadros de texto no se consideran.
 
+### E-115 · Mayús+flecha no cruzaba páginas (límite pendiente de E-100 y E-061)
+
+**Síntoma.** Con la selección por teclado (T16), Mayús+→ al final de la última línea de una página se paraba ahí; Mayús+↓ desde la última línea
+solo llegaba al final de su texto; y sobre una selección multipágina hecha con el ratón, Mayús+flecha la SUSTITUÍA por una nueva en vez de mover el
+foco. No se podía copiar ni marcar con teclado un texto que cruzase páginas, aunque con ratón sí (E-100).
+
+**Causa raíz.** `extender` solo reutilizaba la selección vigente si ancla y foco estaban en la página de la línea enfocada, y el movimiento del foco
+(`caretSiguiente`, `caretLinea`) trabajaba con los caracteres de UNA página. Al cruzar aparecen tres trampas: (1) el final de la página N y el
+principio de la N+1 son la MISMA posición (no hay carácter visible entre ambos): sin normalizarlas, la selección vacía y el foco "en p2" daban
+rangos que incluían un carácter de más o de menos; (2) un rango de UN carácter no dice si el foco está detrás o delante del ancla (ya perdía el ancla
+al retroceder, también en una sola página); (3) la página destino puede no estar pintada: al pintarla por primera vez `renderPage` descartaba la
+selección por ser extremo (E-057), cuando esa regla solo vale para repintar una página que ya tenía DOM; (4) normalizar el borde entre páginas
+perdía la columna de Mayús+↓ (el final de p1 y el principio de p2 son el mismo rango pero distinta x): el rango guarda también el caret exacto del
+foco (`focoCaret`). Lo destapó el E2E en CI (copiaba «Gamma» en vez de «Gamma uno»), no la revisión del código.
+
+**Arreglo.** Lógica pura en `src/texto/seleccionMultipagina.ts`: `moverFoco` (carácter: al agotar la página salta sobre el primer/último carácter
+visible de la contigua con texto; línea: desde la última/primera línea cae en la primera/última de la contigua con la misma x en px CSS a escala 1,
+vía `lineaYColumnaDeCaret`/`caretEnLineaPorX`), `rangoDeCarets` (normaliza posiciones equivalentes y guarda `inversa` para el rango de un carácter) y
+`caretsDeRango`. Los caracteres se piden al modelo (`deps.chars` = `ensureChars`), nunca al DOM. `SeleccionTexto.extender` extiende la selección vigente
+si la página de la línea enfocada pertenece a ella (ancla conservada, también si venía del ratón). `App` llama a `goToPage` (API pública, E-032) cuando el
+foco cambia de página. `Viewer.renderPage` solo descarta la selección al repintar un extremo que ya tenía `canvas`; la primera pintura la conserva y
+`alRepintarPagina` dibuja su capa. Copiar y marcar usan los mismos `tramos()` que E-100.
+
+**Cómo se detecta ahora.** `tests/unit/seleccionTecladoMultipagina.test.ts` (movimiento del foco, equivalencia en el borde entre páginas y la clase real
+`SeleccionTexto` sin DOM; vistos fallar antes del arreglo) y `tests/e2e/next/seleccion-teclado-multipagina.spec.ts` (cruce hacia delante y hacia atrás con
+texto copiado exacto, Mayús+↓ con la x, selección de ratón extendida con el ancla fija y página destino sin pintar). Sin regla guard: no hay patrón
+de código fiable.
+
+**Límites.** Una selección de ratón de un solo carácter hecha hacia atrás se trata como directa al extenderla con el teclado (el modelo del ratón no guarda
+`inversa`). Al cruzar, `goToPage` coloca la página del foco al principio de la vista.
+
 
 ### E-118 · Word → PDF: las columnas de sección (`w:cols`) se maquetaban a una sola columna con aviso, y el salto de columna era un salto de línea
 
@@ -3573,3 +3604,4 @@ no se modelan `w:spacing`/`w:position`/`w:w`/`w:kern`/`w:emboss`/`w:outline`/`w:
 **Cómo se detecta ahora.** `tests/unit/flujo-columnas.test.ts` (paginación: 2 iguales, 3 desiguales con reajuste por columna, salto de columna, sección continua 1 → 2 → 1 con equilibrado, equilibrado por líneas, separador, tabla en la columna 2, nota al pie), `tests/unit/docx-columnas.test.ts` (modelo: iguales, desiguales, `sep`, escalado; render con los mismos casos sobre un `.docx` en memoria, imagen escalada al ancho de la columna y avisos), `tests/unit/ConversorDocxNavegador-columnas.test.ts` (motor real sobre `word-columnas.docx`: x de inicio de cada columna medida con las cajas de carácter, orden de lectura, alturas de columna que difieren una línea, el path del separador y la nota al pie con el ancho de la primera columna). Vistos fallar antes del arreglo (15 de 15 en el conversor y 11 de 11 en el maquetador). Sin regla guard: es funcionalidad con test.
 
 **Límites.** Las tablas y las imágenes en línea se maquetan al ancho de la columna MÁS ESTRECHA (con columnas de ancho distinto avisa `aproximado` para las tablas) y se colocan a la izquierda de su columna. Las notas al pie usan el ancho de la primera columna y van al pie de la página, no al de la columna de su referencia. Las flotantes con ajuste de texto dentro de una región de columnas usan sus coordenadas de página (sin comprobar a qué columna afectan). `w:type="nextColumn"` se sigue tratando como página nueva (aviso existente). El equilibrado solo repite la ÚLTIMA página de la región: si el último párrafo de la región cruza un salto de página no se equilibra, y si la página arranca con la cola de un párrafo en la columna 1, esa cola queda fija. Un `keepNext` en un párrafo de columnas mantiene el párrafo entero. Los encabezados y pies siguen a una columna. Los saltos de columna dentro de una celda de tabla son saltos de línea (avisan).
+

@@ -1692,8 +1692,12 @@ export class App {
         if (!run || run.isContentEditable || !this.viewer || !Number.isFinite(pageIndex) || !Number.isFinite(runId)) break;
         e.preventDefault();
         const dir = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1;
+        const focoAntes = this.viewer.paginaFocoSeleccion();
         const texto = this.viewer.extenderSeleccionTeclado(pageIndex, runId, accion === 'seleccion-caracter' ? 'caracter' : 'linea', dir);
         if (texto === null) break;
+        // E-115: si el foco cruzó a otra página, el visor la trae a la vista (navegación pública, E-032/E-065).
+        const focoDespues = this.viewer.paginaFocoSeleccion();
+        if (focoDespues !== null && focoDespues !== (focoAntes ?? pageIndex)) this.goToPage(focoDespues);
         // Región aria-live (#status): el lector anuncia lo seleccionado, truncado para no leer páginas enteras.
         this.setStatus(texto ? `Seleccionado: «${resumirParaAnunciar(texto)}»` : 'Selección vacía.');
         break;
