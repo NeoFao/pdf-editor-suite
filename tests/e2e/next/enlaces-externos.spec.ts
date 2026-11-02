@@ -59,8 +59,12 @@ test('E-116: Abrir lleva a una pestaña nueva con esa URL, sin opener (noopener)
   await abrir(page);
   const nueva = context.waitForEvent('page');
   await linea(page, 'Enlace HTTPS externo').click({ modifiers: ['Control'] });
+  const mostrado = (await page.locator('#external-link-url').textContent()) ?? '';
+  await expect(page.locator('#external-link-host')).toHaveText('ejemplo.test');
   await page.locator('#external-link-dialog').getByRole('button', { name: 'Abrir' }).click();
   const p = await nueva;
+  // Lo abierto es EXACTAMENTE el href mostrado (una sola URL normalizada).
+  expect(await aperturas(page)).toEqual([mostrado]);
   await p.waitForLoadState('domcontentloaded');
   expect(p.url()).toBe(URL_HTTPS);
   expect(await p.evaluate(() => window.opener)).toBeNull();
