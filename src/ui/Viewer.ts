@@ -96,6 +96,11 @@ export class Viewer {
   /** Coincidencia ACTUAL de buscar y reemplazar (la que reemplazará el próximo "Reemplazar"), en puntos PDF; se pinta más fuerte que el resto. */
   private currentMatch: { pageIndex: number; rect: RectPt } | null = null;
   private observer: IntersectionObserver | null = null;
+  /** E-125: tras `destroy()` ningún camino de render ni listener del visor puede volver a tocar el motor. */
+  private destruido = false;
+  /** Listeners sobre `root` (que App reutiliza entre documentos): `destroy()` los retira todos de golpe. */
+  private readonly abort = new AbortController();
+  private readonly desuscribir: (() => void)[] = [];
   private currentPage = 0;
   /**
    * Página fijada por una navegación EXPLÍCITA (`scrollToPage`, ver E-032).
@@ -352,6 +357,7 @@ export class Viewer {
     private readonly cb: ViewerCallbacks
   ) {
     this.layout();
+    const { signal } = this.abort;
     this.root.addEventListener('scroll', () => {
       this.renderVisible();
       if (this.programmaticScroll) {
@@ -369,21 +375,43 @@ export class Viewer {
       // `wheel` ya liberó más abajo, gesto táctil que `touchmove` ya
       // liberó...). Libera el pin.
       this.pinnedPage = null; this.pinTop = null;
-    });
+    }, { signal });
     // `wheel`/`touchmove` liberan el pin de inmediato, incluso si ocurren
     // DURANTE un scroll programático en curso: también son intención real
     // del usuario (p. ej. mueve la rueda mientras el smooth-scroll de
     // `scrollToPage` todavía está animando).
     const liberarPin = (): void => { this.pinnedPage = null; this.pinTop = null; };
-    this.root.addEventListener('wheel', liberarPin, { passive: true });
-    this.root.addEventListener('touchmove', liberarPin, { passive: true });
+    this.root.addEventListener('wheel', liberarPin, { passive: true, signal });
+    this.root.addEventListener('touchmove', liberarPin, { passive: true, signal });
     // Fin real del scroll programático (Chromium/Firefox): cierra la ventana
     // antes de que expire el respaldo de 150ms.
-    this.root.addEventListener('scrollend', () => this.finishProgrammaticScroll());
+    this.root.addEventListener('scrollend', () => this.finishProgrammaticScroll(), { signal });
     this.renderVisible();
-    this.session.model.on('change', (pageIndex) => { this.rendered.delete(pageIndex); this.renderVisible(); });
+    this.desuscribir.push(this.session.model.on('change', (pageIndex) => { this.rendered.delete(pageIndex); this.renderVisible(); }));
     // Recarga completa (deshacer de borrar/insertar): reconstruir todo.
-    this.session.model.onReload(() => this.rebuild());
+    this.desuscribir.push(this.session.model.onReload(() => this.rebuild()));
+  }
+
+  /**
+   * E-125: desmontaje completo al cambiar de documento. Cancela lo pendiente (temporizador, observer), retira los
+   * listeners de `root` y las suscripciones al modelo, libera los canvas (ancho/alto 0 devuelve su bitmap al
+   * instante) y vacía el DOM. Idempotente. Tras esto `renderVisible`/`rebuild` no hacen nada.
+   */
+  destroy(): void {
+    if (this.destruido) return;
+    this.destruido = true;
+    this.abort.abort();
+    this.observer?.disconnect();
+    this.observer = null;
+    if (this.scrollEndFallback !== null) { clearTimeout(this.scrollEndFallback); this.scrollEndFallback = null; }
+    for (const baja of this.desuscribir) baja();
+    this.desuscribir.length = 0;
+    this.textoSel.limpiar();
+    for (const c of Array.from(this.root.querySelectorAll('canvas'))) { c.width = 0; c.height = 0; }
+    this.root.textContent = '';
+    this.wrappers = [];
+    this.geoms = [];
+    this.rendered = new Set();
   }
 
   /** Reinicia el temporizador de respaldo de `scrollend` (~150ms sin nuevos eventos `scroll`). */
@@ -1153,6 +1181,7 @@ export class Viewer {
   private conManejadorDeEnlaces = new WeakSet<HTMLElement>();
 
   private rebuild(): void {
+    if (this.destruido) return;
     this.root.textContent = '';
     this.wrappers = [];
     this.geoms = [];
@@ -1174,6 +1203,7 @@ export class Viewer {
    * (`evictPage`) y se repintan cuando se vuelvan a pintar.
    */
   repintarSiCambioDpr(): void {
+    if (this.destruido) return;
     if (window.devicePixelRatio === this.dprPintado) return;
     this.dprPintado = window.devicePixelRatio;
     for (const i of Array.from(this.rendered)) this.evictPage(i);
@@ -1221,6 +1251,7 @@ export class Viewer {
   }
 
   private renderVisible(): void {
+    if (this.destruido) return;
     const idx = visiblePageIndices(this.cssHeights(), GAP, this.root.scrollTop, this.root.clientHeight);
     for (const i of idx) {
       if (this.rendered.has(i)) continue;

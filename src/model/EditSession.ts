@@ -1,3 +1,4 @@
+import { PdfError } from '../engine/errores';
 import type { PdfEngine, DocHandle, TextRun, CharBox } from '../engine/PdfEngine';
 import { DocumentModel } from './DocumentModel';
 import type { PageModel } from './types';
@@ -58,9 +59,18 @@ export class EditSession {
     return pages;
   }
 
-  static async open(engine: PdfEngine, bytes: Uint8Array): Promise<EditSession> {
-    const doc = await engine.open(bytes);
-    return new EditSession(engine, doc, new DocumentModel(EditSession.buildPages(engine, doc)));
+  static async open(engine: PdfEngine, bytes: Uint8Array, password?: string): Promise<EditSession> {
+    const doc = await engine.open(bytes, password);
+    try {
+      const pages = EditSession.buildPages(engine, doc);
+      // Un PDF sin páginas (árbol cíclico o vacío) no se puede mostrar: error tipado, no pantalla en blanco.
+      if (pages.length === 0) throw new PdfError('PAGE', 'El PDF no tiene páginas que mostrar');
+      return new EditSession(engine, doc, new DocumentModel(pages));
+    } catch (err) {
+      engine.close(doc); // §2.6: si la carga de la sesión falla, el documento recién abierto no se filtra
+      if (err instanceof PdfError) throw err;
+      throw new PdfError('PAGE', 'No se pudo cargar una página del PDF');
+    }
   }
 
   /**
@@ -150,8 +160,10 @@ export class EditSession {
 
   /** Recarga el documento desde unos bytes (snapshot) y reconstruye el modelo. */
   async reload(bytes: Uint8Array): Promise<void> {
+    // Primero el nuevo y solo después se cierra el viejo: si `open` falla, la sesión sigue en un documento vivo (E-125).
+    const nuevo = await this.engine.open(bytes);
     this.engine.close(this.doc);
-    this.doc = await this.engine.open(bytes);
+    this.doc = nuevo;
     this.refresh();
   }
 }
