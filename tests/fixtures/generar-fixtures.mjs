@@ -1453,6 +1453,58 @@ function docxNotas() {
 }
 
 /**
+ * `word-columnas.docx` (E-118): página de 612 x 312 pt (Carta ancha, baja) con márgenes laterales de 72 pt y verticales de 36 pt: el área de texto mide
+ * 468 x 240 pt (20 líneas de 12 pt exactos). Cuatro secciones en la MISMA página:
+ * 1. una columna: "Titulo 1", "Titulo 2";
+ * 2. continua, DOS columnas iguales (hueco de 720 twips = 36 pt: 216 pt cada una, la 2.ª empieza en x = 324) con separador (`w:sep`):
+ *    15 líneas "Dos 01".."Dos 15" (se equilibran 8 + 7) y una nota al pie en la línea 3;
+ * 3. continua, TRES columnas desiguales de 85, 200 y 115 pt con huecos de 30 pt (x = 72, 187 y 417), sin separador, con dos saltos de columna:
+ *    "Tres A1".."A3", salto, "Tres B1".."B3", salto, "Tres C1";
+ * 4. continua, una columna: "Final 1", "Final 2".
+ * Ver `tests/unit/ConversorDocxNavegador-columnas.test.ts`. Sin avisos.
+ */
+export const DOCX_COLUMNAS = { textoNota: 'Nota al pie de la seccion en dos columnas con un texto largo que ocupa varias lineas del ancho de la primera columna' };
+function docxColumnas() {
+  const PG = '<w:pgSz w:w="12240" w:h="6240"/><w:pgMar w:top="720" w:right="1440" w:bottom="720" w:left="1440" w:header="0" w:footer="0"/>';
+  const sect = (tipo, cols) => `<w:sectPr>${tipo ? `<w:type w:val="${tipo}"/>` : ''}${PG}${cols}</w:sectPr>`;
+  const DOS = '<w:cols w:num="2" w:space="720" w:sep="1"/>';
+  const TRES = '<w:cols w:num="3" w:equalWidth="0"><w:col w:w="1700" w:space="600"/><w:col w:w="4000" w:space="600"/><w:col w:w="2300"/></w:cols>';
+  const salto = `<w:p><w:pPr>${ESP_EXACTO}</w:pPr><w:r><w:br w:type="column"/></w:r></w:p>`;
+  const ref = '<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteReference w:id="1"/></w:r>';
+  const par = (t, ppr = '', extra = '') => `<w:p><w:pPr>${ESP_EXACTO}${ppr}</w:pPr><w:r>${RPR_10}<w:t>${t}</w:t></w:r>${extra}</w:p>`;
+  const dos = Array.from({ length: 15 }, (_, i) => {
+    const n = String(i + 1).padStart(2, '0');
+    return par(`Dos ${n}`, i === 14 ? sect('continuous', DOS) : '', i === 2 ? ref : '');
+  });
+  const documentXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:document><w:body>
+  ${par('Titulo 1')}
+  ${par('Titulo 2', sect('', ''))}
+  ${dos.join('\n  ')}
+  ${par('Tres A1')}${par('Tres A2')}${par('Tres A3')}${salto}
+  ${par('Tres B1')}${par('Tres B2')}${par('Tres B3')}${salto}
+  ${par('Tres C1', sect('continuous', TRES))}
+  ${par('Final 1')}${par('Final 2')}
+  ${sect('continuous', '')}
+</w:body></w:document>`;
+  const estilo = (id, tipo, nombre, ppr, rpr) => `<w:style w:type="${tipo}" w:styleId="${id}"><w:name w:val="${nombre}"/>${ppr}${rpr}</w:style>`;
+  const styles = `<?xml version="1.0" encoding="UTF-8"?>
+<w:styles>
+  <w:docDefaults><w:rPrDefault><w:rPr><w:sz w:val="20"/></w:rPr></w:rPrDefault></w:docDefaults>
+  ${estilo('FootnoteText', 'paragraph', 'footnote text', '<w:pPr><w:spacing w:before="0" w:after="0" w:line="240" w:lineRule="exact"/></w:pPr>', RPR_10)}
+  ${estilo('FootnoteReference', 'character', 'footnote reference', '', '<w:rPr><w:vertAlign w:val="superscript"/></w:rPr>')}
+</w:styles>`;
+  const footnotesXml = `<?xml version="1.0" encoding="UTF-8"?>
+<w:footnotes><w:footnote w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:footnote><w:footnote w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:footnote><w:footnote w:id="1"><w:p><w:pPr><w:pStyle w:val="FootnoteText"/></w:pPr><w:r><w:rPr><w:rStyle w:val="FootnoteReference"/></w:rPr><w:footnoteRef/></w:r><w:r><w:t xml:space="preserve"> ${DOCX_COLUMNAS.textoNota}</w:t></w:r></w:p></w:footnote></w:footnotes>`;
+  return construirZip([
+    { nombre: '[Content_Types].xml', datos: '<Types/>' },
+    { nombre: 'word/document.xml', datos: Buffer.from(documentXml, 'utf-8') },
+    { nombre: 'word/styles.xml', datos: Buffer.from(styles, 'utf-8') },
+    { nombre: 'word/footnotes.xml', datos: Buffer.from(footnotesXml, 'utf-8') }
+  ]);
+}
+
+/**
  * "Zip bomb" real: 8 MB de ceros comprimidos con deflate (que reduce a un
  * puñado de KB) en una única entrada — ejercita la defensa de ratio de
  * compresión de `src/convert/docx/zip.ts` con datos reales, no solo tamaños
@@ -2166,6 +2218,7 @@ async function main() {
     'word-rpr-efectos.docx': docxRprEfectos(),
     'word-enlaces-internos.docx': docxEnlacesInternos(),
     'word-notas.docx': docxNotas(),
+    'word-columnas.docx': docxColumnas(),
     'word-campos.docx': docxCampos(),
     'word-outline.docx': docxOutline(),
     'word-hostil.docx': docxHostil()

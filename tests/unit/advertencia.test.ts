@@ -26,16 +26,23 @@ test('contenido que no llega al PDF se clasifica como omitido (notas, VML, cuadr
   }
 });
 
-test('contenido que aparece distinto se clasifica como aproximado (cambios, salto de sección par/impar, columnas, salto de columna)', () => {
+test('contenido que aparece distinto se clasifica como aproximado (cambios, salto de sección par/impar, salto de columna en una celda)', () => {
   const doc = `<w:document><w:body>
     <w:p><w:ins><w:r><w:t>a</w:t></w:r></w:ins></w:p>
-    <w:p><w:pPr><w:sectPr><w:cols w:num="2"/></w:sectPr></w:pPr></w:p>
-    <w:p><w:r><w:br w:type="column"/></w:r></w:p>
+    <w:tbl><w:tblGrid><w:gridCol w:w="3000"/></w:tblGrid><w:tr><w:tc><w:p><w:r><w:t>x</w:t><w:br w:type="column"/><w:t>y</w:t></w:r></w:p></w:tc></w:tr></w:tbl>
     <w:sectPr><w:type w:val="evenPage"/></w:sectPr>
   </w:body></w:document>`;
-  for (const patron of [/control de cambios/i, /página par/i, /distribución en columnas/i, /salto de columna/i]) {
+  for (const patron of [/control de cambios/i, /página par/i, /salto de columna/i]) {
     expect(tipoDe(doc, patron), String(patron)).toEqual(['aproximado']);
   }
+});
+
+test('las columnas de sección y los saltos de columna del cuerpo se maquetan de verdad (E-118): no generan aviso', () => {
+  const doc = `<w:document><w:body>
+    <w:p><w:pPr><w:sectPr><w:cols w:num="2"/></w:sectPr></w:pPr></w:p>
+    <w:p><w:r><w:br w:type="column"/></w:r></w:p>
+  </w:body></w:document>`;
+  for (const patron of [/columnas/i, /salto de columna/i]) expect(tipoDe(doc, patron), String(patron)).toEqual([]);
 });
 
 const RELS_IMG = '<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image1.png"/></Relationships>';

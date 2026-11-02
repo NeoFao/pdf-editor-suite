@@ -3,6 +3,10 @@
 # Windows aunque el contenido sea idéntico, así que se fijan a LF.
 * text=auto eol=lf
 
+# Registro de defectos: solo se añaden entradas al final. `union` (driver integrado
+# de git) conserva las líneas de ambos lados ante un conflicto de fusión local.
+docs/ERRORES-CONOCIDOS.md merge=union
+
 *.png binary
 *.jpg binary
 *.jpeg binary
