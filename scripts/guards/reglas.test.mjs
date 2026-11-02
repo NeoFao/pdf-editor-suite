@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarPuertosAMano,analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen, analizarAvanceNaturalEnAgrupacion, analizarPromptNativo, esperasFijasEn, TOPE_ESPERAS_FIJAS } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarPuertosAMano,analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen, analizarAvanceNaturalEnAgrupacion, analizarPromptNativo, analizarDialogoCasero, esperasFijasEn, TOPE_ESPERAS_FIJAS } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -1012,6 +1012,27 @@ describe('pagegeometry-con-origen', () => {
 
   test('sobre el repo real no encuentra nada', () => {
     assert.ok(regla.comoArreglar.includes('desdePagina'));
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('sin-dialogo-casero', () => {
+  const regla = detectarEn('sin-dialogo-casero');
+
+  test('detecta el velo position:fixed + inset:0 hecho a mano (QA-04)', () => {
+    assert.equal(analizarDialogoCasero('src/ui/X.ts', "Object.assign(o.style, { position: 'fixed', inset: '0', background: 'rgba(0,0,0,.45)' });").length, 1);
+  });
+
+  test('no señala el iframe de impresión, comentarios ni un fixed sin inset', () => {
+    assert.deepEqual(analizarDialogoCasero('src/ui/X.ts', "Object.assign(f.style, { position: 'fixed', right: '0', bottom: '0' });"), []);
+    assert.deepEqual(analizarDialogoCasero('src/ui/X.ts', "// { position: 'fixed', inset: '0' } era el velo antiguo"), []);
+  });
+
+  test('respeta el escape con razón', () => {
+    assert.deepEqual(analizarDialogoCasero('src/ui/X.ts', "// guard-disable-next-line sin-dialogo-casero: visor de imagen sin interacción\nObject.assign(o.style, { position: 'fixed', inset: '0' });"), []);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
     assert.deepEqual(regla.ejecutar(), []);
   });
 });
