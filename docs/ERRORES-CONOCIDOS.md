@@ -3592,20 +3592,6 @@ de código fiable.
 **Límites.** Una selección de ratón de un solo carácter hecha hacia atrás se trata como directa al extenderla con el teclado (el modelo del ratón no guarda
 `inversa`). Al cruzar, `goToPage` coloca la página del foco al principio de la vista.
 
-### E-117 · Texto de derecha a izquierda: líneas en orden visual, copia desordenada y edición que escribía los glifos al revés
-
-**Síntoma.** En PDF con hebreo o árabe hechos por Chromium (`tests/fixtures/rtl/`): una línea árabe (un `Tj` por glifo) salía partida o con el texto en orden visual («يبرعص نذا هم…» en vez de «مرحبا بالعالم…»); una línea mixta («Hola שלום 123 fin») se copiaba como «Hola 123 שלום fin» y «שלום Hello 456 עולם» como «שלום 456 Hello עולם»; editar una palabra hebrea se rechazaba (`glyph-missing`) porque se escribía el texto lógico y el `Tj` guarda los glifos de izquierda a derecha; el editor DOM no tenía `dir`, y una línea RTL más corta o larga se anclaba por la izquierda.
-
-**Causa raíz.** Nada tenía en cuenta la dirección. `agruparLineasEditables` ordena por `uIni` (orden visual) y concatena. La text page de PDFium solo invierte tramos RTL puros: deja mal cifras y palabras latinas dentro de un tramo RTL y cambia de lado los blancos del borde de un objeto. `editTextRun` escribía el texto lógico tal cual.
-
-**Arreglo.** `src/texto/bidi.ts` (UAX #9 sin dependencias: W1-W7, N1-N2, I1-I2, L2) con la inversa verificada (`ordenLogicoDeVisual` devuelve `null` si el algoritmo directo no reproduce el orden visual; la lectura de una cifra entre latín y hebreo es ambigua y se elige la habitual: sigue a la palabra hebrea). `textoRealPorObjeto`/`textoRealDeObjeto` releen cada objeto por la posición de sus caracteres, solo en páginas con RTL. `LineaEditable` trae `direccion` y `text`/`tramos` en orden lógico (`runIds` sigue visual). `textoDeRango` reconstruye cada línea RTL desde las cajas. `editTextRun` escribe `aVisual(texto)`, relee el texto lógico y conserva el borde DERECHO (una línea RTL crece hacia la izquierda); `TextLayer` pone `dir`, ancla el editor a ese borde y NO abre las líneas con `aviso`.
-
-**Lo que no se hace (aviso `aproximado`).** Una línea con árabe (formas contextuales), con varios objetos y RTL, con el orden visual no verificable o RTL girada queda no editable en su sitio (`LineaEditable.aviso`, `data-aviso`, mensaje en el estado, `editLine` → `bidi-no-fiel`). Se puede seleccionar, copiar y buscar.
-
-**Cómo se detecta ahora.** `tests/unit/bidi.test.ts`, `tests/unit/texto-rtl.test.ts` (agrupado, copia y búsqueda sobre los tres PDF), `tests/unit/edicion-rtl.test.ts` (editar una palabra hebrea releyendo, borde derecho, rechazo de líneas con aviso) y `tests/e2e/next/texto-rtl.spec.ts` (Chromium real: editar y guardar, copiar la línea mixta, aviso árabe). Las pruebas unitarias vistas fallar antes del arreglo. Los PDF los genera `tests/fixtures/generar-fixtures-rtl.mjs` (fuentes del sistema de Windows) y se confirman ya generados: CI no los regenera. Sin regla guard.
-
-**Límites.** Sin N0 (paréntesis emparejados), sin espejado de glifos, sin marcas de control explícitas. La reescritura de un objeto hebreo con letras que su subconjunto no trae falla con `glyph-missing` como cualquier fuente subconjunto. Un objeto RTL con cifras o latín dentro de un mismo `Tj` se relee por posición; si no se puede verificar queda en el orden del motor.
-
 ### E-116 · Los enlaces externos (`/URI`) de un PDF no hacían nada en el visor, y los de esquema peligroso se descartaban en silencio
 
 **Síntoma.** Un PDF con un enlace a una web o a un correo (los de Word, de un informe, de una factura) no se podía seguir desde el visor; Acrobat lo abre con Ctrl+clic tras un aviso de seguridad. Además `getLinks` degradaba un `javascript:` o `file:` a `otro`, igual que un `/Launch`: la UI no podía distinguir "enlace bloqueado" de "no es un enlace".
@@ -3621,6 +3607,20 @@ de código fiable.
 **mailto.** Se analiza decodificado (lo que lee el usuario): bidi/control se buscan ahí (`%E2%80%AE` ya no pasa), todo lo mostrado, `dominio` incluido, pasa por `escaparPeligrosos`, cada dominio debe ser un hostname válido (punycode si IDN) o el enlace se bloquea sin "Abrir", y varias direcciones o `?cc=`/`?bcc=`/`?body=` se muestran enteros y nunca omiten la pregunta.
 
 **Límites.** La casilla vale para la sesión y por host exacto (`a.test` no cubre `x.a.test`). El dominio mostrado de un mailto es el de la dirección. Nada de esto envía datos del documento a ningún sitio: solo se abre la URL que el usuario aprueba.
+
+### E-117 · Texto de derecha a izquierda: líneas en orden visual, copia desordenada y edición que escribía los glifos al revés
+
+**Síntoma.** En PDF con hebreo o árabe hechos por Chromium (`tests/fixtures/rtl/`): una línea árabe (un `Tj` por glifo) salía partida o con el texto en orden visual («يبرعص نذا هم…» en vez de «مرحبا بالعالم…»); una línea mixta («Hola שלום 123 fin») se copiaba como «Hola 123 שלום fin» y «שלום Hello 456 עולם» como «שלום 456 Hello עולם»; editar una palabra hebrea se rechazaba (`glyph-missing`) porque se escribía el texto lógico y el `Tj` guarda los glifos de izquierda a derecha; el editor DOM no tenía `dir`, y una línea RTL más corta o larga se anclaba por la izquierda.
+
+**Causa raíz.** Nada tenía en cuenta la dirección. `agruparLineasEditables` ordena por `uIni` (orden visual) y concatena. La text page de PDFium solo invierte tramos RTL puros: deja mal cifras y palabras latinas dentro de un tramo RTL y cambia de lado los blancos del borde de un objeto. `editTextRun` escribía el texto lógico tal cual.
+
+**Arreglo.** `src/texto/bidi.ts` (UAX #9 sin dependencias: W1-W7, N1-N2, I1-I2, L2) con la inversa verificada (`ordenLogicoDeVisual` devuelve `null` si el algoritmo directo no reproduce el orden visual; la lectura de una cifra entre latín y hebreo es ambigua y se elige la habitual: sigue a la palabra hebrea). `textoRealPorObjeto`/`textoRealDeObjeto` releen cada objeto por la posición de sus caracteres, solo en páginas con RTL. `LineaEditable` trae `direccion` y `text`/`tramos` en orden lógico (`runIds` sigue visual). `textoDeRango` reconstruye cada línea RTL desde las cajas. `editTextRun` escribe `aVisual(texto)`, relee el texto lógico y conserva el borde DERECHO (una línea RTL crece hacia la izquierda); `TextLayer` pone `dir`, ancla el editor a ese borde y NO abre las líneas con `aviso`.
+
+**Lo que no se hace (aviso `aproximado`).** Una línea con árabe (formas contextuales), con varios objetos y RTL, con el orden visual no verificable o RTL girada queda no editable en su sitio (`LineaEditable.aviso`, `data-aviso`, mensaje en el estado, `editLine` → `bidi-no-fiel`). Se puede seleccionar, copiar y buscar.
+
+**Cómo se detecta ahora.** `tests/unit/bidi.test.ts`, `tests/unit/texto-rtl.test.ts` (agrupado, copia y búsqueda sobre los tres PDF), `tests/unit/edicion-rtl.test.ts` (editar una palabra hebrea releyendo, borde derecho, rechazo de líneas con aviso) y `tests/e2e/next/texto-rtl.spec.ts` (Chromium real: editar y guardar, copiar la línea mixta, aviso árabe). Las pruebas unitarias vistas fallar antes del arreglo. Los PDF los genera `tests/fixtures/generar-fixtures-rtl.mjs` (fuentes del sistema de Windows) y se confirman ya generados: CI no los regenera. Sin regla guard.
+
+**Límites.** Sin N0 (paréntesis emparejados), sin espejado de glifos, sin marcas de control explícitas. La reescritura de un objeto hebreo con letras que su subconjunto no trae falla con `glyph-missing` como cualquier fuente subconjunto. Un objeto RTL con cifras o latín dentro de un mismo `Tj` se relee por posición; si no se puede verificar queda en el orden del motor.
 
 ### E-118 · Word → PDF: las columnas de sección (`w:cols`) se maquetaban a una sola columna con aviso, y el salto de columna era un salto de línea
 
