@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen, analizarAvanceNaturalEnAgrupacion, analizarPromptNativo, esperasFijasEn, TOPE_ESPERAS_FIJAS } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarPuertosAMano,analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen, analizarAvanceNaturalEnAgrupacion, analizarPromptNativo, esperasFijasEn, TOPE_ESPERAS_FIJAS } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -954,6 +954,30 @@ describe('puertos-e2e-sincronizados (E-062)', () => {
   test('detecta un config sin ningún port', () => {
     const p = analizarPuertosE2E(importaConfig, importaLiberar, claves, puertos);
     assert.match(p[0].mensaje, /ningún `port:`/);
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('sin-puerto-a-mano-en-tests (E-113)', () => {
+  const regla = TODAS.find((r) => r.id === 'sin-puerto-a-mano-en-tests');
+
+  test('detecta puertos por defecto y URLs con puerto escritos a mano', () => {
+    for (const linea of [
+      "await page.goto('http://127.0.0.1:4173/');",
+      "const base = 'http://localhost:3100';",
+      'baseURL: 4174,',
+      "use: { baseURL: 'http://127.0.0.1:5000' }"
+    ]) {
+      assert.equal(analizarPuertosAMano('tests/e2e/x.spec.ts', linea).length, 1, linea);
+    }
+  });
+
+  test('acepta baseURL, PUERTOS_E2E, comentarios y el escape con razón', () => {
+    assert.deepEqual(analizarPuertosAMano('tests/e2e/x.spec.ts', "await page.goto('/ruta');\nbaseURL: urlLocal('appNueva'),\n// el 4173 por defecto"), []);
+    assert.deepEqual(analizarPuertosAMano('tests/e2e/x.spec.ts', '// guard-disable-next-line sin-puerto-a-mano-en-tests: fixture externo que usa 3100\nconst p = 3100;'), []);
   });
 
   test('sobre el repo real no encuentra nada', () => {
