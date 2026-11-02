@@ -1,9 +1,8 @@
 import { PageGeometry } from '../coords/PageGeometry';
 import type { QuadPt } from '../coords/quads';
 import type { CharBox, RectPt, SizePt } from '../engine/PdfEngine';
-import {
-  caretInicioDe, caretLinea, caretSiguiente, caretsARango, indiceCaracterMasCercano, quadsDeRango, rangoACarets, textoDeRango
-} from '../texto/seleccionTexto';
+import { caretInicioDe, indiceCaracterMasCercano, quadsDeRango, textoDeRango } from '../texto/seleccionTexto';
+import { caretsDeRango, moverFoco, rangoDeCarets, type ContextoTexto, type PosTexto, type RangoMultipagina } from '../texto/seleccionMultipagina';
 import { registrarGesto } from './gesto';
 
 /** Lo que `SeleccionTexto` necesita del visor, sin conocer al visor. */
@@ -39,7 +38,7 @@ const TICK_AUTOSCROLL_MS = 16;
  * `paginaFoco` (índices de carácter inclusivos; el foco puede quedar antes que el ancla). Una selección de una
  * sola página es el caso `paginaAncla === paginaFoco` (E-100: ya no está limitada a una página).
  */
-interface Seleccion { paginaAncla: number; ancla: number; paginaFoco: number; foco: number }
+type Seleccion = RangoMultipagina
 
 /** Tramo de una página dentro de la selección: caracteres `desde`..`hasta` (inclusive, ya en orden). */
 export interface TramoSeleccion { pageIndex: number; desde: number; hasta: number }
@@ -159,28 +158,35 @@ export class SeleccionTexto {
    * línea (hacia delante) o su final (hacia atrás); con selección vigente se mueve solo el FOCO y el ancla
    * se conserva, también si la selección venía del ratón. Si el foco vuelve al ancla la selección queda
    * vacía y se descarta. Devuelve false si no hay nada que seleccionar (línea sin caracteres con caja).
-   * Solo extiende selecciones de UNA página: una selección multipágina del ratón se sustituye por una nueva.
+   * Cruza páginas (E-115): al agotar el texto de la página el foco pasa a la contigua; el ancla se conserva.
    */
   extender(pageIndex: number, cajaLinea: RectPt, mov: 'caracter' | 'linea', dir: 1 | -1): boolean {
-    const chars = this.deps.chars(pageIndex);
-    let car: { ancla: number; foco: number };
+    const ctx = this.contexto();
+    let ancla: PosTexto, foco: PosTexto;
     const s = this.sel;
-    if (s && s.paginaAncla === pageIndex && s.paginaFoco === pageIndex) {
-      car = rangoACarets(s);
+    if (s && this.incluye(pageIndex)) {
+      ({ ancla, foco } = caretsDeRango(s));
     } else {
-      const c0 = caretInicioDe(chars, cajaLinea, dir > 0 ? 'inicio' : 'final');
+      const c0 = caretInicioDe(this.deps.chars(pageIndex), cajaLinea, dir > 0 ? 'inicio' : 'final');
       if (c0 < 0) return false;
       this.limpiar();
       this.deps.alEmpezar();
-      car = { ancla: c0, foco: c0 };
+      ancla = foco = { pagina: pageIndex, caret: c0 };
     }
-    const foco = mov === 'caracter' ? caretSiguiente(chars, car.foco, dir) : caretLinea(chars, car.foco, dir, this.geoUnidad(pageIndex));
-    const r = caretsARango(car.ancla, foco);
+    const r = rangoDeCarets(ctx, ancla, moverFoco(ctx, foco, mov, dir));
     if (!r) { this.limpiar(); return true; }
     const previa = this.sel;
-    this.sel = { paginaAncla: pageIndex, ancla: r.ancla, paginaFoco: pageIndex, foco: r.foco };
+    this.sel = r;
     this.repintarTodo(previa);
     return true;
+  }
+
+  /** Página del foco de la selección (el extremo que mueve Mayús+flecha), o `null` si no hay selección. */
+  get paginaFoco(): number | null { return this.sel ? this.sel.paginaFoco : null; }
+
+  /** Los caracteres y la geometría de cada página, pedidos al modelo (no al DOM). */
+  private contexto(): ContextoTexto {
+    return { numPaginas: this.deps.numPaginas(), chars: (p) => this.deps.chars(p), geo: (p) => this.geoUnidad(p) };
   }
 
   /** ¿Hay una selección con algún carácter? */
@@ -238,13 +244,12 @@ export class SeleccionTexto {
   }
 
   /**
-   * Una página del rango se acaba de pintar de nuevo (su DOM se vació): una selección de una página o con esa
-   * página como extremo se descarta (los índices pueden ya no valer, E-057); una página INTERMEDIA solo recupera
-   * su capa, porque el desalojo la quitó y su texto no ha cambiado.
+   * Una página del rango se acaba de pintar de nuevo (su DOM se vació): el visor ya descartó la selección si repintó un
+   * extremo que tenía DOM (los índices pueden ya no valer, E-057); una página de la selección que se pinta por primera
+   * vez (extremo al que se llegó con el teclado, E-115) o una INTERMEDIA desalojada solo recupera su capa.
    */
   alRepintarPagina(i: number): void {
-    if (!this.incluye(i)) return;
-    if (this.esExtremo(i)) this.limpiar(); else this.pintarPagina(i);
+    if (this.incluye(i)) this.pintarPagina(i);
   }
 
   private quitarCapas(s: Seleccion, cuales: (p: number) => boolean): void {
