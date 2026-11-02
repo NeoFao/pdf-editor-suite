@@ -1,6 +1,48 @@
 import { test, expect } from 'vitest';
 import { dominioDe, decidirEnlaceExterno } from '../../src/ui/enlaceExterno';
 
+test('E-116: mailto con %E2%80%AE (bidi) en el dominio se bloquea y avisa; el bidi nunca llega a lo mostrado', () => {
+  const d = decidirEnlaceExterno('mailto:a@ev%E2%80%AEil.com', new Set());
+  expect(d.accion).toBe('bloqueado');
+  expect(d.motivo).toBe('direccion');
+  expect(d.conCaracteresOcultos).toBe(true);
+  expect(d.mostrado).toContain('\\u202E');
+  expect(d.mostrado).not.toMatch(/‮/);
+  expect(d.dominio).toBe('');
+});
+
+test('E-116: mailto con un dominio IDN (punycode) o con un host inválido', () => {
+  const idn = decidirEnlaceExterno('mailto:a@xn--bcher-kva.example', new Set());
+  expect(idn.accion).toBe('confirmar');
+  expect(idn.dominio).toBe('xn--bcher-kva.example');
+  const crudo = decidirEnlaceExterno('mailto:a@b%C3%BCcher.example', new Set());
+  expect(crudo.accion).toBe('confirmar');
+  expect(crudo.dominio).toBe('xn--bcher-kva.example'); // se muestra el punycode, no el Unicode
+  for (const u of ['mailto:a@', 'mailto:sin-arroba', 'mailto:a@x.com%2Fevil', 'mailto:a@x.com%20y']) {
+    expect(decidirEnlaceExterno(u, new Set()).accion).toBe('bloqueado');
+  }
+});
+
+test('E-116: mailto con varias direcciones o ?bcc=/?cc=/?body= los muestra todos y nunca omite la pregunta', () => {
+  const omitidos = new Set(['a.test', 'b.test', 'a.test, b.test']);
+  const d = decidirEnlaceExterno('mailto:x@a.test,y@b.test?bcc=oculto@c.test&body=hola', omitidos);
+  expect(d.accion).toBe('confirmar');
+  expect(d.dominio).toBe('a.test, b.test');
+  expect(d.mostrado).toContain('x@a.test,y@b.test');
+  expect(d.mostrado).toContain('bcc=oculto@c.test');
+  expect(d.mostrado).toContain('body=hola');
+  expect(decidirEnlaceExterno('mailto:x@a.test?bcc=z@c.test', omitidos).accion).toBe('confirmar');
+  expect(decidirEnlaceExterno('mailto:x@a.test', omitidos).accion).toBe('abrir');
+});
+
+test('E-116: bidi dentro del ?body= de un mailto avisa (se detecta tras decodificar) y se muestra escapado', () => {
+  const d = decidirEnlaceExterno('mailto:x@a.test?body=hola%E2%80%AEgpj', new Set(['a.test']));
+  expect(d.accion).toBe('confirmar');
+  expect(d.conCaracteresOcultos).toBe(true);
+  expect(d.mostrado).not.toMatch(/‮/);
+  expect(d.mostrado).toContain('\\u202E');
+});
+
 test('E-116: un host IDN se muestra en punycode, y es el mismo que se abre', () => {
   const d = decidirEnlaceExterno('https://bücher.example/x', new Set());
   expect(d.dominio).toBe('xn--bcher-kva.example');

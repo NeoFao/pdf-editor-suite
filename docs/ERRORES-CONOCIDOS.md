@@ -3549,4 +3549,6 @@ no se modelan `w:spacing`/`w:position`/`w:w`/`w:kern`/`w:emboss`/`w:outline`/`w:
 
 **Suplantación (revisión de seguridad).** La URL se analiza UNA vez con `new URL` y ese `href` normalizado es a la vez lo que se valida, se muestra y se abre (antes se mostraba la cadena del PDF y se abría otra). El diálogo destaca el `hostname` (punycode si es IDN) y debajo el `href`; los bidi y de control (U+200E-F, U+202A-E, U+2066-9, C0/C1) se escapan y avisan, y con ellos no se ofrece la casilla ni se omite la pregunta; una URL con usuario o contraseña (`user@evil.com`) se bloquea sin "Abrir". Tests unitarios de IDN, U+202E, credenciales y coincidencia mostrado/abierto, y el E2E compara lo abierto con el href mostrado.
 
+**mailto.** Se analiza decodificado (lo que lee el usuario): bidi/control se buscan ahí (`%E2%80%AE` ya no pasa), todo lo mostrado, `dominio` incluido, pasa por `escaparPeligrosos`, cada dominio debe ser un hostname válido (punycode si IDN) o el enlace se bloquea sin "Abrir", y varias direcciones o `?cc=`/`?bcc=`/`?body=` se muestran enteros y nunca omiten la pregunta.
+
 **Límites.** La casilla vale para la sesión y por host exacto (`a.test` no cubre `x.a.test`). El dominio mostrado de un mailto es el de la dirección. Nada de esto envía datos del documento a ningún sitio: solo se abre la URL que el usuario aprueba.

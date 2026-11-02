@@ -13,7 +13,7 @@ import { mostrarModal } from './dialogo';
  */
 
 export type AccionEnlace = 'abrir' | 'confirmar' | 'bloqueado';
-export type MotivoBloqueo = 'esquema' | 'credenciales';
+export type MotivoBloqueo = 'esquema' | 'credenciales' | 'direccion';
 export interface DecisionEnlace {
   accion: AccionEnlace;
   /** Por qué está bloqueado (solo con `accion: 'bloqueado'`). */
@@ -40,15 +40,40 @@ export function escaparPeligrosos(s: string): string {
   return s.replace(PELIGROSOS_G, (c) => `\\u${c.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
 }
 
-function dominioDeUrl(u: URL): string {
-  if (u.protocol === 'mailto:') {
-    let direccion = u.pathname;
-    try { direccion = decodeURIComponent(direccion); } catch { /* se queda la ruta sin decodificar */ }
-    direccion = direccion.split(',')[0] ?? '';
-    const arroba = direccion.lastIndexOf('@');
-    return arroba >= 0 ? direccion.slice(arroba + 1).trim().toLowerCase() : '';
+/** Resultado de analizar un `mailto:`: todo se lee de la forma DECODIFICADA, que es la que se muestra. */
+interface AnalisisMailto {
+  /** `href` decodificado (direcciones, `?cc=`, `?bcc=`, `?body=`...): se muestra entero, nunca se oculta nada. */
+  decodificado: string;
+  /** Dominios de TODAS las direcciones del destinatario, en punycode si son IDN, sin repetir. */
+  dominios: string[];
+  /** Todas las direcciones tienen un dominio que es un hostname válido y sin caracteres peligrosos tras decodificar. */
+  valido: boolean;
+  /** Hay más de una dirección o parámetros (`?cc=`...): nunca se omite la pregunta. */
+  complejo: boolean;
+}
+
+function analizarMailto(u: URL): AnalisisMailto {
+  let decodificado = u.href, ruta = u.pathname, decodificable = true;
+  try { decodificado = decodeURIComponent(u.href); ruta = decodeURIComponent(u.pathname); } catch { decodificable = false; }
+  const direcciones = ruta.split(',').map((d) => d.trim()).filter((d) => d !== '');
+  const dominios: string[] = [];
+  let valido = decodificable && direcciones.length > 0;
+  for (const d of direcciones) {
+    const arroba = d.lastIndexOf('@');
+    const crudo = arroba >= 0 ? d.slice(arroba + 1) : '';
+    let host = '';
+    // Un hostname no lleva espacios, separadores de URL ni caracteres bidi/control: si los trae, el dominio no es válido.
+    if (crudo !== '' && !PELIGROSOS.test(crudo) && !/[\s/?#@:\\%]/.test(crudo)) {
+      try { host = new URL(`http://${crudo}`).hostname; } catch { host = ''; }
+    }
+    if (host === '' || PELIGROSOS.test(host)) { valido = false; continue; }
+    if (!dominios.includes(host)) dominios.push(host);
   }
-  return u.hostname.toLowerCase();
+  return { decodificado, dominios, valido, complejo: direcciones.length > 1 || u.search !== '' };
+}
+
+function dominioDeUrl(u: URL): string {
+  return u.protocol === 'mailto:' ? analizarMailto(u).dominios.join(', ') : u.hostname.toLowerCase();
 }
 
 /** Host de una URL http(s) (punycode si es IDN), o dominio de la dirección en `mailto:`. Vacío si no hay (o la URL no es válida). */
@@ -58,16 +83,26 @@ export function dominioDe(uri: string): string {
 
 /** Qué hacer con un enlace externo: `bloqueado` (esquema no permitido o credenciales), `abrir` (dominio omitido) o `confirmar`. */
 export function decidirEnlaceExterno(uri: string, omitidos: ReadonlySet<string> = dominiosOmitidos): DecisionEnlace {
-  const conCaracteresOcultos = PELIGROSOS.test(uri);
-  const bloqueado = (motivo: MotivoBloqueo): DecisionEnlace => ({ accion: 'bloqueado', motivo, url: uri, mostrado: escaparPeligrosos(uri), dominio: '', conCaracteresOcultos });
+  let conCaracteresOcultos = PELIGROSOS.test(uri);
+  const bloqueado = (motivo: MotivoBloqueo, mostrado = uri): DecisionEnlace => ({ accion: 'bloqueado', motivo, url: uri, mostrado: escaparPeligrosos(mostrado), dominio: '', conCaracteresOcultos });
   if (validarUrlEnlace(uri) === null) return bloqueado('esquema');
   const parsed = new URL(uri); // ya validada arriba
   if (parsed.username !== '' || parsed.password !== '') return bloqueado('credenciales');
   const url = parsed.href;
-  const dominio = dominioDeUrl(parsed);
-  // Sin dominio no hay a qué atar el "no volver a preguntar"; con caracteres ocultos se pregunta siempre.
-  const omitir = dominio !== '' && !conCaracteresOcultos && omitidos.has(dominio);
-  return { accion: omitir ? 'abrir' : 'confirmar', url, mostrado: escaparPeligrosos(url), dominio, conCaracteresOcultos };
+  let mostrado = url;
+  let omitible = true;
+  if (parsed.protocol === 'mailto:') {
+    // Se muestra la forma decodificada (la que lee el usuario) y los peligrosos se buscan en ella: `%E2%80%AE` no pasa inadvertido.
+    const m = analizarMailto(parsed);
+    mostrado = m.decodificado;
+    conCaracteresOcultos = conCaracteresOcultos || PELIGROSOS.test(m.decodificado);
+    if (!m.valido) return bloqueado('direccion', m.decodificado);
+    omitible = !m.complejo;
+  }
+  const dominio = escaparPeligrosos(dominioDeUrl(parsed));
+  // Sin dominio no hay a qué atar el "no volver a preguntar"; con caracteres ocultos o un mailto complejo se pregunta siempre.
+  const omitir = dominio !== '' && omitible && !conCaracteresOcultos && omitidos.has(dominio);
+  return { accion: omitir ? 'abrir' : 'confirmar', url, mostrado: escaparPeligrosos(mostrado), dominio, conCaracteresOcultos };
 }
 
 /** Texto de `aria-label`/`title` de la caja de un enlace externo. */
@@ -102,7 +137,9 @@ export function seguirEnlaceExterno(uri: string): void {
   aviso.style.margin = '0 0 8px';
   aviso.textContent = d.motivo === 'credenciales'
     ? 'URL sospechosa: lleva usuario o contraseña antes del dominio, un truco habitual para disfrazar la dirección real. No se abre.'
-    : d.motivo === 'esquema'
+    : d.motivo === 'direccion'
+      ? 'Dirección de correo sospechosa: su dominio no es válido o contiene caracteres ocultos o de control. No se abre.'
+      : d.motivo === 'esquema'
       ? 'Este enlace usa un tipo de dirección que no se abre por seguridad.'
       : 'Abre solo enlaces en los que confíes. Se abrirá en una pestaña nueva.';
 
