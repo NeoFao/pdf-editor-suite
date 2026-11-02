@@ -761,24 +761,50 @@ export class App {
     const tabs = document.createElement('div');
     tabs.className = 'sidebar-tabs';
     tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', 'Panel lateral');
     this.tabPages = this.button('Páginas', 'tab-pages', () => this.showSidebarTab('pages'));
     this.tabOutline = this.button('Marcadores', 'tab-outline', () => this.showSidebarTab('outline'));
     this.tabComments = this.button('Comentarios', 'tab-comments', () => this.showSidebarTab('comments'));
     this.tabPages.className = 'tab';
     this.tabOutline.className = 'tab';
     this.tabComments.className = 'tab';
+    // QA ronda 3: patrón WAI-ARIA de pestañas (role=tab + aria-controls al tabpanel, tabindex itinerante, flechas/Inicio/Fin).
+    const pestanasLateral: [HTMLButtonElement, 'pages' | 'outline' | 'comments', string][] = [
+      [this.tabPages, 'pages', 'thumbs'], [this.tabOutline, 'outline', 'outline-panel'], [this.tabComments, 'comments', 'comments-panel']
+    ];
+    for (const [tab, , panelId] of pestanasLateral) {
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-controls', panelId);
+    }
+    tabs.addEventListener('keydown', (e) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+      e.preventDefault();
+      const i = pestanasLateral.findIndex(([t]) => t === document.activeElement);
+      if (i < 0) return;
+      const n = pestanasLateral.length;
+      const j = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : (i + (e.key === 'ArrowRight' ? 1 : n - 1)) % n;
+      const [destino, cual] = pestanasLateral[j]!;
+      this.showSidebarTab(cual);
+      destino.focus();
+    });
     tabs.append(this.tabPages, this.tabOutline, this.tabComments);
 
     this.thumbsEl = document.createElement('div');
     this.thumbsEl.id = 'thumbs';
+    this.thumbsEl.setAttribute('role', 'tabpanel');
+    this.thumbsEl.setAttribute('aria-labelledby', 'tab-pages');
 
     this.outlineEl = document.createElement('div');
     this.outlineEl.id = 'outline-panel';
     this.outlineEl.style.display = 'none';
+    this.outlineEl.setAttribute('role', 'tabpanel');
+    this.outlineEl.setAttribute('aria-labelledby', 'tab-outline');
 
     this.commentsEl = document.createElement('div');
     this.commentsEl.id = 'comments-panel';
     this.commentsEl.style.display = 'none';
+    this.commentsEl.setAttribute('role', 'tabpanel');
+    this.commentsEl.setAttribute('aria-labelledby', 'tab-comments');
     this.comentarios = new ComentariosPanel(this.commentsEl, {
       totalPaginas: () => this.session?.model.pages.length ?? 0,
       leerPagina: (i) => (this.session ? this.session.engine.getComments(this.session.doc, i) : []),
@@ -1160,7 +1186,11 @@ export class App {
         resultado = await conversor.convertir(file.name, bytes);
       } catch (err) {
         if (err instanceof DocxError) { this.setStatus(err.message); return; }
-        throw err;
+        // Cualquier otro fallo (p. ej. un error del motor) termina con un mensaje, nunca con «Convirtiendo…» para siempre (E-120).
+        console.error('Fallo al convertir', file.name, err);
+        const detalle = err instanceof Error && err.message ? ` (${err.message})` : '';
+        this.setStatus(`No se pudo convertir «${file.name}»${detalle}. Si vuelve a ocurrir, recarga la página.`);
+        return;
       }
       const pdfName = file.name.replace(/\.[^./\\]+$/, '') + '.pdf';
       if (!(await this.openBytes(resultado.pdf, pdfName))) return;
@@ -1520,7 +1550,12 @@ export class App {
   private async handleInsert(pageIndex: number, at: PtPoint): Promise<void> {
     if (this.bloqueado()) return;
     if (this.tool !== 'insert' || !this.bus) return;
-    await this.bus.execute(new InsertTextCmd(pageIndex, { xPt: at.xPt, yPt: at.yPt, text: 'Texto nuevo', sizePt: 16 }));
+    // E-123: el texto se escribe en el espacio de USUARIO (sin girar); en una página con /Rotate se gira esos mismos grados
+    // (antihorarios, como el OCR de E-089) para que se vea horizontal y derecho en pantalla, con el origen en el clic.
+    const giro = this.session?.model.pages[pageIndex]?.rotation ?? 0;
+    await this.bus.execute(new InsertTextCmd(pageIndex, {
+      xPt: at.xPt, yPt: at.yPt, text: 'Texto nuevo', sizePt: 16, ...(giro ? { giroGrados: giro } : {})
+    }));
     this.setStatus('Texto insertado. Haz clic en él para editarlo.');
   }
 
@@ -2402,6 +2437,9 @@ export class App {
     this.tabPages.setAttribute('aria-selected', String(which === 'pages'));
     this.tabOutline.setAttribute('aria-selected', String(which === 'outline'));
     this.tabComments.setAttribute('aria-selected', String(which === 'comments'));
+    this.tabPages.tabIndex = which === 'pages' ? 0 : -1;
+    this.tabOutline.tabIndex = which === 'outline' ? 0 : -1;
+    this.tabComments.tabIndex = which === 'comments' ? 0 : -1;
     // Lectura perezosa: el panel solo toca el motor mientras está a la vista.
     this.comentarios.setVisible(which === 'comments');
   }

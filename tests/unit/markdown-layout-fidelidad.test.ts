@@ -7,14 +7,11 @@ const medir: Medir = (_f, sizePt, t) => t.length * sizePt * 0.6;
 const lay = (md: string, imagenes?: Map<string, { width: number; height: number }>) => layoutMarkdown(parseMarkdown(md), medir, imagenes ? { imagenes } : undefined);
 const textos = (r: ReturnType<typeof lay>): string => r.trazos.map((t) => t.text).join('|');
 
-test('glifos sin fuente estándar (emoji, CJK) se sustituyen por "?" y avisan aproximado; nunca salen corrompidos', () => {
+test('el maquetador conserva emoji y CJK tal cual y no avisa: la sustitución por "?" y el aviso caracteresSinFuente son de CodificadorTexto (E-120)', () => {
   const r = lay('Hola 😀 y 漢字 fin');
-  expect(textos(r)).not.toMatch(/[^\x20-\x7e -ÿ–—‘-”•…€|]/);
-  expect(textos(r)).toContain('?');
-  const av = r.advertencias.filter((a) => a.tipo === 'aproximado' && /caracter|carácter/i.test(a.mensaje));
-  expect(av).toHaveLength(1);
-  expect(av[0]!.mensaje).toContain('😀');
-  expect(av[0]!.mensaje).toContain('漢');
+  expect(textos(r)).toContain('😀');
+  expect(textos(r)).toContain('漢字');
+  expect(r.advertencias.filter((a) => /caracter|carácter/i.test(a.mensaje))).toEqual([]);
 });
 
 test('texto europeo con acentos y comillas tipográficas no avisa', () => {

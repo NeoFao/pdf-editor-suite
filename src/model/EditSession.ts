@@ -1,8 +1,9 @@
 import { PdfError } from '../engine/errores';
-import type { PdfEngine, DocHandle, TextRun, CharBox } from '../engine/PdfEngine';
+import type { PdfEngine, DocHandle, TextRun, CharBox, RectPt } from '../engine/PdfEngine';
 import { DocumentModel } from './DocumentModel';
 import type { PageModel } from './types';
 import { contarGetPageText } from '../diagnostico';
+import { cajaVisible } from '../texto/visibilidad';
 
 /**
  * Sesión de edición: une motor + documento abierto + modelo, y sabe
@@ -86,18 +87,27 @@ export class EditSession {
     const page = this.model.pages[pageIndex];
     if (!page) return [];
     if (!this.loadedText.has(pageIndex)) {
-      page.runs = this.engine.getPageText(this.doc, pageIndex);
+      page.runs = this.soloVisibles(pageIndex, this.engine.getPageText(this.doc, pageIndex));
       this.loadedText.add(pageIndex);
       contarGetPageText();
     }
     return page.runs;
   }
 
+  /**
+   * E-123: descarta del texto/caracteres ofrecidos los que quedan fuera de la caja visible (CropBox). No toca el PDF.
+   * Los `runId` no cambian (son el índice del objeto en la página), así que lo demás sigue direccionable igual.
+   */
+  private soloVisibles<T extends { boxPt: RectPt }>(pageIndex: number, items: T[]): T[] {
+    const v = this.engine.pageBox(this.doc, pageIndex);
+    return items.filter((it) => cajaVisible(it.boxPt, v));
+  }
+
   /** Caracteres de la página con su caja (selección de texto), cargados del motor la primera vez y cacheados. */
   ensureChars(pageIndex: number): CharBox[] {
     if (!this.model.pages[pageIndex]) return [];
     let c = this.chars.get(pageIndex);
-    if (!c) { c = this.engine.getCharBoxes(this.doc, pageIndex); this.chars.set(pageIndex, c); }
+    if (!c) { c = this.soloVisibles(pageIndex, this.engine.getCharBoxes(this.doc, pageIndex)); this.chars.set(pageIndex, c); }
     return c;
   }
 
@@ -131,7 +141,7 @@ export class EditSession {
       origenPt: this.engine.pageBox(this.doc, pageIndex).origenPt,
       userUnit: this.engine.userUnit(this.doc, pageIndex),
       rotation: this.engine.pageRotation(this.doc, pageIndex),
-      runs: this.engine.getPageText(this.doc, pageIndex)
+      runs: this.soloVisibles(pageIndex, this.engine.getPageText(this.doc, pageIndex))
     };
     this.loadedText.add(pageIndex);
     this.chars.delete(pageIndex);
