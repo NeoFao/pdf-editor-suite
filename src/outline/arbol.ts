@@ -10,7 +10,7 @@ import { OUTLINE_MAX_DEPTH, OUTLINE_MAX_NODES } from '../engine/cotasOutline';
 export type Ruta = number[];
 
 export function clonar(items: OutlineItem[]): OutlineItem[] {
-  return items.map((i) => ({ title: i.title, pageIndex: i.pageIndex, children: clonar(i.children), ...(i.accion ? { accion: { ...i.accion } } : {}) }));
+  return items.map((i) => ({ title: i.title, pageIndex: i.pageIndex, ...(i.yPt !== undefined ? { yPt: i.yPt } : {}), children: clonar(i.children), ...(i.accion ? { accion: { ...i.accion } } : {}) }));
 }
 
 export function contarNodos(items: OutlineItem[]): number {
@@ -97,6 +97,7 @@ export function cambiarDestino(items: OutlineItem[], ruta: Ruta, pageIndex: numb
   const n = obtener(copia, ruta);
   if (!n) return null;
   n.pageIndex = pageIndex;
+  delete n.yPt; // la altura era de la página anterior (E-114)
   delete n.accion; // reapuntar a una página sustituye la acción (p. ej. una URI) a petición explícita del usuario
   return copia;
 }
@@ -169,7 +170,7 @@ export function sinPaginaBorrada(items: OutlineItem[], pageIndex: number): Outli
         continue;
       }
       const destino = i.pageIndex !== null && i.pageIndex > pageIndex ? i.pageIndex - 1 : i.pageIndex;
-      salida.push({ title: i.title, pageIndex: destino, children: hijos, ...(i.accion ? { accion: { ...i.accion } } : {}) });
+      salida.push({ title: i.title, pageIndex: destino, ...(i.yPt !== undefined ? { yPt: i.yPt } : {}), children: hijos, ...(i.accion ? { accion: { ...i.accion } } : {}) });
     }
     return salida;
   };
