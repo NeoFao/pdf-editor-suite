@@ -35,6 +35,19 @@ function sinNul(s: string): { texto: string; nulos: number } {
   return { texto: partes.join(''), nulos: partes.length - 1 };
 }
 
+/** U+0080..U+009F en windows-1252 (los huecos 81, 8D, 8F, 90, 9D quedan como el control C1, igual que el estándar WHATWG). */
+const CP1252_ALTO = '€‚ƒ„…†‡ˆ‰Š‹ŒŽ‘’“”•–—˜™š›œžŸ';
+
+/** windows-1252 con tabla propia: no depende de que el ICU de `TextDecoder` (Node reducido) la incluya. */
+function decodificarCp1252(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 8192) {
+    const trozo = bytes.subarray(i, i + 8192);
+    out += String.fromCharCode(...Array.from(trozo, (b) => (b >= 0x80 && b <= 0x9f ? CP1252_ALTO.charCodeAt(b - 0x80) : b)));
+  }
+  return out;
+}
+
 /** Decodifica el contenido de un fichero de texto: BOM (UTF-8/16LE/16BE) → UTF-16 sin BOM → UTF-8 estricto → windows-1252. */
 export function decodificarTexto(bytes: Uint8Array): TextoDecodificado {
   let codificacion: TextoDecodificado['codificacion'];
@@ -62,7 +75,7 @@ export function decodificarTexto(bytes: Uint8Array): TextoDecodificado {
       } catch {
         codificacion = 'windows-1252';
         supuesta = true;
-        texto = new TextDecoder('windows-1252').decode(bytes);
+        texto = decodificarCp1252(bytes);
       }
     }
   }
