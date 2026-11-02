@@ -3632,6 +3632,38 @@ de código fiable.
 
 **Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
 
+---
+
+### E-120 · Word/Markdown → PDF: todo carácter fuera de WinAnsi salía como `ÿ` SIN aviso, y un NUL colgaba la conversión
+
+**Síntoma.** Polaco (Ł ą č), cirílico, griego, CJK, emoji, flechas y símbolos matemáticos salían como `ÿ` (`advertencias=[]`): un documento ruso, griego o chino quedaba ilegible sin que nadie lo supiera. Además un `U+0000` en el texto hacía lanzar `RuntimeError: unreachable` al motor (WASM muerto) y la app se quedaba en «Convirtiendo…» (`App.openFile` solo capturaba `DocxError`); con el NUL dentro de una línea se truncaba el resto.
+
+**Causa raíz.** Las 14 fuentes estándar solo dibujan lo que tienen y `FPDFText_SetText` codifica lo que no encuentra como el código 0xFF (`ÿ`). Nadie clasificaba los caracteres antes de escribirlos: ni el maquetador ni los conversores sabían qué fuente podía dibujar cada uno, y los controles C0 llegaban hasta el motor.
+
+**Arreglo.** Punto único `src/convert/codificacion.ts` (`CodificadorTexto`), usado por ambos conversores para medir (`medir`) y para escribir (`prepararTrazos`). Cada carácter va por una sola vía, con prioridad WinAnsi > Symbol > ZapfDingbats:
+- WinAnsi (ASCII, Latin-1 y extras de Windows-1252): la fuente del estilo.
+- `Symbol`: griego sin tilde, flechas, operadores y símbolos matemáticos (Δ, Ω y μ con el alias de código que Symbol sí tiene). `ZapfDingbats`: ✓ ✔ ✗ ★ ❤ ✂... El trazo se parte por fuente y la X de cada tramo avanza con su anchura real.
+- Sin glifo en ninguna: se dibuja `?` y se emite el aviso `omitido` `caracteresSinFuente` (únicos, hasta 20, con `U+XXXX` y número de apariciones). El texto original va en `/Span <</ActualText>>` (UTF-8 con BOM, PDF 2.0).
+- Controles (NUL, resto de C0, DEL, C1; se conservan tab y salto de línea): se eliminan antes del motor con aviso `caracteresControl`. `escribirTexto` rechaza además cualquier control con un error recuperable. Espacios Unicode (nbsp, em-space...) pasan a espacio; invisibles (ZWSP, guion blando, selectores de variación) se quitan; ligaduras ﬁ ﬂ se expanden; NFD se recompone a NFC.
+- `App.openFile`: cualquier fallo de conversión termina con «No se pudo convertir…» en `#status`.
+Las tablas de glifos se midieron en PDFium (viaje de ida y vuelta por fuente), no se escribieron de memoria.
+
+**Cómo se detecta ahora.** `tests/unit/codificacion-conversor.test.ts` (mapeo WinAnsi/Symbol/Dingbats/sin glifo, controles, avisos), `tests/unit/conversor-caracteres-fuera-winansi.test.ts` (motor real, Word y Markdown con polaco, griego, cirílico y emoji: sin `ÿ`, griego con glifo Symbol, aviso exacto, `/ActualText`, NUL sin colgar), `tests/e2e/next/conversion-error-motor.spec.ts` (error del motor → mensaje, no «Convirtiendo…»).
+
+**Límites.** Griego con tilde (ά), Latin Extendido-A, cirílico, CJK, hebreo, árabe y emoji NO tienen glifo: salen como `?` en el PDF visible. PDFium devuelve el `/ActualText` al extraer texto salvo para caracteres fuera del BMP (emoji); otros lectores solo lo usan si entienden cadenas UTF-8 de PDF 2.0. Cobertura real exigiría incrustar una fuente (ver el spike en `docs/superpowers/spikes/2026-11-02-fuentes-cobertura-unicode.md`, no implementado). Unifica la ruta de Markdown de E-119 (sustitución por `?` y aviso `aproximado` dentro de `markdown/layout.ts`): ahora es una sola ruta para Word y Markdown y un solo aviso, `caracteresSinFuente`, de tipo `omitido`.
+### E-121 · Convertir un documento largo (Markdown o Word → PDF) costaba O(páginas²): 295 s con 1500 páginas
+
+**Síntoma.** QA de conversores (A4/M6): Markdown con 20000 párrafos (1500 páginas) 295 s y Word con 4000 párrafos 18 s, con el hilo principal bloqueado. Medido en el motor real (Node), Markdown 4000 párrafos (300 páginas): 14,1 s; Word 4000: 13,5 s. Por página, `applyPageOps` pasaba de ~10 ms con 8 páginas a ~160 ms con 600: el coste de escribir UNA página crecía con las páginas ya escritas del documento.
+
+**Causa raíz.** Los dos conversores creaban el documento con TODAS las páginas en blanco y aplicaban el lote de cada página (`applyPageOps`) sobre él. En PDFium, `FPDFPage_GenerateContent` de una página con texto se encarece con lo ya generado en el documento (aislado: con rectángulos el coste es plano; con texto crece ~linealmente con las páginas escritas; un documento nuevo de una página tarda ~5 ms siempre). Cada objeto de texto además deja su propio diccionario de fuente en el resultado, con o sin handle de fuente compartido (probado con `FPDFText_LoadStandardFont` + `CreateTextObj`: sin efecto, descartado). No es `importPages` ni `measureText`. El mecanismo interno exacto de PDFium no se localizó; la solución evita la condición que lo dispara, y el test cuenta esa condición.
+
+**Arreglo.** `PdfEngine.buildDocumentFromPages(paginas, alProgreso?)`: cada página (tamaño propio + sus ops) se escribe con `applyPageOps` en un documento efímero de UNA página, se guarda y se importa al resultado; las páginas sin ops reutilizan la página en blanco de su tamaño. Los dos conversores lo usan en lugar de «blancas + bucle de `applyPageOps`». Cede el hilo con `setTimeout(0)` como mucho cada ~50 ms de trabajo continuo (la interfaz puede pintar y no parece colgada); el parámetro `alProgreso` queda disponible, pero la UI de conversión aún no lo muestra (propuesto). El resultado es el mismo: se comparó antes y después en 24 documentos (Markdown de 300 secciones y los 22 `.docx` de los fixtures) texto, fuente, tamaño, caja y `runId` de cada run, imágenes, enlaces, tamaño de página y avisos, sin diferencia, y los bytes del PDF de los documentos largos son idénticos.
+
+**Medido después** (misma máquina, Node, información y no test): Markdown 100/1000/4000 párrafos 285/1858/14123 ms → 223/1762/4498 ms; Word 183/1338/13545 ms → 186/1003/4480 ms. Lineal desde entonces (el resto es maquetación y medición).
+
+**Cómo se detecta ahora.** `tests/unit/conversores-lineal.test.ts` (Markdown y Word, motor real, sin reloj, E-040): espía `applyPageOps` y suma, en cada llamada, las páginas del documento sobre el que se aplica; con 4× párrafos la suma debe crecer menos de 6× (antes del arreglo: 14× y 15×). `tests/unit/PdfiumEngine.buildDocument.test.ts`: mismas páginas, textos, posiciones y enlaces que la ruta antigua, con tamaños mixtos y páginas sin ops. Sin regla guard: depende de qué documento recibe la llamada, no de un patrón léxico.
+
+**Límites.** Quien aplique ops sobre un documento ya grande (editar un PDF abierto) sigue pagando el coste de PDFium; esto cubre la construcción desde cero de los conversores. Un documento de miles de páginas sigue ocupando el hilo principal en bloques de ~50 ms (no en un bloque único), sin cancelación.
 ### E-123 · Insertar texto en una página girada lo dejaba vertical o boca abajo, y el texto recortado por la CropBox seguía como línea editable
 
 **Síntoma.** (D2) Con «Insertar texto» en una página `/Rotate` 90 o 270 el texto salía vertical, y con 180 boca abajo, aunque el origen sí caía en

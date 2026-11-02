@@ -236,6 +236,12 @@ export interface InsertTextSpec {
    * `removeMarkedObjects`). `valor` es p. ej. `Encabezado` o `MarcaAgua`.
    */
   marca?: string;
+  /**
+   * Texto real que representa este objeto cuando lo dibujado es un sustituto (el marcador `?` de un carácter sin glifo,
+   * E-120): se emite como `/Span <</ActualText (...)>> BDC`. Va como texto UTF-8 con BOM (PDF 2.0); los lectores que solo
+   * entienden PDF 1.x lo ignoran. PDFium sí lo respeta al extraer texto (`getPageText` devuelve el original, no el `?`).
+   */
+  actualText?: string;
 }
 
 /**
@@ -639,6 +645,21 @@ export interface PdfEngine {
    * orden.
    */
   applyPageOps(doc: DocHandle, pageIndex: number, ops: PageOp[]): PageOpResult[];
+  /**
+   * Construye un documento nuevo de N páginas (tamaño propio en puntos PDF) con las
+   * operaciones de cada una ya aplicadas (E-121). Es la ruta de los conversores
+   * (Markdown/Word → PDF): cada página se escribe con `applyPageOps` en un documento
+   * de UNA sola página y se importa al resultado. Aplicar las ops sobre un documento
+   * con todas las páginas costaba O(páginas²) (en PDFium, cada `GenerateContent` de
+   * texto se encarece con lo ya escrito en el documento). El resultado es el mismo
+   * (texto, posiciones, enlaces, imágenes). Cede el hilo cada cierto número de
+   * páginas e informa del avance. Devuelve el DocHandle (hay que cerrarlo).
+   */
+  buildDocumentFromPages(
+    pages: { widthPt: number; heightPt: number; ops: PageOp[] }[],
+    alProgreso?: (hechas: number, total: number) => void
+  ): Promise<DocHandle>;
+
   /**
    * Elimina de la página SOLO los objetos marcados con `/Artifact <</PDFEditor …>>`
    * (ver `InsertTextSpec.marca`). Con `valor`, solo los de ese valor (p. ej. 'MarcaAgua');
