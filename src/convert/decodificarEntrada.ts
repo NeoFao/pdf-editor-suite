@@ -10,8 +10,6 @@ export interface TextoDecodificado {
   codificacion: 'utf-8' | 'utf-16le' | 'utf-16be' | 'windows-1252';
   /** `true` si la codificación NO venía declarada (BOM) ni era UTF-8 válido: se dedujo y el texto puede no ser el original. */
   supuesta: boolean;
-  /** Nº de U+0000 descartados (el motor trunca el texto en un NUL). */
-  nulos: number;
 }
 
 /** Cuántos bytes se examinan para detectar UTF-16 sin BOM. */
@@ -27,12 +25,6 @@ function utf16SinBom(bytes: Uint8Array): 'le' | 'be' | null {
   if (cerosImpares >= pares * 0.3 && cerosPares <= pares * 0.05) return 'le';
   if (cerosPares >= pares * 0.3 && cerosImpares <= pares * 0.05) return 'be';
   return null;
-}
-
-function sinNul(s: string): { texto: string; nulos: number } {
-  if (!s.includes('\u0000')) return { texto: s, nulos: 0 };
-  const partes = s.split('\u0000');
-  return { texto: partes.join(''), nulos: partes.length - 1 };
 }
 
 /** U+0080..U+009F en windows-1252 (los huecos 81, 8D, 8F, 90, 9D quedan como el control C1, igual que el estándar WHATWG). */
@@ -72,15 +64,16 @@ export function decodificarTexto(bytes: Uint8Array): TextoDecodificado {
       try {
         texto = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
         codificacion = 'utf-8';
-      } catch {
+      } catch (e) {
+        if (!(e instanceof TypeError)) throw e; // solo el fallo de UTF-8 estricto; cualquier otro error (p. ej. del entorno) se propaga
         codificacion = 'windows-1252';
         supuesta = true;
         texto = decodificarCp1252(bytes);
       }
     }
   }
-  const { texto: limpio, nulos } = sinNul(texto);
-  return { texto: limpio, codificacion, supuesta, nulos };
+  // Los NUL y demás controles NO se tratan aquí: los elimina y avisa `CodificadorTexto` (E-120) antes de llegar al motor.
+  return { texto, codificacion, supuesta };
 }
 
 /** Avisos que acompañan a una decodificación (vacío si UTF-8/BOM limpio). */
@@ -91,7 +84,6 @@ export function advertenciasDeCodificacion(d: TextoDecodificado): Advertencia[] 
       ? 'El archivo no está en UTF-8: se ha leído como Windows-1252 (codificación supuesta). Si ves caracteres extraños, vuelve a guardarlo como UTF-8.'
       : 'El archivo está en UTF-16 sin marca de orden (BOM): se ha leído como UTF-16 (codificación supuesta). Si ves caracteres extraños, vuelve a guardarlo como UTF-8.'));
   }
-  if (d.nulos > 0) out.push(aproximado(`Se descartaron ${d.nulos} caracteres nulos (U+0000) del texto.`));
   return out;
 }
 

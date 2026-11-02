@@ -52,13 +52,6 @@ test('Markdown en UTF-16LE SIN BOM y en cp1252: se decodifica y se avisa de la c
   expect(r.advertencias.some((a) => a.tipo === 'aproximado' && /Windows-1252/.test(a.mensaje))).toBe(true);
 }, 60_000);
 
-test('Markdown con un NUL: no se trunca ni se cuelga, y se avisa', async () => {
-  const engine = await PdfiumEngine.create();
-  const r = await new ConversorMarkdownNavegador(engine).convertir('n.md', new TextEncoder().encode('ANTES\0DESPUES\n\n\0\n'));
-  expect(await textoPdf(engine, r.pdf)).toContain('ANTESDESPUES');
-  expect(r.advertencias.some((a) => /nulos/.test(a.mensaje))).toBe(true);
-}, 60_000);
-
 function docx(cuerpo: string, extra: { nombre: string; datos: Uint8Array }[] = [], docXmlBytes?: Uint8Array): Uint8Array {
   const documentXml = `<?xml version="1.0" encoding="UTF-8"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>${cuerpo}<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
   return construirZip([

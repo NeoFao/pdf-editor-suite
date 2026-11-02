@@ -51,12 +51,6 @@ test('ASCII puro y vacío: UTF-8 sin suposición', () => {
   expect(decodificarTexto(new Uint8Array(0))).toMatchObject({ texto: '', supuesta: false });
 });
 
-test('los U+0000 sueltos se descartan y se cuentan (nunca llegan al motor)', () => {
-  const r = decodificarTexto(new TextEncoder().encode('ANTES\0DESPUES'));
-  expect(r.texto).toBe('ANTESDESPUES');
-  expect(r.nulos).toBe(1);
-});
-
 test('decodificarXml: UTF-8, UTF-16 con BOM y UTF-16 declarado sin BOM', () => {
   const xml = '<?xml version="1.0" encoding="UTF-8"?><w:t>año</w:t>';
   expect(decodificarXml(new TextEncoder().encode(xml))).toBe(xml);
