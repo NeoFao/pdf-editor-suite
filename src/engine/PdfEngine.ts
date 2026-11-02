@@ -64,6 +64,8 @@ export interface LineaParaEditar {
   runIds: readonly number[];
   tramos: readonly { runId: number; inicio: number; fin: number }[];
   text: string;
+  /** Presente si la línea no se puede reescribir con fidelidad (texto RTL, E-117): `editLine` la rechaza con `bidi-no-fiel`. */
+  aviso?: { tipo: string; mensaje: string };
 }
 
 /**
@@ -78,7 +80,7 @@ export interface LineaParaEditar {
 export type EditLineResult =
   | { ok: true; sinCambios: true }
   | { ok: true; lineaRunIdInicial: number; dxPt: number; fuenteEstandar?: string; objetosAnadidos?: number }
-  | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' | 'empty-text' | 'stale' };
+  | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' | 'empty-text' | 'stale' | 'bidi-no-fiel' };
 
 /**
  * Resultado de `setLineProps` (N1 F4). `glyph-missing`: la fuente estándar no cubre algún carácter de algún objeto (no se

@@ -1,4 +1,6 @@
 import type { RectPt, TextRun } from '../engine/PdfEngine';
+import { aproximado, type Advertencia } from '../convert/advertencia';
+import { baseDeVisual, claseDeTexto, ordenLogicoDeVisual, tieneArabe, tieneRtl } from './bidi';
 
 /**
  * «Líneas editables» (N1): agrupa los objetos de texto de una página en las líneas que ve el usuario.
@@ -14,6 +16,8 @@ import type { RectPt, TextRun } from '../engine/PdfEngine';
  *     columna entera y después la otra.
  *  2. Fusión de segmentos NO contiguos (escritores que emiten la negrita al final): C1-C3 y un hueco de −0,1 a 0,5 em.
  *  3. Dentro de la línea, el orden visual es por `u` (a lo largo del texto).
+ *  4. Texto de derecha a izquierda (E-117): `runIds` sigue en orden visual, pero `text` y `tramos` salen en orden LÓGICO
+ *     (el que se lee y se copia), aplicando el algoritmo bidi de Unicode a los objetos (`bidi.ts`).
  *
  * Unidades: pt de página SIN girar (las de PDFium). `u` = coordenada a lo largo del texto, `v` = perpendicular (línea
  * base), ambas en pt, en el marco de la dirección del objeto (θ = atan2(b, a) de su matriz). «em» = tamaño EFECTIVO
@@ -73,6 +77,16 @@ export interface LineaEditable {
   originPt: { xPt: number; yPt: number };
   /** Dirección de la línea, grados antihorarios 0..359 (E-063). */
   anguloDeg: number;
+  /**
+   * Dirección de ESCRITURA del texto (E-117): `rtl` si el párrafo va de derecha a izquierda. No confundir con `anguloDeg`
+   * (giro de la línea en la página). Con `rtl`, `runIds` va en orden visual y `tramos` en orden lógico.
+   */
+  direccion: 'ltr' | 'rtl';
+  /**
+   * Línea que NO se puede reescribir en su sitio con fidelidad (E-117): árabe (formas contextuales), varios objetos con
+   * texto RTL o RTL girado. Sigue siendo seleccionable, copiable y buscable; la capa de texto no la abre para editar.
+   */
+  aviso?: Advertencia;
 }
 
 /** Objeto de texto ya medido en el marco de su propia dirección. */
@@ -216,17 +230,45 @@ function mismoColor(a: [number, number, number, number], b: [number, number, num
   return a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
 }
 
+/** Motivo por el que una línea con texto RTL no se reescribe en su sitio, o `undefined` si sí se puede (un objeto hebreo horizontal). */
+function avisoRtl(texto: string, objetos: number, anguloDeg: number, ordenOk: boolean): Advertencia | undefined {
+  if (tieneArabe(texto)) {
+    return aproximado('Esta línea está en árabe: sus letras cambian de forma según las vecinas y no se pueden reescribir aquí sin deformarlas. Se puede seleccionar, copiar y buscar.');
+  }
+  if (objetos > 1 || !ordenOk) {
+    return aproximado('Esta línea mezcla texto de derecha a izquierda con otros tramos y no se puede reescribir aquí con fidelidad. Se puede seleccionar, copiar y buscar.');
+  }
+  if (anguloDeg % 360 !== 0) {
+    return aproximado('Esta línea de derecha a izquierda está girada y no se puede reescribir aquí con fidelidad. Se puede seleccionar, copiar y buscar.');
+  }
+  return undefined;
+}
+
 function construirLinea(objs: Obj[], pageIndex: number): LineaEditable {
   const ordenados = objs.slice().sort((x, y) => x.uIni - y.uIni);
-  const runIds: number[] = [];
+  const hayRtl = ordenados.some((o) => tieneRtl(o.texto));
+  // E-117: texto RTL → los objetos se leen en orden LÓGICO (inversa de L2 sobre el orden visual); si no se puede verificar,
+  // se conserva el visual y la línea queda con aviso.
+  let logicos = ordenados;
+  let direccion: 'ltr' | 'rtl' = 'ltr';
+  let ordenOk = true;
+  if (hayRtl) {
+    const clases = ordenados.map((o) => claseDeTexto(o.texto));
+    const base = baseDeVisual(clases);
+    direccion = base === 1 ? 'rtl' : 'ltr';
+    const orden = ordenLogicoDeVisual(clases, base);
+    if (orden) logicos = orden.map((v) => ordenados[v]!);
+    else ordenOk = false;
+  }
+  const runIds: number[] = ordenados.map((o) => o.run.runId);
   const tramos: TramoObjeto[] = [];
   const estilos: TramoEstilo[] = [];
   let text = '';
-  for (const o of ordenados) {
-    if (o.run.espacioVirtualAntes && text !== '' && !/\s$/.test(text) && !/^\s/.test(o.texto)) text += ' ';
+  for (const o of logicos) {
+    // En RTL los espacios están escritos en los propios objetos: no se inventan huecos entre ellos.
+    if (!hayRtl && o.run.espacioVirtualAntes && text !== '' && !/\s$/.test(text) && !/^\s/.test(o.texto)) text += ' ';
     const inicio = text.length;
     text += o.texto;
-    runIds.push(o.run.runId);
     tramos.push({ runId: o.run.runId, inicio, fin: text.length });
     const ultimo = estilos[estilos.length - 1];
     if (ultimo && ultimo.fontName === o.run.fontName && ultimo.sizeEfectivoPt === o.run.sizeEfectivoPt && mismoColor(ultimo.color, o.run.color)) {
@@ -237,6 +279,7 @@ function construirLinea(objs: Obj[], pageIndex: number): LineaEditable {
   }
   const primero = ordenados[0]!.run;
   const anguloDeg = primero.anguloDeg ?? (((Math.round(ordenados[0]!.ang) % 360) + 360) % 360);
+  const aviso = hayRtl ? avisoRtl(text, ordenados.length, anguloDeg, ordenOk) : undefined;
   return {
     lineaId: `${pageIndex}:${runIds[0]}`,
     runIds,
@@ -245,7 +288,9 @@ function construirLinea(objs: Obj[], pageIndex: number): LineaEditable {
     text,
     boxPt: unirCajas(ordenados.map((o) => o.run)),
     originPt: { ...primero.originPt },
-    anguloDeg
+    anguloDeg,
+    direccion,
+    ...(aviso ? { aviso } : {})
   };
 }
 

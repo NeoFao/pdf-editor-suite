@@ -759,24 +759,50 @@ export class App {
     const tabs = document.createElement('div');
     tabs.className = 'sidebar-tabs';
     tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', 'Panel lateral');
     this.tabPages = this.button('Páginas', 'tab-pages', () => this.showSidebarTab('pages'));
     this.tabOutline = this.button('Marcadores', 'tab-outline', () => this.showSidebarTab('outline'));
     this.tabComments = this.button('Comentarios', 'tab-comments', () => this.showSidebarTab('comments'));
     this.tabPages.className = 'tab';
     this.tabOutline.className = 'tab';
     this.tabComments.className = 'tab';
+    // QA ronda 3: patrón WAI-ARIA de pestañas (role=tab + aria-controls al tabpanel, tabindex itinerante, flechas/Inicio/Fin).
+    const pestanasLateral: [HTMLButtonElement, 'pages' | 'outline' | 'comments', string][] = [
+      [this.tabPages, 'pages', 'thumbs'], [this.tabOutline, 'outline', 'outline-panel'], [this.tabComments, 'comments', 'comments-panel']
+    ];
+    for (const [tab, , panelId] of pestanasLateral) {
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-controls', panelId);
+    }
+    tabs.addEventListener('keydown', (e) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+      e.preventDefault();
+      const i = pestanasLateral.findIndex(([t]) => t === document.activeElement);
+      if (i < 0) return;
+      const n = pestanasLateral.length;
+      const j = e.key === 'Home' ? 0 : e.key === 'End' ? n - 1 : (i + (e.key === 'ArrowRight' ? 1 : n - 1)) % n;
+      const [destino, cual] = pestanasLateral[j]!;
+      this.showSidebarTab(cual);
+      destino.focus();
+    });
     tabs.append(this.tabPages, this.tabOutline, this.tabComments);
 
     this.thumbsEl = document.createElement('div');
     this.thumbsEl.id = 'thumbs';
+    this.thumbsEl.setAttribute('role', 'tabpanel');
+    this.thumbsEl.setAttribute('aria-labelledby', 'tab-pages');
 
     this.outlineEl = document.createElement('div');
     this.outlineEl.id = 'outline-panel';
     this.outlineEl.style.display = 'none';
+    this.outlineEl.setAttribute('role', 'tabpanel');
+    this.outlineEl.setAttribute('aria-labelledby', 'tab-outline');
 
     this.commentsEl = document.createElement('div');
     this.commentsEl.id = 'comments-panel';
     this.commentsEl.style.display = 'none';
+    this.commentsEl.setAttribute('role', 'tabpanel');
+    this.commentsEl.setAttribute('aria-labelledby', 'tab-comments');
     this.comentarios = new ComentariosPanel(this.commentsEl, {
       totalPaginas: () => this.session?.model.pages.length ?? 0,
       leerPagina: (i) => (this.session ? this.session.engine.getComments(this.session.doc, i) : []),
@@ -1236,6 +1262,7 @@ export class App {
     this.scale = 1;
     this.viewer = new Viewer(this.viewerEl, this.session, {
       onEdit: (req) => this.handleEdit(req),
+      onAviso: (mensaje) => this.setStatus(mensaje),
       onSelect: (pageIndex, runId) => {
         this.selection = { pageIndex, runId };
         this.appliedFontLabel = null;
@@ -1464,7 +1491,9 @@ export class App {
         ? 'Una línea no puede quedar vacía; selecciónala y usa Borrar para quitarla.'
         : cmd.razon === 'stale'
           ? 'La línea cambió mientras se editaba; vuelve a intentarlo.'
-          : 'No se puede editar ese elemento.');
+          : cmd.razon === 'bidi-no-fiel'
+            ? 'Esa línea de derecha a izquierda no se puede reescribir con fidelidad; edición no aplicada.'
+            : 'No se puede editar ese elemento.');
   }
 
   private async handleInsert(pageIndex: number, at: PtPoint): Promise<void> {
@@ -2357,6 +2386,9 @@ export class App {
     this.tabPages.setAttribute('aria-selected', String(which === 'pages'));
     this.tabOutline.setAttribute('aria-selected', String(which === 'outline'));
     this.tabComments.setAttribute('aria-selected', String(which === 'comments'));
+    this.tabPages.tabIndex = which === 'pages' ? 0 : -1;
+    this.tabOutline.tabIndex = which === 'outline' ? 0 : -1;
+    this.tabComments.tabIndex = which === 'comments' ? 0 : -1;
     // Lectura perezosa: el panel solo toca el motor mientras está a la vista.
     this.comentarios.setVisible(which === 'comments');
   }
