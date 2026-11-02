@@ -3607,3 +3607,15 @@ de código fiable.
 **mailto.** Se analiza decodificado (lo que lee el usuario): bidi/control se buscan ahí (`%E2%80%AE` ya no pasa), todo lo mostrado, `dominio` incluido, pasa por `escaparPeligrosos`, cada dominio debe ser un hostname válido (punycode si IDN) o el enlace se bloquea sin "Abrir", y varias direcciones o `?cc=`/`?bcc=`/`?body=` se muestran enteros y nunca omiten la pregunta.
 
 **Límites.** La casilla vale para la sesión y por host exacto (`a.test` no cubre `x.a.test`). El dominio mostrado de un mailto es el de la dirección. Nada de esto envía datos del documento a ningún sitio: solo se abre la URL que el usuario aprueba.
+
+### E-119 · Markdown → PDF: tablas, imágenes, saltos duros, enlaces internos y emoji se perdían o salían corrompidos sin aviso
+
+**Síntoma.** Auditado con un corpus propio (`tests/fixtures/corpus-markdown.md`) frente a CommonMark/GFM. Perdido o mal en silencio: tablas GFM (salían como líneas de `|---|`), imágenes (`!` + enlace), saltos duros (`  ` y `\`) y encabezados setext (`===` literal), notas al pie `[^1]`, escapes `\*`, entidades `&amp;`, tachado `~~`, enlaces de referencia/automáticos/URL desnuda, `***x***` (asteriscos sueltos), `snake_case` en cursiva, listas sueltas (partidas en varias listas), líneas de continuación de ítem (párrafos aparte), código sangrado, URL largas y líneas de código fuera del margen, y la coma tras una negrita separada por un espacio. Emoji y CJK salían como `ÿ` (el motor trunca el carácter) sin ningún aviso. Los enlaces `#titulo` se descartaban con un aviso y no había marcadores (outline).
+
+**Causa raíz.** El parser cubría solo el subconjunto del PR #60 y el maquetador asumía que todo texto cabe en Helvetica; no existía un camino de «no representable» que avisara. Las palabras de nodos distintos se unían siempre con espacio (`pegado` no se calculaba).
+
+**Arreglo.** `parse.ts` (setext, `br`, escapes, entidades, `del`, énfasis con reglas de flanqueo, enlaces con paréntesis balanceados/referencia/automáticos, imágenes, tablas, tareas, listas sueltas, continuación, código sangrado, notas); `layout.ts` (tablas con cabecera repetida, imágenes `data:` escaladas, notas al final con enlace, `trocear` de palabras largas, código partido, ids de título y resolución de `#ancla`); `limpiarTexto` sustituye lo no representable por `?` y avisa `aproximado`; HTML en línea se muestra como texto y avisa; imágenes no incrustables (remotas/relativas) muestran su alt y avisan `omitido`. `ConversorMarkdownNavegador` emite `addInternalLink` (E-106) y `setOutline` con los títulos.
+
+**Cómo se detecta ahora.** `tests/unit/markdown-parse-fidelidad.test.ts`, `markdown-layout-fidelidad.test.ts` y `ConversorMarkdownNavegador-fidelidad.test.ts` (motor real: texto, anotaciones Link con destino, outline y avisos del corpus). Vistos fallar antes del arreglo. Sin regla guard.
+
+**Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
