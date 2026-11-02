@@ -310,7 +310,7 @@ export class App {
 
     const file = document.createElement('input');
     file.type = 'file';
-    file.accept = 'application/pdf,.md,.markdown,text/markdown,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword';
+    file.accept = 'application/pdf,.md,.markdown,text/markdown,.docx,.docm,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword';
     file.id = 'file-input';
     file.addEventListener('change', () => { const f = file.files?.[0]; if (f) void this.openFile(f); });
     file.style.display = 'none';

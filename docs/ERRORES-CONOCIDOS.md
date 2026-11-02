@@ -3724,6 +3724,18 @@ desplazado y /Rotate 90): ninguna caja de la capa queda fuera de la página y el
 
 **Límites.** Una línea que solapa parcialmente la CropBox se sigue ofreciendo entera. Notas, sellos y firma no usan este camino (anotaciones/imágenes).
 **Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
+
+### E-124 · Conversores: un .md en UTF-16/cp1252 salía «convertido con éxito» con el contenido destruido, y una palabra más ancha que la línea se salía de la página (o pisaba la celda vecina)
+
+**Síntoma.** QA de conversores (`.orquestacion/qa-conversores-informe.md`, A1/A3/A5). (1) Un `.md` guardado en UTF-16LE con BOM (lo que escribe `>` en PowerShell 5.1) o en cp1252 se leía siempre como UTF-8 tolerante: `ÿ#`, `Tÿtulo`, `Aÿo`, y la UI decía «Convertido desde Markdown» sin ningún aviso. (2) En Word, una URL de 120 caracteres, una palabra larga con sangría o `Responsabilidad` en una celda de 50 pt se salían del margen o pisaban la celda vecina sin aviso (Markdown ya lo resolvía en E-119 con un `trocear` propio).
+
+**Causa raíz.** (1) `new TextDecoder('utf-8', { fatal: false })` convierte cualquier byte inválido en U+FFFD y un éxito silencioso con basura es indistinguible de un éxito real. (2) El motor de líneas común (`wrapAtoms`/`tomarLinea`) no parte palabras: una que no cabe ni en una línea vacía ocupa su línea y se sale; la solución de Markdown vivía en `markdown/layout.ts` y Word nunca la usó.
+
+**Arreglo.** `src/convert/decodificarEntrada.ts`: `decodificarTexto` (BOM UTF-8/16LE/16BE → UTF-16 sin BOM por NUL alternos → UTF-8 estricto `fatal: true` → windows-1252) con `supuesta` + aviso `aproximado` cuando hay que suponer; `decodificarXml` para las partes del .docx (UTF-8 o UTF-16 con BOM/declaración, como exige la especificación). `partirPalabrasLargas` en `flujo/layout.ts` (búsqueda exponencial+binaria, por puntos de código): lo usan `wrapAtoms` y `parrafoFlex` (por tanto párrafos, listas, tabulaciones y celdas de Word) y Markdown (que borra su copia). `.docm` se acepta, se convierte y avisa `omitido` de las macros (`vbaProject.bin`).
+
+**Cómo se detecta ahora.** `tests/unit/convert-decodificarEntrada.test.ts`, `flujo-partir-palabras.test.ts` y `conversores-qa-altos.test.ts` (motor real: UTF-16 con/sin BOM, cp1252, NUL, URL de 120 caracteres, código de 150, celdas de 50 pt con cajas de carácter dentro de su celda, XML en UTF-16, `.docm`). Vistos fallar antes del arreglo. Sin regla guard.
+
+**Límites.** La decodificación cp1252 es una suposición avisada, no una garantía. Pendiente del informe: M5 (falso positivo de zip-bomb con imagen muy compresible, toca la política de seguridad de `zip.ts`/E-042), M6/A4 (rendimiento, `applyPageOps`, otro PR).
 **Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
 
 ### E-127 · Accesibilidad ronda 3 (QA transversal): diálogo de firma sin semántica, líneas sin foco visible, foco perdido, pestañas sin roles, barra recortada a 375 px
