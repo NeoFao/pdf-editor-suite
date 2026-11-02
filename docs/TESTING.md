@@ -301,3 +301,20 @@ importar `@playwright/test`/`playwright` en cualquier fichero de `tests/unit/`.
 
 El paso 1 no es opcional. Un test escrito después del arreglo no demuestra nada:
 no sabes si detecta el fallo o si simplemente pasa siempre.
+
+### Si tu PR choca solo en `docs/ERRORES-CONOCIDOS.md`
+
+Todos los PR añaden su entrada al final del registro, así que cada fusión de
+otro PR deja al resto en conflicto por ese fichero. `.gitattributes` lo marca
+con `merge=union` (driver integrado de git: conserva las líneas de ambos lados).
+
+- Procedimiento: `git fetch origin && git merge origin/main` **en local**. El
+  registro se resuelve solo; después renumera tu `E-0NN` si coincide con uno
+  recién fusionado (la regla `registro-sin-duplicados` lo detecta, y también
+  números fuera de orden o encabezados sin cuerpo) y empuja.
+- Límite: GitHub no documenta que respete drivers de fusión de `.gitattributes`
+  al calcular `mergeable` ni en el botón web (no se encontró nada en
+  docs.github.com). Asume que el PR seguirá figurando "en conflicto" en GitHub
+  hasta que fusiones `origin/main` en local y empujes; el beneficio es para esa
+  fusión local, no para el botón de la web.
+- Cubierto por `scripts/registro-merge-union.test.mjs`.
