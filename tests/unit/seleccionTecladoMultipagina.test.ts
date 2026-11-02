@@ -121,3 +121,11 @@ test('SeleccionTexto.extender: Mayús+← cruza hacia atrás de p2 a p1 (foco an
   expect(s.paginaFoco).toBe(0);
   expect(s.texto()).toBe('s\nBeta uno');
 });
+
+test('SeleccionTexto.extender: Mayús+↓ repetido conserva la columna aunque el foco pase por el borde entre páginas', () => {
+  const s = seleccion();
+  // Desde el inicio de "Alfa tres" (columna 0): cada ↓ cae en la columna 0 de la línea siguiente, también tras
+  // el borde p1/p2, donde el final de p1 y el principio de p2 son la misma posición pero NO la misma columna.
+  for (let i = 0; i < 5; i++) s.extender(0, CAJA_ULT, 'linea', 1);
+  expect(s.texto()).toBe('Alfa tres\nBeta uno\nBeta dos\nBeta tres\nGamma uno');
+});

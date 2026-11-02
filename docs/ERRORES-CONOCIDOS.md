@@ -3560,7 +3560,9 @@ foco. No se podía copiar ni marcar con teclado un texto que cruzase páginas, a
 principio de la N+1 son la MISMA posición (no hay carácter visible entre ambos): sin normalizarlas, la selección vacía y el foco "en p2" daban
 rangos que incluían un carácter de más o de menos; (2) un rango de UN carácter no dice si el foco está detrás o delante del ancla (ya perdía el ancla
 al retroceder, también en una sola página); (3) la página destino puede no estar pintada: al pintarla por primera vez `renderPage` descartaba la
-selección por ser extremo (E-057), cuando esa regla solo vale para repintar una página que ya tenía DOM.
+selección por ser extremo (E-057), cuando esa regla solo vale para repintar una página que ya tenía DOM; (4) normalizar el borde entre páginas
+perdía la columna de Mayús+↓ (el final de p1 y el principio de p2 son el mismo rango pero distinta x): el rango guarda también el caret exacto del
+foco (`focoCaret`). Lo destapó el E2E en CI (copiaba «Gamma» en vez de «Gamma uno»), no la revisión del código.
 
 **Arreglo.** Lógica pura en `src/texto/seleccionMultipagina.ts`: `moverFoco` (carácter: al agotar la página salta sobre el primer/último carácter
 visible de la contigua con texto; línea: desde la última/primera línea cae en la primera/última de la contigua con la misma x en px CSS a escala 1,

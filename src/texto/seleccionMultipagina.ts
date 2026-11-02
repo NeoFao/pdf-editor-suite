@@ -23,6 +23,8 @@ export interface RangoMultipagina {
   paginaAncla: number; ancla: number; paginaFoco: number; foco: number;
   /** Con UN solo carácter el rango no dice si el foco quedó detrás o delante del ancla: lo guarda el teclado (la selección del ratón no lo necesita). */
   inversa?: boolean;
+  /** Caret EXACTO del foco tras Mayús+flecha: el final de la página N y el principio de la N+1 son la misma posición para el rango pero no para la columna de ↓/↑ (E-115). */
+  focoCaret?: PosTexto;
 }
 
 const cmp = (a: PosTexto, b: PosTexto): number => (a.pagina !== b.pagina ? a.pagina - b.pagina : a.caret - b.caret);

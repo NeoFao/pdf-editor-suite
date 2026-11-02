@@ -166,6 +166,7 @@ export class SeleccionTexto {
     const s = this.sel;
     if (s && this.incluye(pageIndex)) {
       ({ ancla, foco } = caretsDeRango(s));
+      if (s.focoCaret) foco = s.focoCaret;
     } else {
       const c0 = caretInicioDe(this.deps.chars(pageIndex), cajaLinea, dir > 0 ? 'inicio' : 'final');
       if (c0 < 0) return false;
@@ -173,8 +174,10 @@ export class SeleccionTexto {
       this.deps.alEmpezar();
       ancla = foco = { pagina: pageIndex, caret: c0 };
     }
-    const r = rangoDeCarets(ctx, ancla, moverFoco(ctx, foco, mov, dir));
+    const nuevo = moverFoco(ctx, foco, mov, dir);
+    const r = rangoDeCarets(ctx, ancla, nuevo);
     if (!r) { this.limpiar(); return true; }
+    r.focoCaret = nuevo;
     const previa = this.sel;
     this.sel = r;
     this.repintarTodo(previa);
