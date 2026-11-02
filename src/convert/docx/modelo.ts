@@ -57,9 +57,8 @@ import type { PosFlotanteH, PosFlotanteV, AjusteFlotante, CapaFlotante } from '.
  * - Fase 2b: `w:keepNext`/`w:keepLines` se respetan (un título mantiene con el
  *   párrafo siguiente aunque su estilo no lo diga, salvo `keepNext w:val="0"`);
  *   sin control de viudas y huérfanas de línea suelta (`w:widowControl`).
- * - Los saltos de columna (`w:br` sin `w:type` o `w:type="column"`, fuera de
- *   `w:type="page"`) se tratan como saltos de línea simples (esta fase no
- *   admite columnas).
+ * - Columnas de sección (E-118, `w:cols`) y saltos de columna (`w:br w:type="column"`): ver `ColumnasDocx`. Un salto de columna
+ *   dentro de una celda de tabla se trata como salto de línea (con aviso).
  * - Tablas: bordes POR LADO de tabla (`w:tblBorders`, o los de su `w:tblStyle`)
  *   y por celda (`w:tcBorders`, fase 2b; precedencia celda > tabla; `w:sz` en
  *   octavos de punto; estilos no continuos se dibujan continuos con aviso);
@@ -143,6 +142,8 @@ export type ParteParrafo =
   | { tipo: 'tab'; ptab?: { alineacion: 'left' | 'center' | 'right'; leader: LiderTab }; paradas?: ParadaTab[] }
   | { tipo: 'saltoLinea' }
   | { tipo: 'saltoPagina' }
+  /** `w:br w:type="column"` (E-118): lo que sigue empieza en la columna siguiente (o, sin columnas o en la última, en la página siguiente). */
+  | { tipo: 'saltoColumna' }
   /**
    * Solo dentro de una celda de tabla (E-102): arranque de un párrafo de LISTA de la celda. Lleva su marcador (el mismo cálculo y
    * los mismos contadores que un párrafo de cuerpo) y la sangría del nivel (pt PDF, desde el borde interior de la celda).
@@ -262,7 +263,15 @@ export interface ZonaPaginaModelo { default: BloqueDocx[] | null; first: BloqueD
  * (con aviso). `encabezados`/`pies` ya vienen resueltos con la herencia de la sección anterior.
  * `numeroInicial`: `w:pgNumType w:start`, o `null` si la numeración continúa.
  */
+/**
+ * Columnas de una sección (E-118, `w:cols`), en pt: `anchosPt[k]` es el ancho de la columna k y `espaciosPt[k]` el hueco entre la k y la
+ * k + 1. `separador` es `w:sep` (línea vertical entre columnas). Solo existe con 2 o más columnas.
+ */
+export interface ColumnasDocx { anchosPt: number[]; espaciosPt: number[]; separador: boolean }
+
 export interface SeccionDocx {
+  /** Columnas de la sección; ausente = una sola columna a todo el ancho. */
+  columnas?: ColumnasDocx;
   paginaAnchoPt: number; paginaAltoPt: number;
   margenSupPt: number; margenInfPt: number; margenIzqPt: number; margenDerPt: number;
   margenEncabezadoPt: number; margenPiePt: number;
@@ -793,7 +802,7 @@ const MENSAJES_PERDIDAS: [string, TipoAdvertencia, (c: number) => string][] = [
   ['desconocido', 'omitido', (c) => cuenta(c, 'Se omitió el texto de un elemento no reconocido del documento.', 'Se omitió el texto de {n} elementos no reconocidos del documento.')],
   ['ecuacion', 'omitido', (c) => cuenta(c, 'Se omitió una ecuación (aún no soportada).', 'Se omitieron {n} ecuaciones (aún no soportadas).')],
   ['sym', 'omitido', (c) => cuenta(c, 'Se omitió un símbolo especial (w:sym).', 'Se omitieron {n} símbolos especiales (w:sym).')],
-  ['saltoColumna', 'aproximado', (c) => cuenta(c, 'Un salto de columna se trató como salto de línea (sin columnas).', '{n} saltos de columna se trataron como saltos de línea (sin columnas).')],
+  ['saltoColumna', 'aproximado', (c) => cuenta(c, 'Un salto de columna dentro de una celda de tabla se trató como salto de línea.', '{n} saltos de columna dentro de celdas de tabla se trataron como saltos de línea.')],
   ['listaSinDef', 'aproximado', (c) => cuenta(c, 'Un párrafo de lista cuya numeración no está definida se maquetó sin marcador.', '{n} párrafos de lista cuya numeración no está definida se maquetaron sin marcador.')],
   ['tablaAnidada', 'aproximado', (c) => cuenta(c, 'Una tabla anidada dentro de otra se aplanó a texto (celdas separadas por tabulador).', '{n} tablas anidadas se aplanaron a texto (celdas separadas por tabulador).')],
   ['imagenEnCelda', 'omitido', (c) => cuenta(c, 'Se omitió una imagen flotante dentro de una celda de tabla (aún no soportado).', 'Se omitieron {n} imágenes flotantes dentro de celdas de tabla (aún no soportado).')],
@@ -874,8 +883,8 @@ function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, parte
     }
     else if (h.nombre === 'w:tab') partes.push({ tipo: 'tab' });
     else if (h.nombre === 'w:br') {
-      if (h.atributos['w:type'] === 'column') anotar(ctx, 'saltoColumna');
-      partes.push({ tipo: h.atributos['w:type'] === 'page' ? 'saltoPagina' : 'saltoLinea' });
+      const tipoSalto = h.atributos['w:type'];
+      partes.push({ tipo: tipoSalto === 'page' ? 'saltoPagina' : tipoSalto === 'column' ? 'saltoColumna' : 'saltoLinea' });
     }
     else if (h.nombre === 'w:cr') partes.push({ tipo: 'saltoLinea' });
     else if (h.nombre === 'w:ptab') {
@@ -1483,6 +1492,7 @@ function procesarCelda(tc: XmlElemento, ctx: Contexto): CeldaTabla {
     // Una imagen EN LÍNEA se dibuja (E-110); solo la flotante (`wp:anchor`) se omite con aviso.
     if (parte.tipo === 'imagen' && parte.flotante) { partes.splice(k, 1); anotar(ctx, 'imagenEnCelda'); }
     else if (parte.tipo === 'saltoPagina') { partes[k] = { tipo: 'saltoLinea' }; anotar(ctx, 'saltoPaginaEnCelda'); }
+    else if (parte.tipo === 'saltoColumna') { partes[k] = { tipo: 'saltoLinea' }; anotar(ctx, 'saltoColumna'); }
   }
   if (vMerge === 'continue' && partes.some((x) => x.tipo === 'texto')) { anotar(ctx, 'vMergeConTexto'); partes.length = 0; }
 
@@ -1558,15 +1568,51 @@ function leerGeometriaPagina(sectPr: XmlElemento | null): { anchoPt: number; alt
   return { anchoPt, altoPt, margenSup, margenInf, margenIzq, margenDer, margenCab, margenPie };
 }
 
+/** Un valor de atributo booleano de OOXML (`1`, `true`, `on`...) en falso. */
+function atributoFalso(v: string | undefined): boolean { return v === '0' || v === 'false' || v === 'off'; }
+
+/** Anchura mínima razonable de una columna, en pt: por debajo, la distribución se descarta (una sola columna) para no producir columnas inservibles. */
+const ANCHO_MINIMO_COLUMNA_PT = 18;
+
+/**
+ * `w:cols` de una sección (E-118): `w:num` columnas iguales separadas `w:space` (720 twips por defecto), o anchos propios con
+ * `w:equalWidth="0"` y un `w:col w:w w:space` por columna (el `space` de cada `w:col` es el hueco que sigue a esa columna). Los anchos
+ * desiguales que no caben en el área de texto se escalan proporcionalmente. `undefined` = una sola columna.
+ */
+function leerColumnas(sectPr: XmlElemento | null, anchoUtilPt: number): ColumnasDocx | undefined {
+  const cols = sectPr ? primerHijo(sectPr, 'w:cols') : null;
+  if (!cols) return undefined;
+  const hijos = cols.hijos.filter((h): h is XmlElemento => h.tipo === 'elemento' && h.nombre === 'w:col');
+  const eq = cols.atributos['w:equalWidth'];
+  const espacioComun = cols.atributos['w:space'] !== undefined && Number.isFinite(Number(cols.atributos['w:space'])) ? twipsAPt(Number(cols.atributos['w:space'])) : 36;
+  const sepAttr = cols.atributos['w:sep'];
+  const separador = sepAttr !== undefined && !atributoFalso(sepAttr);
+  const desiguales = hijos.length >= 2 && (eq === undefined ? hijos.every((h) => h.atributos['w:w'] !== undefined) : atributoFalso(eq));
+  let anchos: number[], espacios: number[];
+  if (desiguales) {
+    anchos = hijos.map((h) => twipsAPt(Number(h.atributos['w:w'])));
+    espacios = hijos.slice(0, -1).map((h) => (h.atributos['w:space'] !== undefined && Number.isFinite(Number(h.atributos['w:space'])) ? twipsAPt(Number(h.atributos['w:space'])) : espacioComun));
+    if (anchos.some((a) => !Number.isFinite(a) || a <= 0)) return undefined;
+    const suma = anchos.reduce((a, b) => a + b, 0), huecos = espacios.reduce((a, b) => a + b, 0);
+    if (suma + huecos > anchoUtilPt + 0.5) {
+      const util = anchoUtilPt - huecos;
+      if (util <= 0) return undefined;
+      anchos = anchos.map((a) => (a * util) / suma);
+    }
+  } else {
+    const n = Math.floor(Number(cols.atributos['w:num'] ?? (hijos.length || 1)));
+    if (!Number.isFinite(n) || n < 2) return undefined;
+    const ancho = (anchoUtilPt - (n - 1) * espacioComun) / n;
+    anchos = new Array<number>(n).fill(ancho);
+    espacios = new Array<number>(n - 1).fill(espacioComun);
+  }
+  if (anchos.length < 2 || anchos.some((a) => a < ANCHO_MINIMO_COLUMNA_PT)) return undefined;
+  return { anchosPt: anchos, espaciosPt: espacios, separador };
+}
+
 function contarElementos(nodo: XmlElemento, nombre: string): number {
   let c = nodo.nombre === nombre ? 1 : 0;
   for (const h of nodo.hijos) if (h.tipo === 'elemento') c += contarElementos(h, nombre);
-  return c;
-}
-
-function contarColumnasMultiples(nodo: XmlElemento): number {
-  let c = nodo.nombre === 'w:cols' && Number(nodo.atributos['w:num'] ?? '1') > 1 ? 1 : 0;
-  for (const h of nodo.hijos) if (h.tipo === 'elemento') c += contarColumnasMultiples(h);
   return c;
 }
 
@@ -1590,7 +1636,6 @@ function construirAdvertencias(docRoot: XmlElemento): Advertencia[] {
   const cuadros = contarElementos(docRoot, 'w:txbxContent');
   const comentarios = contarElementos(docRoot, 'w:commentReference');
   const cambios = contarElementos(docRoot, 'w:ins') + contarElementos(docRoot, 'w:del') + contarElementos(docRoot, 'w:moveFrom') + contarElementos(docRoot, 'w:moveTo');
-  const conColumnas = contarColumnasMultiples(docRoot);
   const objetos = contarElementos(docRoot, 'w:object');
 
   if (imagenesVml > 0) advertencias.push(omitido(`Se omitieron ${imagenesVml} ${pluralizar(imagenesVml, 'imagen', 'imágenes')} en formato antiguo (VML, aún no soportado).`));
@@ -1599,7 +1644,6 @@ function construirAdvertencias(docRoot: XmlElemento): Advertencia[] {
   if (cambios > 0) advertencias.push(aproximado(`El documento tiene ${cambios} ${pluralizar(cambios, 'cambio', 'cambios')} de control de cambios sin resolver; se aceptaron las inserciones y se descartaron las eliminaciones.`));
 
   if (objetos > 0) advertencias.push(omitido(`Se omitieron ${objetos} ${pluralizar(objetos, 'objeto incrustado', 'objetos incrustados')} (OLE; aún no soportados).`));
-  if (conColumnas > 0) advertencias.push(aproximado(`Se omitió la distribución en columnas de ${conColumnas} ${pluralizar(conColumnas, 'sección', 'secciones')}; el texto se maqueta a una sola columna.`));
 
   return advertencias;
 }
@@ -1753,7 +1797,9 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
     if (fmt !== undefined && fmt !== 'decimal') anotar(ctx, 'numeroPaginaFormato');
     const tipo: SeccionDocx['tipo'] = tipoVal === 'continuous' ? 'continuous' : 'nextPage';
     if (tipo === 'continuous' && Number.isFinite(inicioNum) && secciones.length > 0) anotar(ctx, 'numeroPaginaContinua');
+    const columnas = leerColumnas(sectPr, geo.anchoPt - geo.margenIzq - geo.margenDer);
     secciones.push({
+      ...(columnas ? { columnas } : {}),
       paginaAnchoPt: geo.anchoPt, paginaAltoPt: geo.altoPt,
       margenSupPt: geo.margenSup, margenInfPt: geo.margenInf, margenIzqPt: geo.margenIzq, margenDerPt: geo.margenDer,
       margenEncabezadoPt: geo.margenCab, margenPiePt: geo.margenPie,

@@ -232,7 +232,11 @@ export interface TabStopAbs { posPt: number; tipo: 'left' | 'center' | 'right' |
 export interface TabsConfig { stops: TabStopAbs[]; defectoPt: number; origenPt: number }
 
 /** Franja horizontal libre para una línea, en puntos PDF: `xPt` es el borde izquierdo absoluto de página. */
-export interface Intervalo { xPt: number; wPt: number }
+export interface Intervalo {
+  xPt: number; wPt: number;
+  /** `true` cuando la franja es la COMPLETA de su columna (E-118): el párrafo conserva su sangría de primera línea aunque el ancho no coincida con el que se le dio al maquetarlo. Sin él, se deduce de `xPt`/`wPt`. */
+  completa?: boolean;
+}
 
 /**
  * Caja ocupada por una imagen flotante en una página, en puntos PDF (origen abajo-izquierda), YA ensanchada con sus
@@ -245,7 +249,27 @@ export interface Obstaculo { xPt: number; yPt: number; wPt: number; hPt: number;
  * la sección sigue en la misma página (si tiene el mismo tamaño); si no, abre página. `seccion` es el índice que
  * `paginar` copia a `ResultadoLayout.paginas`. Una sección `nextPage` que empieza en una página todavía vacía la reutiliza.
  */
-export interface FlowSectionStart { kind: 'section'; geo: PageGeometry; continua: boolean; seccion: number }
+export interface FlowSectionStart {
+  kind: 'section'; geo: PageGeometry; continua: boolean; seccion: number;
+  /** Columnas de la sección (E-118); ausente (o una sola) = una columna a todo el ancho. */
+  columnas?: ColumnasFlujo;
+  /** Marcador que NO es una sección del documento sino el cierre de una región de columnas (p. ej. antes de las notas al final): cuenta como «fin del documento» para decidir el equilibrado de la región anterior. */
+  sintetica?: boolean;
+}
+
+/**
+ * Columnas de una sección (E-118, `w:cols`), en puntos PDF. `anchosPt[k]` es el ancho de la columna k y `espaciosPt[k]` el hueco entre la k y la
+ * k + 1 (uno menos que columnas); la primera columna empieza en el margen izquierdo de la sección. `separador` (`w:sep`) dibuja una línea
+ * vertical fina en cada hueco.
+ *
+ * CONTRATO con quien construye los ítems: todo el contenido de una región de columnas se maqueta como si la columna fuera la MÁS ESTRECHA
+ * (`min(anchosPt)`) y con x absoluto de la PRIMERA columna. `paginar` lo desplaza a la x de la columna donde cae y, en los párrafos `flex`,
+ * amplía la franja hasta el ancho real de esa columna (los párrafos se reajustan por columna; tablas e imágenes quedan al ancho de la más estrecha).
+ */
+export interface ColumnasFlujo { anchosPt: number[]; espaciosPt: number[]; separador: boolean }
+
+/** Salto de columna (`w:br w:type="column"`): lo que sigue empieza arriba de la columna siguiente; en la última columna, en la página siguiente. Sin columnas actúa como un salto de página (como Word). */
+export interface FlowColumnBreak { kind: 'columnbreak' }
 
 /**
  * Párrafo (o tramo de párrafo) que se maqueta LÍNEA A LÍNEA durante la paginación (fase 2c), porque el ancho de cada línea
@@ -258,7 +282,7 @@ export interface FlowParrafoFlex {
   paso(desde: number, libre: Intervalo, primeraLinea: boolean): { linea: FlowLine; siguiente: number } | null;
 }
 
-export type FlowItem = FlowLine | FlowGap | FlowRule | FlowPageBreak | FlowImage | FlowTableRow | FlowTableStart | FlowTableEnd | FlowKeepStart | FlowKeepEnd | FlowFloatImage | FlowSectionStart | FlowParrafoFlex;
+export type FlowItem = FlowLine | FlowGap | FlowRule | FlowPageBreak | FlowImage | FlowTableRow | FlowTableStart | FlowTableEnd | FlowKeepStart | FlowKeepEnd | FlowFloatImage | FlowSectionStart | FlowParrafoFlex | FlowColumnBreak;
 
 /**
  * Nota al pie ya maquetada (E-109): sus líneas (x absoluto de página, alto propio) y huecos en el orden en que se dibujan, de arriba
@@ -270,6 +294,8 @@ export interface NotaFlujo { items: (FlowLine | FlowGap)[]; altoPt: number }
 export const SEPARADOR_NOTAS = { altoPt: 12, anchoPt: 144 } as const;
 /** Fracción del área de texto que puede ocupar como máximo la zona de notas de una página (el resto de una nota más larga continúa en la siguiente). */
 const FRACCION_MAXIMA_NOTAS = 0.75;
+/** Grosor del separador entre columnas (`w:sep`), en pt. */
+const SEPARADOR_COLUMNAS_PT = 0.5;
 
 /** Tamaño y márgenes de una página, en puntos PDF. */
 export interface PageGeometry {
@@ -328,6 +354,23 @@ function efectosDe(a: Atom): Pick<Seg, 'underline' | 'strike' | 'dyPt' | 'sizeLi
   if (a.fondo) o.fondo = a.fondo;
   return o;
 }
+/** Copia de una línea con todo su contenido desplazado `d` pt a la derecha (columnas, E-118). */
+function desplazarLinea(l: FlowLine, d: number): FlowLine {
+  return {
+    ...l, segs: l.segs.map((s) => ({ ...s, xPt: s.xPt + d })), bars: l.bars.map((b) => ({ ...b, xPt: b.xPt + d })),
+    ...(l.bg ? { bg: { ...l.bg, xPt: l.bg.xPt + d } } : {}), ...(l.imagen ? { imagen: { ...l.imagen, xPt: l.imagen.xPt + d } } : {})
+  };
+}
+/** Copia de una fila de tabla con todo su contenido desplazado `d` pt a la derecha (columnas, E-118). */
+function desplazarFila(r: FlowTableRow, d: number): FlowTableRow {
+  return {
+    ...r,
+    lineas: r.lineas.map((l) => ({ ...l, segs: l.segs.map((s) => ({ ...s, xPt: s.xPt + d })) })),
+    fondos: r.fondos.map((b) => ({ ...b, xPt: b.xPt + d })), bordes: r.bordes.map((b) => ({ ...b, xPt: b.xPt + d })),
+    ...(r.imagenes ? { imagenes: r.imagenes.map((i) => ({ ...i, xPt: i.xPt + d })) } : {})
+  };
+}
+
 /** Dos átomos se funden en un solo trazo solo si comparten todos los efectos (subrayado, tachado, desplazamiento, fondo). */
 function mismosEfectos(x: Atom, y: Atom): boolean {
   return !!x.underline === !!y.underline && (x.strike ?? 0) === (y.strike ?? 0) && (x.dyPt ?? 0) === (y.dyPt ?? 0)
@@ -535,7 +578,7 @@ export function parrafoFlex(o: OpcionesParrafoFlex): FlowParrafoFlex {
   const primeraDelParrafo = o.primeraDelParrafo ?? true;
   const paso = (desde: number, libre: Intervalo, primera: boolean): { linea: FlowLine; siguiente: number } | null => {
     if (desde >= atoms.length) return null;
-    const completa = Math.abs(libre.xPt - o.xNormalPt) < 0.01 && Math.abs(libre.wPt - o.wPt) < 0.01;
+    const completa = libre.completa ?? (Math.abs(libre.xPt - o.xNormalPt) < 0.01 && Math.abs(libre.wPt - o.wPt) < 0.01);
     const xLinea = primera && primeraDelParrafo && completa ? o.xPrimeraPt : libre.xPt;
     if (o.tabs) {
       const r = lineaConTabs(atoms, desde, xLinea, libre.xPt + libre.wPt, o.tabs, medir);
@@ -600,6 +643,15 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
   let cursor = topPt;
   let skipLeadingGaps = false;
   let pintadoEnPagina = false;
+  // Columnas de sección (E-118). Dentro de una región de columnas todo se coloca con x de la PRIMERA columna y se desplaza `dx` al dibujar.
+  // `colTop`: borde superior de las columnas en la página actual; `colBajo`: lo más bajo que llegó el cursor en las columnas ya cerradas de la página.
+  let cols: ColumnasFlujo | null = null;
+  let colIdx = 0, dx = 0, colTop = topPt, colBajo = Infinity, colBase = 0, colX0 = 0;
+  let colDx: number[] = [];
+  let colEquilibra = false;
+  /** Altura máxima de columna durante un ensayo de equilibrado (`null` = sin tope). */
+  let alturaEquilibrio: number | null = null;
+  let enEnsayo = false;
   // Encabezado(s) de la tabla actualmente abierta (entre FlowTableStart y
   // FlowTableEnd): se repiten al principio de cada página nueva mientras
   // dure la tabla. Como este maquetador no admite tablas anidadas, basta con
@@ -619,6 +671,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
   let continuacion: ItemNota[] = [];
   /** Límite inferior efectivo del cuerpo en la página actual: el margen más la zona de notas. */
   const limite = (): number => bottomPt + reservaNotas;
+  /** Tope artificial que impone un ensayo de equilibrado de columnas (`-Infinity` fuera de él). */
+  const limiteCol = (): number => (alturaEquilibrio === null ? -Infinity : colTop - alturaEquilibrio);
   const maxReservaNotas = (): number => FRACCION_MAXIMA_NOTAS * (topPt - bottomPt);
 
   /** Notas aún sin reservar que referencian los trazos de una línea (o de una fila de tabla), con su clave. */
@@ -643,7 +697,7 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
   function hayQueEmpujar(altura: number, lista: [number, NotaFlujo][]): boolean {
     if (cursor >= topPt) return false;
     const coste = costeNotas(lista);
-    return cursor - altura - coste < limite() || (coste > 0 && reservaNotas + coste > maxReservaNotas());
+    return cursor - altura - coste < limite() || cursor - altura < limiteCol() || (coste > 0 && reservaNotas + coste > maxReservaNotas());
   }
   /**
    * Reserva en la página actual las notas `lista` (la línea de la referencia, de altura `alturaLinea`, aún sin colocar). Lo que no cabe
@@ -669,7 +723,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
   function dibujarNotas(): void {
     if (notasPagina.length === 0) return;
     const g = paginas[page]!.geo;
-    const guardaCursor = cursor;
+    const guardaCursor = cursor, guardaDx = dx;
+    dx = 0; // las notas van al pie de la PÁGINA, no de la columna
     const arriba = bottomPt + reservaNotas;
     const ancho = g.widthPt - g.marginLeftPt - g.marginRightPt;
     const anchoSep = notasPagina[0]!.continuacion ? ancho : Math.min(SEPARADOR_NOTAS.anchoPt, ancho);
@@ -678,18 +733,20 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     for (const bloque of notasPagina) {
       for (const it of bloque.items) { if (it.kind === 'line') colocarLinea(it); else cursor -= it.height; }
     }
-    cursor = guardaCursor;
+    cursor = guardaCursor; dx = guardaDx;
     pintadoEnPagina = true;
     notasPagina = []; reservaNotas = 0;
   }
 
   function nuevaPagina(): void {
+    dibujarSeparadores();
     dibujarNotas();
     page++;
     topPt = geoActual.heightPt - geoActual.marginTopPt;
     bottomPt = geoActual.marginBottomPt;
     paginas.push({ geo: geoActual, seccion: seccionActual });
     cursor = topPt;
+    colIdx = 0; dx = 0; colTop = topPt; colBajo = Infinity;
     skipLeadingGaps = true;
     pintadoEnPagina = false;
     if (continuacion.length > 0) {
@@ -742,7 +799,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
   }
 
   /** Coloca una fila de tabla YA en la página/cursor actuales (no decide paginación: eso lo hace el llamador). */
-  function colocarFila(row: FlowTableRow): void {
+  function colocarFila(fila: FlowTableRow): void {
+    const row = dx !== 0 ? desplazarFila(fila, dx) : fila;
     for (const id of row.mergeContinua ?? []) if (paginaDeMerge.get(id) !== page) mergesPartidos.add(id);
     for (const id of [...(row.mergeInicio ?? []), ...(row.mergeContinua ?? [])]) paginaDeMerge.set(id, page);
     for (const f of row.fondos) {
@@ -768,7 +826,8 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
   }
 
   /** Coloca una línea YA decidida en la página/cursor actuales y baja el cursor (no decide paginación). */
-  function colocarLinea(item: FlowLine): void {
+  function colocarLinea(linea: FlowLine): void {
+    const item = dx !== 0 ? desplazarLinea(linea, dx) : linea;
     const bottom = cursor - item.height;
     const baseline = bottom + item.height * baselineFraction;
     for (const seg of item.segs) {
@@ -828,12 +887,131 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     flotantesPendientes.length = 0;
   }
 
-  for (let idx = 0; idx < items.length; idx++) {
+  // ── Columnas de sección (E-118) ─────────────────────────────────────────────────────────────────────────────────────────
+
+  /** Pasa a la columna siguiente de la región (arriba de ella) o, en la última, a una página nueva. */
+  function siguienteArea(): void {
+    if (cols && colIdx < cols.anchosPt.length - 1) {
+      colBajo = Math.min(colBajo, cursor);
+      colIdx++;
+      dx = colDx[colIdx]!;
+      cursor = colTop;
+      skipLeadingGaps = true;
+      return;
+    }
+    nuevaPagina();
+  }
+
+  /** Dibuja el separador (`w:sep`) de cada hueco entre columnas de la página que se cierra: de la parte alta de las columnas al final de la más baja. */
+  function dibujarSeparadores(): void {
+    if (!cols || !cols.separador) return;
+    const bajo = Math.min(colBajo, cursor);
+    if (!(bajo < colTop - 1e-6)) return; // las columnas no llevan nada en esta página
+    for (let k = 0; k < cols.anchosPt.length - 1; k++) {
+      const centro = colX0 + colDx[k + 1]! - cols.espaciosPt[k]! / 2;
+      barras.push({ page, xPt: centro - SEPARADOR_COLUMNAS_PT / 2, yPt: bajo, wPt: SEPARADOR_COLUMNAS_PT, hPt: colTop - bajo, color: [0, 0, 0] });
+    }
+  }
+
+  /** Empieza una región de columnas (o de una sola) en el cursor actual, que es el borde superior de todas sus columnas. */
+  function iniciarRegion(sec: FlowSectionStart, idx: number): void {
+    const c = sec.columnas && sec.columnas.anchosPt.length > 1 ? sec.columnas : null;
+    cols = c;
+    colIdx = 0; dx = 0; colTop = cursor; colBajo = Infinity; snap = null; colEquilibra = false;
+    if (!c) return;
+    colBase = Math.min(...c.anchosPt);
+    colX0 = sec.geo.marginLeftPt;
+    colDx = [];
+    let x = 0;
+    for (let k = 0; k < c.anchosPt.length; k++) { colDx.push(x); x += c.anchosPt[k]! + (c.espaciosPt[k] ?? 0); }
+    // Word equilibra las columnas de una sección cuando la sigue una sección CONTINUA, y también la última sección del documento si es continua.
+    let j = idx + 1;
+    while (j < items.length && items[j]!.kind !== 'section') j++;
+    const sig = items[j] as FlowSectionStart | undefined;
+    const mismoTamano = (g: PageGeometry): boolean => g.widthPt === sec.geo.widthPt && g.heightPt === sec.geo.heightPt;
+    colEquilibra = sig && !sig.sintetica ? sig.continua && mismoTamano(sig.geo) : sec.continua;
+  }
+
+  /** Cierra la región de columnas: dibuja sus separadores y deja el cursor bajo la columna más larga. */
+  function cerrarRegion(): void {
+    dibujarSeparadores();
+    const bajo = Math.min(colBajo, cursor);
+    if (cols && bajo < colTop) cursor = bajo;
+    cols = null; colIdx = 0; dx = 0; colBajo = Infinity; snap = null; colEquilibra = false;
+    skipLeadingGaps = false;
+  }
+
+  /** Foto del estado de `paginar` en el arranque de un ítem, para poder repetir el reparto con otra altura de columna. */
+  interface Foto {
+    idx: number; page: number; cursor: number; topPt: number; bottomPt: number; geoActual: PageGeometry; seccionActual: number;
+    skipLeadingGaps: boolean; pintadoEnPagina: boolean; reservaNotas: number; colIdx: number; dx: number; colTop: number; colBajo: number;
+    nTrazos: number; nBarras: number; nImagenes: number; nEnlaces: number; nEnlacesAncla: number; nPaginas: number;
+    encabezadosTabla: FlowTableRow[]; notasPagina: typeof notasPagina; continuacion: ItemNota[]; notasYaReservadas: number[];
+    flotantes: FlowFloatImage[]; marcadores: [string, PosMarcador][]; obstaculos: [number, Obstaculo[]][];
+    paginaDeMerge: [number, number][]; mergesPartidos: number[]; paginaInfo: PaginaInfo;
+  }
+  let snap: Foto | null = null;
+  function guardar(idx: number): Foto {
+    return {
+      idx, page, cursor, topPt, bottomPt, geoActual, seccionActual, skipLeadingGaps, pintadoEnPagina, reservaNotas, colIdx, dx, colTop, colBajo,
+      nTrazos: trazos.length, nBarras: barras.length, nImagenes: imagenes.length, nEnlaces: enlaces.length, nEnlacesAncla: enlacesAncla.length, nPaginas: paginas.length,
+      encabezadosTabla, notasPagina: [...notasPagina], continuacion: [...continuacion], notasYaReservadas: [...notasYaReservadas],
+      flotantes: [...flotantesPendientes], marcadores: [...marcadores], obstaculos: [...obstaculos].map(([k, v]) => [k, [...v]]),
+      paginaDeMerge: [...paginaDeMerge], mergesPartidos: [...mergesPartidos], paginaInfo: paginas[page]!
+    };
+  }
+  function restaurar(f: Foto): void {
+    page = f.page; cursor = f.cursor; topPt = f.topPt; bottomPt = f.bottomPt; geoActual = f.geoActual; seccionActual = f.seccionActual;
+    skipLeadingGaps = f.skipLeadingGaps; pintadoEnPagina = f.pintadoEnPagina; reservaNotas = f.reservaNotas;
+    colIdx = f.colIdx; dx = f.dx; colTop = f.colTop; colBajo = f.colBajo;
+    trazos.length = f.nTrazos; barras.length = f.nBarras; imagenes.length = f.nImagenes; enlaces.length = f.nEnlaces; enlacesAncla.length = f.nEnlacesAncla;
+    paginas.length = f.nPaginas; paginas[f.page] = f.paginaInfo;
+    encabezadosTabla = f.encabezadosTabla; notasPagina = [...f.notasPagina]; continuacion = [...f.continuacion];
+    notasYaReservadas.clear(); for (const k of f.notasYaReservadas) notasYaReservadas.add(k);
+    flotantesPendientes.length = 0; flotantesPendientes.push(...f.flotantes);
+    marcadores.clear(); for (const [k, v] of f.marcadores) marcadores.set(k, v);
+    obstaculos.clear(); for (const [k, v] of f.obstaculos) obstaculos.set(k, [...v]);
+    paginaDeMerge.clear(); for (const [k, v] of f.paginaDeMerge) paginaDeMerge.set(k, v);
+    mergesPartidos.clear(); for (const k of f.mergesPartidos) mergesPartidos.add(k);
+  }
+
+  /**
+   * Equilibra la región de columnas que acaba (ítems hasta `fin`, exclusivo): busca la MENOR altura de columna con la que todo el contenido de
+   * la última página de la región cabe sin pasar a otra página, repitiendo el reparto con un tope artificial (`alturaEquilibrio`) y bisecando.
+   * Reparte por líneas (un párrafo se parte entre columnas, nunca a mitad de línea). Si no hay nada que repartir, o la región cruzó una página
+   * a mitad del último ítem, deja el reparto natural (columnas llenas de arriba abajo).
+   */
+  function equilibrar(fin: number): void {
+    if (!cols || !colEquilibra || !snap || snap.page !== page) return;
+    if (!(Math.min(colBajo, cursor) < colTop - 1e-6)) return;
+    const s = snap;
+    const hMax = colTop - limite();
+    const ensayar = (h: number | null): boolean => {
+      restaurar(s);
+      alturaEquilibrio = h;
+      for (let i = s.idx; i < fin; i++) procesar(i);
+      alturaEquilibrio = null;
+      return page === s.page;
+    };
+    enEnsayo = true;
+    let lo = 0, hi = hMax;
+    for (let it = 0; it < 24 && hi - lo > 0.25; it++) {
+      const mid = (lo + hi) / 2;
+      if (ensayar(mid)) hi = mid; else lo = mid;
+    }
+    if (!ensayar(hi)) ensayar(null);
+    enEnsayo = false;
+    snap = s;
+  }
+
+  /** Coloca el ítem `idx` (puede repetirse sobre el mismo ítem en un ensayo de equilibrado de columnas, ver `equilibrar`). */
+  function procesar(idx: number): void {
     const item = items[idx]!;
-    if (item.kind === 'tableStart') { encabezadosTabla = item.headerRows; continue; }
-    if (item.kind === 'tableEnd') { encabezadosTabla = []; continue; }
-    if (item.kind === 'keepEnd') continue;
-    if (item.kind === 'floatImage') { flotantesPendientes.push(item); continue; }
+    if (item.kind !== 'section' && cols && colEquilibra && !enEnsayo && (snap === null || snap.page !== page)) snap = guardar(idx);
+    if (item.kind === 'tableStart') { encabezadosTabla = item.headerRows; return; }
+    if (item.kind === 'tableEnd') { encabezadosTabla = []; return; }
+    if (item.kind === 'keepEnd') return;
+    if (item.kind === 'floatImage') { flotantesPendientes.push(item); return; }
     if (item.kind === 'keepStart') {
       // Altura total del grupo (hasta su `keepEnd` o un salto de página explícito).
       let total = 0;
@@ -842,15 +1020,17 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
         if (q.kind === 'keepEnd' || q.kind === 'pagebreak' || q.kind === 'keepStart') break;
         total += alturaDeFlujo(q);
       }
-      if (cursor < topPt && cursor - total < limite() && total <= topPt - bottomPt) nuevaPagina();
-      continue;
+      if (cursor < topPt && (cursor - total < limite() || cursor - total < limiteCol()) && total <= topPt - bottomPt) siguienteArea();
+      return;
     }
 
     if (item.kind === 'section') {
       const mismaPagina = item.continua && item.geo.widthPt === geoActual.widthPt && item.geo.heightPt === geoActual.heightPt;
+      // Una sección continua cierra la región de columnas anterior (equilibrándola si toca) y la nueva empieza bajo ella.
+      if (cols && mismaPagina) { equilibrar(idx); cerrarRegion(); }
       geoActual = item.geo;
       seccionActual = item.seccion;
-      if (mismaPagina) { bottomPt = item.geo.marginBottomPt; continue; } // sección continua: sigue en la misma página
+      if (mismaPagina) { bottomPt = item.geo.marginBottomPt; iniciarRegion(item, idx); return; } // sección continua: sigue en la misma página
       if (!pintadoEnPagina && cursor === topPt && notasPagina.length === 0) {
         // Página todavía vacía: se reutiliza con la geometría de la sección nueva (sin página en blanco).
         topPt = item.geo.heightPt - item.geo.marginTopPt;
@@ -861,49 +1041,59 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
         colocarFlotantes();
         nuevaPagina();
       }
-      continue;
+      iniciarRegion(item, idx);
+      return;
     }
 
     if (item.kind === 'pagebreak') {
       colocarFlotantes();
       if (pintadoEnPagina) nuevaPagina();
-      continue;
+      return;
+    }
+
+    if (item.kind === 'columnbreak') {
+      colocarFlotantes();
+      if (cols) siguienteArea(); else if (pintadoEnPagina) nuevaPagina();
+      return;
     }
 
     if (skipLeadingGaps) {
-      if (item.kind === 'gap') continue;
+      if (item.kind === 'gap') return;
       skipLeadingGaps = false;
     }
 
     if (item.kind === 'flex') {
       // Párrafo que se maqueta línea a línea: el ancho de cada una depende de los obstáculos de ESA página y de dónde cae.
+      // En columnas, la franja se amplía hasta el ancho de la columna actual (el párrafo se maquetó al de la más estrecha).
       let estado = 0;
       for (let guardia = 0; estado < item.total && guardia < 100000; guardia++) {
         const h = item.alturaLinea;
-        if (cursor - h < limite() && cursor < topPt) nuevaPagina();
+        if ((cursor - h < limite() || cursor - h < limiteCol()) && cursor < topPt) siguienteArea();
         skipLeadingGaps = false;
         colocarFlotantes();
-        const libre = franjaLibre(item.xPt, item.wPt, h);
+        const wFlex = item.wPt + (cols ? cols.anchosPt[colIdx]! - colBase : 0);
+        const abs = franjaLibre(item.xPt + dx, wFlex, h);
+        const libre: Intervalo | null = abs ? { xPt: abs.xPt - dx, wPt: abs.wPt, ...(cols ? { completa: Math.abs(abs.xPt - (item.xPt + dx)) < 0.01 && Math.abs(abs.wPt - wFlex) < 0.01 } : {}) } : null;
         if (!libre) {
           // Sin hueco útil a los lados: el texto salta por debajo de la(s) caja(s) que cruzan la línea.
           const debajo = Math.min(...obstaculosEnFranja(h).map((o) => o.yPt));
           if (debajo < cursor) { cursor = debajo; continue; }
         }
-        const r = item.paso(estado, libre ?? { xPt: item.xPt, wPt: item.wPt }, estado === 0);
+        const r = item.paso(estado, libre ?? { xPt: item.xPt, wPt: wFlex, ...(cols ? { completa: true } : {}) }, estado === 0);
         if (!r || r.siguiente <= estado) break;
         const nl = notasNuevas(r.linea.segs);
-        if (hayQueEmpujar(r.linea.height, nl)) { nuevaPagina(); continue; }
+        if (hayQueEmpujar(r.linea.height, nl)) { siguienteArea(); continue; }
         reservarNotas(nl, r.linea.height);
         colocarLinea(r.linea);
         estado = r.siguiente;
       }
-      continue;
+      return;
     }
 
     if (item.kind === 'tableRow') {
       const nl = notasNuevas(segsDeFila(item));
       if (hayQueEmpujar(item.height, nl)) {
-        nuevaPagina();
+        siguienteArea();
         // Repite el encabezado en la página nueva, salvo si la fila que
         // provocó el salto es ella misma una fila de encabezado (evita
         // duplicarla / recursión cuando el propio encabezado es lo primero
@@ -913,25 +1103,25 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
       colocarFlotantes();
       reservarNotas(nl, item.height);
       colocarFila(item);
-      continue;
+      return;
     }
 
     if (item.kind === 'image') {
-      if (cursor - item.height < limite() && cursor < topPt) nuevaPagina();
+      if ((cursor - item.height < limite() || cursor - item.height < limiteCol()) && cursor < topPt) siguienteArea();
       colocarFlotantes();
       const bottom = cursor - item.height;
-      imagenes.push({ page, xPt: item.xPt, yPt: bottom, wPt: item.wPt, hPt: item.height, imgId: item.imgId });
+      imagenes.push({ page, xPt: item.xPt + dx, yPt: bottom, wPt: item.wPt, hPt: item.height, imgId: item.imgId });
       pintadoEnPagina = true;
       cursor = bottom;
-      continue;
+      return;
     }
 
     const extra = item.kind === 'line' ? (item.keepWithNextHeight ?? 0) : 0;
     const needed = item.height + extra;
     const nl = item.kind === 'line' ? notasNuevas(item.segs) : [];
     if (hayQueEmpujar(needed, nl)) {
-      nuevaPagina();
-      if (item.kind === 'gap') continue;
+      siguienteArea();
+      if (item.kind === 'gap') return;
     }
 
     if (item.kind === 'line' || item.kind === 'rule') colocarFlotantes();
@@ -940,17 +1130,21 @@ export function paginar(items: FlowItem[], geo: PageGeometry, baselineFraction: 
     if (item.kind === 'line') {
       reservarNotas(nl, item.height);
       colocarLinea(item);
-      continue;
+      return;
     } else if (item.kind === 'rule') {
-      barras.push({ page, xPt: item.xPt, yPt: bottom + (item.height - 1) / 2, wPt: item.wPt, hPt: 1, color: item.color });
-      for (const bar of item.bars) barras.push({ page, xPt: bar.xPt, yPt: bottom, wPt: bar.wPt, hPt: item.height, color: bar.color });
+      barras.push({ page, xPt: item.xPt + dx, yPt: bottom + (item.height - 1) / 2, wPt: item.wPt, hPt: 1, color: item.color });
+      for (const bar of item.bars) barras.push({ page, xPt: bar.xPt + dx, yPt: bottom, wPt: bar.wPt, hPt: item.height, color: bar.color });
       pintadoEnPagina = true;
     } else {
-      for (const bar of item.bars) { barras.push({ page, xPt: bar.xPt, yPt: bottom, wPt: bar.wPt, hPt: item.height, color: bar.color }); pintadoEnPagina = true; }
+      for (const bar of item.bars) { barras.push({ page, xPt: bar.xPt + dx, yPt: bottom, wPt: bar.wPt, hPt: item.height, color: bar.color }); pintadoEnPagina = true; }
     }
 
     cursor = bottom;
   }
+
+  for (let idx = 0; idx < items.length; idx++) procesar(idx);
+  equilibrar(items.length); // la región de columnas final se equilibra si su sección es continua
+  cerrarRegion();
 
   colocarFlotantes();
   while (continuacion.length > 0) nuevaPagina(); // resto de una nota que no cupo: páginas que solo llevan la continuación
