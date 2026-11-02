@@ -6,6 +6,7 @@ import { DocxError } from './docx/DocxError';
 import { construirModeloDocx } from './docx/modelo';
 import { leerRelaciones, rutaMediaDesdeWord } from './docx/rels';
 import { renderizarModeloDocx } from './docx/render';
+import { outlineDeTitulos } from './docx/outline';
 import { decodificarImagenDocx, type ResultadoImagenDocx } from './imagenes/decodificarImagenDocx';
 import type { ImagenColocada } from './flujo/layout';
 
@@ -106,7 +107,7 @@ export class ConversorDocxNavegador implements ConversorDocumento {
       if (w === undefined) { w = this.engine.measureText(font, sizePt, s); cache.set(key, w); }
       return w;
     };
-    const { totalPaginas, trazos, barras, imagenes, enlaces, enlacesInternos, paginas, advertencias: avisosMaquetacion } = renderizarModeloDocx(modelo, medir);
+    const { totalPaginas, trazos, barras, imagenes, enlaces, enlacesInternos, marcadores, paginas, advertencias: avisosMaquetacion } = renderizarModeloDocx(modelo, medir);
 
     const { rgbaPorId, advertenciasImagenes } = await this.resolverImagenes(zip, imagenes);
     const advertencias = [...modelo.advertencias, ...avisosMaquetacion, ...advertenciasImagenes];
@@ -154,6 +155,11 @@ export class ConversorDocxNavegador implements ConversorDocumento {
     for (const e of enlacesInternos) {
       this.engine.addInternalLink(doc, e.page, { xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt }, e.destPage, e.destYPt);
     }
+
+    // Marcadores del PDF (E-114): un árbol con los títulos del cuerpo (`w:outlineLvl`), cada uno en la página y la altura de su línea en
+    // NUESTRA paginación. Sin títulos no se escribe outline.
+    const outline = outlineDeTitulos(modelo, marcadores);
+    if (outline.length > 0) this.engine.setOutline(doc, outline);
 
     const out = this.engine.save(doc);
     this.engine.close(doc);

@@ -22,6 +22,7 @@ const WORD_COMBINADA = path.resolve(AQUI, '../../fixtures/generados/word-combina
 const WORD_COMPLETO = path.resolve(AQUI, '../../fixtures/generados/word-completo.docx');
 const WORD_ENCABEZADOS = path.resolve(AQUI, '../../fixtures/generados/word-encabezados.docx');
 const WORD_ENLACES_INTERNOS = path.resolve(AQUI, '../../fixtures/generados/word-enlaces-internos.docx');
+const WORD_OUTLINE = path.resolve(AQUI, '../../fixtures/generados/word-outline.docx');
 const WORD_FLOTANTE = path.resolve(AQUI, '../../fixtures/generados/word-flotante.docx');
 
 async function dataTransferConFichero(page: Page, bytes: number[], fileName: string, mime: string) {
@@ -414,4 +415,26 @@ test('abrir word-notas.docx: la nota al pie 1 queda en su página bajo el cuerpo
   expect(p0.some((r) => r.textoReal.trim() === 'i')).toBe(true);
   expect(p1.some((r) => r.textoReal.trim() === 'ii')).toBe(true);
   eng.close(doc);
+});
+
+test('E-114: los titulos de Word salen como marcadores del PDF y un clic en el ultimo lleva a su pagina', async ({ page }) => {
+  await page.goto('/index.next.html');
+  await page.locator('#file-input').setInputFiles(WORD_OUTLINE);
+  await expect(page.locator('.run').first()).toBeVisible();
+  await expect(page.locator('#page-indicator')).toHaveText('1 / 3');
+
+  await page.locator('#tab-outline').click();
+  const raiz = page.locator('#outline-panel [role="treeitem"]');
+  const item = (texto: string) => page.locator('[role="treeitem"]', { has: page.locator(':scope > div > .outline-item', { hasText: texto }) }).first();
+  // H1 Introduccion y H1 Desarrollo son raices; el resto cuelga de ellos (las ramas empiezan plegadas).
+  await expect(raiz.first()).toBeVisible();
+  await expect(page.locator('#outline-panel .outline-item', { hasText: 'Introduccion' })).toBeVisible();
+  await expect(page.locator('#outline-panel .outline-item', { hasText: 'Desarrollo' })).toBeVisible();
+
+  // El ultimo marcador (H3 «Detalle», hijo de «Desarrollo») cae en la pagina 3.
+  await item('Desarrollo').locator(':scope > div > .outline-toggle').click();
+  const detalle = page.locator('#outline-panel .outline-item', { hasText: 'Detalle' });
+  await expect(detalle).toBeVisible();
+  await detalle.click();
+  await expect.poll(async () => ((await page.locator('#page-indicator').textContent()) ?? '').trim()).toBe('3 / 3');
 });
