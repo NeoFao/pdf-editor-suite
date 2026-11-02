@@ -135,3 +135,15 @@ test('Word: una parte XML en UTF-16 con BOM se lee bien (la especificación admi
   const { pdf } = await new ConversorDocxNavegador(engine).convertir('x.docx', docx('', [], utf16le(xml, true)));
   expect(await textoPdf(engine, pdf)).toContain('Año nuevo');
 }, 60_000);
+
+test('Word con macros (.docm): el conversor acepta la extensión, convierte y avisa de que las macros se ignoran', async () => {
+  const engine = await PdfiumEngine.create();
+  const conversor = new ConversorDocxNavegador(engine);
+  expect(conversor.acepta).toContain('docm');
+  const zip = docx(parrafo('Con macros'), [{ nombre: 'word/vbaProject.bin', datos: new Uint8Array([1, 2, 3]) }]);
+  const r = await conversor.convertir('m.docm', zip);
+  expect(await textoPdf(engine, r.pdf)).toContain('Con macros');
+  expect(r.advertencias.some((a) => a.tipo === 'omitido' && /macros/i.test(a.mensaje))).toBe(true);
+  const sin = await conversor.convertir('s.docx', docx(parrafo('Sin macros')));
+  expect(sin.advertencias.some((a) => /macros/i.test(a.mensaje))).toBe(false);
+}, 60_000);

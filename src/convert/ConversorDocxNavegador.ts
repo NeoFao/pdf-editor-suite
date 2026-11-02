@@ -47,7 +47,8 @@ import type { ImagenColocada } from './flujo/layout';
  * mismo puerto `ConversorDocumento`, ver ese fichero).
  */
 export class ConversorDocxNavegador implements ConversorDocumento {
-  readonly acepta = ['docx'] as const;
+  /** `docm` = el mismo paquete con macros: se convierte y se avisa de que las macros no se ejecutan ni se conservan (E-124). */
+  readonly acepta = ['docx', 'docm'] as const;
   readonly nombreFuente = 'Word';
 
   constructor(private readonly engine: PdfEngine) {}
@@ -112,7 +113,9 @@ export class ConversorDocxNavegador implements ConversorDocumento {
     const { totalPaginas, trazos, barras, imagenes, enlaces, enlacesInternos, marcadores, paginas, advertencias: avisosMaquetacion } = renderizarModeloDocx(modelo, medir);
 
     const { rgbaPorId, advertenciasImagenes } = await this.resolverImagenes(zip, imagenes);
-    const advertencias = [...modelo.advertencias, ...avisosMaquetacion, ...advertenciasImagenes];
+    const avisosMacros = zip.nombres().some((n) => /(^|\/)vbaProject\.bin$/i.test(n))
+      ? [omitido('El documento contiene macros (VBA): se ignoran y no se incluyen en el PDF.')] : [];
+    const advertencias = [...avisosMacros, ...modelo.advertencias, ...avisosMaquetacion, ...advertenciasImagenes];
 
     // Una página en blanco POR TAMAÑO distinto (las secciones pueden cambiar de tamaño y de orientación), en el orden del layout.
     const enBlanco = new Map<string, Uint8Array<ArrayBuffer>>();
