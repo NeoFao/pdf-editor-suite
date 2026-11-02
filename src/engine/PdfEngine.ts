@@ -113,9 +113,10 @@ export interface NoteInfo { index: number; text: string; rectPt: RectPt }
 /**
  * Destino de una anotación `/Link` leída del documento. `pagina`: destino dentro del propio documento (acción GoTo o `/Dest`),
  * `yPt` = posición vertical del destino (`/XYZ`) en pt de usuario con origen ABAJO (E-084), o `null` si el destino no la fija (p. ej. `/Fit`).
+ * `bloqueado`: acción `/URI` cuyo esquema no es http, https ni mailto (javascript:, file:, data:...); se conserva la URI solo para avisar, nunca se abre.
  * `otro`: cualquier otra acción (GoToR, Launch, JavaScript...): solo se lee, nunca se ejecuta.
  */
-export type DestinoEnlace = { tipo: 'uri'; uri: string } | { tipo: 'pagina'; pageIndex: number; yPt: number | null } | { tipo: 'otro' };
+export type DestinoEnlace = { tipo: 'uri'; uri: string } | { tipo: 'bloqueado'; uri: string } | { tipo: 'pagina'; pageIndex: number; yPt: number | null } | { tipo: 'otro' };
 /** Anotación `/Link` de una página: su caja (pt PDF, origen abajo-izquierda) y adónde lleva. */
 export interface EnlaceLeido { rectPt: RectPt; destino: DestinoEnlace }
 
