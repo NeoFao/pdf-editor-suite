@@ -3592,6 +3592,22 @@ de código fiable.
 **Límites.** Una selección de ratón de un solo carácter hecha hacia atrás se trata como directa al extenderla con el teclado (el modelo del ratón no guarda
 `inversa`). Al cruzar, `goToPage` coloca la página del foco al principio de la vista.
 
+### E-116 · Los enlaces externos (`/URI`) de un PDF no hacían nada en el visor, y los de esquema peligroso se descartaban en silencio
+
+**Síntoma.** Un PDF con un enlace a una web o a un correo (los de Word, de un informe, de una factura) no se podía seguir desde el visor; Acrobat lo abre con Ctrl+clic tras un aviso de seguridad. Además `getLinks` degradaba un `javascript:` o `file:` a `otro`, igual que un `/Launch`: la UI no podía distinguir "enlace bloqueado" de "no es un enlace".
+
+**Causa raíz.** `Viewer.drawLinks` solo pintaba los destinos `pagina` (E-106). El motor ya validaba el esquema al leer (`validarUrlEnlace`) pero perdía la URI de las acciones no permitidas.
+
+**Arreglo.** `drawLinks` pinta también `uri` y el nuevo destino `bloqueado`, con el patrón de E-106: clic normal edita o selecciona (cajas `pointer-events: none`); Ctrl+clic o Intro con el foco sigue el enlace. `src/ui/enlaceExterno.ts` decide (`decidirEnlaceExterno`, pura) y muestra un `<dialog>` (`mostrarModal`) con la URL COMPLETA como `textContent` (§2.2), botones Abrir/Cancelar y la casilla "No volver a preguntar para <dominio>" (conjunto en memoria, sin `localStorage`). Solo http, https y mailto (los de `validarUrlEnlace`, sin ampliar) se pueden abrir, con `window.open(url, '_blank', 'noopener,noreferrer')`. Un `bloqueado` abre un aviso sin "Abrir" ni casilla, ni aunque su dominio estuviera omitido. `/Launch`, `/GoToR` y JavaScript siguen siendo `otro`: sin caja ni acción. Etiqueta de la caja: "Ctrl+clic para abrir <dominio>".
+
+**Cómo se detecta ahora.** `tests/e2e/next/enlaces-externos.spec.ts` (Chromium real, red interceptada): clic normal edita sin abrir, Ctrl+clic muestra la URL exacta, Cancelar no abre página, Abrir abre una pestaña con esa URL y sin `opener`, casilla de dominio, mailto, `javascript:` sin "Abrir", `/Launch` inerte, Intro con el foco. `tests/unit/enlaceExterno.test.ts` (decisión y dominio, incluido el subdominio engañoso) y `tests/unit/PdfiumEngine.enlacesInternos.test.ts` (`bloqueado`). Fixture `enlaces-externos.pdf`.
+
+**Suplantación (revisión de seguridad).** La URL se analiza UNA vez con `new URL` y ese `href` normalizado es a la vez lo que se valida, se muestra y se abre (antes se mostraba la cadena del PDF y se abría otra). El diálogo destaca el `hostname` (punycode si es IDN) y debajo el `href`; los bidi y de control (U+200E-F, U+202A-E, U+2066-9, C0/C1) se escapan y avisan, y con ellos no se ofrece la casilla ni se omite la pregunta; una URL con usuario o contraseña (`user@evil.com`) se bloquea sin "Abrir". Tests unitarios de IDN, U+202E, credenciales y coincidencia mostrado/abierto, y el E2E compara lo abierto con el href mostrado.
+
+**mailto.** Se analiza decodificado (lo que lee el usuario): bidi/control se buscan ahí (`%E2%80%AE` ya no pasa), todo lo mostrado, `dominio` incluido, pasa por `escaparPeligrosos`, cada dominio debe ser un hostname válido (punycode si IDN) o el enlace se bloquea sin "Abrir", y varias direcciones o `?cc=`/`?bcc=`/`?body=` se muestran enteros y nunca omiten la pregunta.
+
+**Límites.** La casilla vale para la sesión y por host exacto (`a.test` no cubre `x.a.test`). El dominio mostrado de un mailto es el de la dirección. Nada de esto envía datos del documento a ningún sitio: solo se abre la URL que el usuario aprueba.
+
 ### E-118 · Word → PDF: las columnas de sección (`w:cols`) se maquetaban a una sola columna con aviso, y el salto de columna era un salto de línea
 
 **Síntoma.** Un documento con texto en dos o tres columnas (boletines, artículos, cartas con cuadro lateral) salía con el texto a todo el ancho de la página, con un aviso `aproximado` («Se omitió la distribución en columnas»). Un `w:br w:type="column"` se convertía en un salto de línea y el separador entre columnas (`w:sep`) no se dibujaba. Una sección continua que pasaba de 1 a 2 columnas en la misma página no se distinguía de una sola columna.
@@ -3627,4 +3643,22 @@ de código fiable.
 **Cómo se detecta ahora.** `tests/unit/convert-decodificarEntrada.test.ts`, `flujo-partir-palabras.test.ts` y `conversores-qa-altos.test.ts` (motor real: UTF-16 con/sin BOM, cp1252, NUL, URL de 120 caracteres, código de 150, celdas de 50 pt con cajas de carácter dentro de su celda, XML en UTF-16, `.docm`). Vistos fallar antes del arreglo. Sin regla guard.
 
 **Límites.** La decodificación cp1252 es una suposición avisada, no una garantía. Pendiente del informe: M5 (falso positivo de zip-bomb con imagen muy compresible, toca la política de seguridad de `zip.ts`/E-042), M6/A4 (rendimiento, `applyPageOps`, otro PR). Un NUL en `w:t` de Word se descarta sin aviso propio.
+### E-123 · Insertar texto en una página girada lo dejaba vertical o boca abajo, y el texto recortado por la CropBox seguía como línea editable
+
+**Síntoma.** (D2) Con «Insertar texto» en una página `/Rotate` 90 o 270 el texto salía vertical, y con 180 boca abajo, aunque el origen sí caía en
+el clic. (D4) El texto fuera de la CropBox (invisible) aparecía como línea editable fuera de la página y entraba en la selección y la búsqueda.
+
+**Causa raíz.** (D2) `handleInsert` escribía el objeto con la matriz identidad en el espacio de USUARIO (sin girar); el OCR ya compensaba el giro
+(E-089) pero la inserción manual no. (D4) `getPageText`/`getCharBoxes` devuelven todo el texto del contenido, también el que cae fuera de la caja
+visible, y la capa de texto lo pintaba tal cual.
+
+**Arreglo.** (D2) `handleInsert` pasa `giroGrados = /Rotate` de la página (antihorario, igual que el OCR). (D4) `EditSession` descarta, al cargar runs y
+caracteres, los que no solapan la caja visible (`src/texto/visibilidad.ts`, pt de usuario sin girar con `pageBox`); NO se borra nada del PDF (§2.3) y los
+`runId` no cambian.
+
+**Cómo se detecta ahora.** `tests/e2e/next/insertar-girado-y-crop.spec.ts`: insertar en 0/90/180/270, releer el PDF guardado y comprobar que el texto es
+más ancho que alto en pantalla, con los caracteres de izquierda a derecha y el origen en el clic; y PDF con texto fuera de la CropBox (con origen
+desplazado y /Rotate 90): ninguna caja de la capa queda fuera de la página y el PDF guardado conserva ese texto.
+
+**Límites.** Una línea que solapa parcialmente la CropBox se sigue ofreciendo entera. Notas, sellos y firma no usan este camino (anotaciones/imágenes).
 **Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
