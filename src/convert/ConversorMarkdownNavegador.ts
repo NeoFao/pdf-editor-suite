@@ -1,5 +1,6 @@
 import type { ConversorDocumento, ResultadoConversion } from './ConversorDocumento';
 import { aproximado, type Advertencia } from './advertencia';
+import { CodificadorTexto } from './codificacion';
 import { parseMarkdown } from './markdown/parse';
 import { layoutMarkdown, PAGE_WIDTH_PT, PAGE_HEIGHT_PT, type TituloColocado } from './markdown/layout';
 import type { Block, Inline } from './markdown/ast';
@@ -37,24 +38,15 @@ export class ConversorMarkdownNavegador implements ConversorDocumento {
   async convertir(_nombre: string, bytes: Uint8Array): Promise<ResultadoConversion> {
     const texto = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
     const ast = parseMarkdown(texto);
-    // El maquetador mide CADA palabra (y el espacio tras ella) para el
-    // ajuste de línea; un documento normal repite muchísimas palabras
-    // (artículos, conectores...) y espacios con el mismo font+tamaño. Sin
-    // memoizar, cada repetición vuelve a cruzar la frontera WASM del motor
-    // (una llamada nativa por carácter) — con un párrafo de varios cientos
-    // de palabras eso se nota (varios segundos, todos en el hilo principal:
-    // measureText es síncrono). El caché es solo de esta conversión (una
-    // `Map` nueva por llamada a `convertir`), no del motor.
-    const cache = new Map<string, number>();
-    const medir = (font: string, sizePt: number, s: string): number => {
-      const key = `${font}\u0000${sizePt}\u0000${s}`;
-      let w = cache.get(key);
-      if (w === undefined) { w = this.engine.measureText(font, sizePt, s); cache.set(key, w); }
-      return w;
-    };
+    // El maquetador mide CADA palabra (y el espacio tras ella) para el ajuste de línea. El codificador (E-120) mide cada tramo con
+    // SU fuente (WinAnsi, Symbol, ZapfDingbats), memoiza (una Map por conversión, no del motor) y es el punto único por el que
+    // pasa el texto: sustituye lo que no tiene glifo, quita controles y avisa (`caracteresSinFuente`, igual que Word).
+    const codificador = new CodificadorTexto((font, sizePt, s) => this.engine.measureText(font, sizePt, s));
+    const medir = codificador.medir;
     const { rgbaPorSrc } = await resolverImagenes(ast);
     const dimensiones = new Map([...rgbaPorSrc].map(([src, im]) => [src, { width: im.width, height: im.height }]));
-    const { totalPaginas, trazos, barras, imagenes, enlaces, enlacesInternos, titulos, advertencias } = layoutMarkdown(ast, medir, { imagenes: dimensiones });
+    const { totalPaginas, trazos: trazosMaquetados, barras, imagenes, enlaces, enlacesInternos, titulos, advertencias } = layoutMarkdown(ast, medir, { imagenes: dimensiones });
+    const trazos = codificador.prepararTrazos(trazosMaquetados);
 
     // Lote por página (E-037, docs/ERRORES-CONOCIDOS.md): las ops se agrupan por
     // página (barras antes que trazos DENTRO de cada página, para conservar el
@@ -73,7 +65,7 @@ export class ConversorMarkdownNavegador implements ConversorDocumento {
       if (rgba) agregar(img.page, { type: 'insertImage', spec: { rgba: rgba.rgba, imgWidth: rgba.width, imgHeight: rgba.height, xPt: img.xPt, yPt: img.yPt, wPt: img.wPt, hPt: img.hPt } });
     }
     for (const t of trazos) {
-      agregar(t.page, { type: 'insertText', spec: { xPt: t.xPt, yPt: t.yPt, text: t.text, sizePt: t.sizePt, fontName: t.font, color: t.color } });
+      agregar(t.page, { type: 'insertText', spec: { xPt: t.xPt, yPt: t.yPt, text: t.text, sizePt: t.sizePt, fontName: t.font, color: t.color, actualText: t.actualText } });
     }
     for (const e of enlaces) {
       agregar(e.page, { type: 'addLink', rect: { xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt }, url: e.url });
@@ -99,7 +91,7 @@ export class ConversorMarkdownNavegador implements ConversorDocumento {
     const out = this.engine.save(doc);
     this.engine.close(doc);
     // Un enlace o imagen que no se pudo reproducir no se pierde en silencio: el texto se conserva y se avisa (misma política que DOCX).
-    return { pdf: out, advertencias: avisos };
+    return { pdf: out, advertencias: [...avisos, ...codificador.advertencias()] };
   }
 }
 

@@ -67,7 +67,7 @@ test('corpus: la imagen data: PNG se incrusta y la relativa se omite con aviso; 
   expect(imgs).toBe(1);
   const msg = advertencias.map((a) => `${a.tipo}:${a.mensaje}`);
   expect(msg.some((m) => m.startsWith('omitido:') && m.includes('./img/foto.png'))).toBe(true);
-  expect(msg.some((m) => m.startsWith('aproximado:') && m.includes('😀'))).toBe(true);
+  expect(msg.some((m) => m.startsWith('omitido:') && m.includes('😀'))).toBe(true);
   expect(msg.some((m) => m.startsWith('aproximado:') && /HTML/.test(m))).toBe(true);
   expect(msg.filter((m) => m.includes('#titulo-dos'))).toEqual([]);
 }, 60_000);

@@ -484,6 +484,11 @@ export class PdfiumEngine implements PdfEngine {
    */
   private escribirTexto(obj: number, texto: string): void {
     if (texto === '') throw new Error('Texto vacío: FPDFText_SetText("") bloquea el motor; para borrar se elimina el objeto.');
+    // Un NUL (y el resto de controles C0 salvo tab/salto de línea) también mata el WASM («RuntimeError: unreachable», E-120).
+    for (let i = 0; i < texto.length; i++) {
+      const c = texto.charCodeAt(i);
+      if (c < 0x20 && c !== 9 && c !== 10) throw new Error('Texto con caracteres de control (NUL...): FPDFText_SetText los rechaza; hay que eliminarlos antes.');
+    }
     const wptr = this.mem.wide(texto);
     try { this.p.FPDFText_SetText(obj, wptr); } finally { this.mem.free(wptr); }
   }
@@ -2724,6 +2729,11 @@ export class PdfiumEngine implements PdfEngine {
               runId = this.p.FPDFPage_CountObjects(page) - 1;
             }
             if (spec.marca) this.marcarArtefacto(doc, obj, spec.marca);
+            if (spec.actualText) {
+              // PDF 2.0: cadena de texto en UTF-8 con BOM (EF BB BF). Una UTF-16BE llevaría bytes 0x00 y la API de cadenas de PDFium termina en NUL.
+              const span = this.p.FPDFPageObj_AddMark(obj, 'Span');
+              if (span) this.p.FPDFPageObjMark_SetStringParam(doc, obj, span, 'ActualText', '﻿' + spec.actualText);
+            }
             mutado = true;
             results.push({ type: 'insertText', runId });
             break;

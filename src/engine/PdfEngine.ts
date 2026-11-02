@@ -236,6 +236,12 @@ export interface InsertTextSpec {
    * `removeMarkedObjects`). `valor` es p. ej. `Encabezado` o `MarcaAgua`.
    */
   marca?: string;
+  /**
+   * Texto real que representa este objeto cuando lo dibujado es un sustituto (el marcador `?` de un carácter sin glifo,
+   * E-120): se emite como `/Span <</ActualText (...)>> BDC`. Va como texto UTF-8 con BOM (PDF 2.0); los lectores que solo
+   * entienden PDF 1.x lo ignoran. PDFium sí lo respeta al extraer texto (`getPageText` devuelve el original, no el `?`).
+   */
+  actualText?: string;
 }
 
 /**

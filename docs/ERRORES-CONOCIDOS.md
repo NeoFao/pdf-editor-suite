@@ -3632,6 +3632,25 @@ de código fiable.
 
 **Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
 
+---
+
+### E-120 · Word/Markdown → PDF: todo carácter fuera de WinAnsi salía como `ÿ` SIN aviso, y un NUL colgaba la conversión
+
+**Síntoma.** Polaco (Ł ą č), cirílico, griego, CJK, emoji, flechas y símbolos matemáticos salían como `ÿ` (`advertencias=[]`): un documento ruso, griego o chino quedaba ilegible sin que nadie lo supiera. Además un `U+0000` en el texto hacía lanzar `RuntimeError: unreachable` al motor (WASM muerto) y la app se quedaba en «Convirtiendo…» (`App.openFile` solo capturaba `DocxError`); con el NUL dentro de una línea se truncaba el resto.
+
+**Causa raíz.** Las 14 fuentes estándar solo dibujan lo que tienen y `FPDFText_SetText` codifica lo que no encuentra como el código 0xFF (`ÿ`). Nadie clasificaba los caracteres antes de escribirlos: ni el maquetador ni los conversores sabían qué fuente podía dibujar cada uno, y los controles C0 llegaban hasta el motor.
+
+**Arreglo.** Punto único `src/convert/codificacion.ts` (`CodificadorTexto`), usado por ambos conversores para medir (`medir`) y para escribir (`prepararTrazos`). Cada carácter va por una sola vía, con prioridad WinAnsi > Symbol > ZapfDingbats:
+- WinAnsi (ASCII, Latin-1 y extras de Windows-1252): la fuente del estilo.
+- `Symbol`: griego sin tilde, flechas, operadores y símbolos matemáticos (Δ, Ω y μ con el alias de código que Symbol sí tiene). `ZapfDingbats`: ✓ ✔ ✗ ★ ❤ ✂... El trazo se parte por fuente y la X de cada tramo avanza con su anchura real.
+- Sin glifo en ninguna: se dibuja `?` y se emite el aviso `omitido` `caracteresSinFuente` (únicos, hasta 20, con `U+XXXX` y número de apariciones). El texto original va en `/Span <</ActualText>>` (UTF-8 con BOM, PDF 2.0).
+- Controles (NUL, resto de C0, DEL, C1; se conservan tab y salto de línea): se eliminan antes del motor con aviso `caracteresControl`. `escribirTexto` rechaza además cualquier control con un error recuperable. Espacios Unicode (nbsp, em-space...) pasan a espacio; invisibles (ZWSP, guion blando, selectores de variación) se quitan; ligaduras ﬁ ﬂ se expanden; NFD se recompone a NFC.
+- `App.openFile`: cualquier fallo de conversión termina con «No se pudo convertir…» en `#status`.
+Las tablas de glifos se midieron en PDFium (viaje de ida y vuelta por fuente), no se escribieron de memoria.
+
+**Cómo se detecta ahora.** `tests/unit/codificacion-conversor.test.ts` (mapeo WinAnsi/Symbol/Dingbats/sin glifo, controles, avisos), `tests/unit/conversor-caracteres-fuera-winansi.test.ts` (motor real, Word y Markdown con polaco, griego, cirílico y emoji: sin `ÿ`, griego con glifo Symbol, aviso exacto, `/ActualText`, NUL sin colgar), `tests/e2e/next/conversion-error-motor.spec.ts` (error del motor → mensaje, no «Convirtiendo…»).
+
+**Límites.** Griego con tilde (ά), Latin Extendido-A, cirílico, CJK, hebreo, árabe y emoji NO tienen glifo: salen como `?` en el PDF visible. PDFium devuelve el `/ActualText` al extraer texto salvo para caracteres fuera del BMP (emoji); otros lectores solo lo usan si entienden cadenas UTF-8 de PDF 2.0. Cobertura real exigiría incrustar una fuente (ver el spike en `docs/superpowers/spikes/2026-11-02-fuentes-cobertura-unicode.md`, no implementado). Unifica la ruta de Markdown de E-119 (sustitución por `?` y aviso `aproximado` dentro de `markdown/layout.ts`): ahora es una sola ruta para Word y Markdown y un solo aviso, `caracteresSinFuente`, de tipo `omitido`.
 ### E-121 · Convertir un documento largo (Markdown o Word → PDF) costaba O(páginas²): 295 s con 1500 páginas
 
 **Síntoma.** QA de conversores (A4/M6): Markdown con 20000 párrafos (1500 páginas) 295 s y Word con 4000 párrafos 18 s, con el hilo principal bloqueado. Medido en el motor real (Node), Markdown 4000 párrafos (300 páginas): 14,1 s; Word 4000: 13,5 s. Por página, `applyPageOps` pasaba de ~10 ms con 8 páginas a ~160 ms con 600: el coste de escribir UNA página crecía con las páginas ya escritas del documento.
