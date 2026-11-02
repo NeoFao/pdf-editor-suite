@@ -1,5 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
-import { PUERTOS_E2E } from './scripts/puertos-e2e.mjs';
+import { PUERTOS_E2E, urlLocal } from './scripts/puertos-e2e.mjs';
 
 /**
  * Chromium REAL, nunca jsdom.
@@ -22,7 +22,7 @@ export default defineConfig({
     ? [['github'], ['html', { open: 'never', outputFolder: 'playwright-report' }]]
     : [['list']],
   use: {
-    baseURL: 'http://127.0.0.1:3100',
+    baseURL: urlLocal('appVieja'),
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'off'
@@ -36,22 +36,22 @@ export default defineConfig({
       testIgnore: [/responsive\.spec\.js/, /e2e[\\/]next[\\/]/, /e2e[\\/]deploy[\\/]/]
     },
     { name: 'movil', use: { ...devices['Pixel 7'] }, testMatch: /responsive\.spec\.js/ },
-    // App nueva (cimientos): servida por `vite preview` en :4173.
+    // App nueva (cimientos): servida por `vite preview` en PUERTOS_E2E.appNueva.
     {
       name: 'next',
-      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, baseURL: 'http://127.0.0.1:4173' },
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, baseURL: urlLocal('appNueva') },
       testMatch: /e2e[\\/]next[\\/].*\.spec\.ts/
     },
     // Smoke del cutover de despliegue (dist-deploy/): app nueva en `/` y app
     // vieja completa en `/legacy/`, servidas estáticas desde el MISMO build
     // que publica Vercel — ver scripts/construir-despliegue.mjs. Servido por
-    // scripts/servir-despliegue.mjs en :4174 (NO vite preview: ese no manda
+    // scripts/servir-despliegue.mjs en PUERTOS_E2E.despliegue (NO vite preview: ese no manda
     // las cabeceras de vercel.json, así que nunca ejercitaba la app nueva
     // bajo la CSP real de producción — ver el comentario de cabecera de ese
     // fichero).
     {
       name: 'deploy',
-      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, baseURL: 'http://127.0.0.1:4174' },
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1440, height: 900 }, baseURL: urlLocal('despliegue') },
       testMatch: /e2e[\\/]deploy[\\/].*\.spec\.ts/
     }
   ],
@@ -71,7 +71,7 @@ export default defineConfig({
       // proyecto `next`. reuseExistingServer es SIEMPRE false aquí, incluso en
       // local: a diferencia de server.js, este comando sirve un `dist/`
       // congelado en el momento del build. Si queda vivo un `vite preview`
-      // de una sesión anterior en :4173, reutilizarlo se saltaría por
+      // de una sesión anterior en ese puerto, reutilizarlo se saltaría por
       // completo el `npm run build:next` y los tests de tests/e2e/next/
       // correrían contra código que ya no existe — E-033, npm run verify
       // dando un resultado falso sobre `dist` rancio (visto en el PR #52).

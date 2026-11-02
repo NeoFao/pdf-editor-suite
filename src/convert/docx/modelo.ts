@@ -130,7 +130,9 @@ export type ParteParrafo =
     /** Referencia de nota al pie (E-109): índice de la nota en `ModeloDocx.notasAlPie`. El texto es el número ya formateado, en superíndice. */
     nota?: number;
     /** Resultado de un `PAGEREF marcador` (E-111): `texto` es el número guardado por Word (caché, '' si no hay); al maquetar se sustituye por el número de página de NUESTRA paginación. */
-    pageref?: string }
+    pageref?: string;
+    /** Resultado de un campo (E-114): no cuenta para el texto de los marcadores del PDF (outline). */
+    deCampo?: true }
   /** `w:bookmarkStart w:name`: dónde empieza el marcador `nombre` (no ocupa espacio). `paginar` registra la página y la y de su línea; `_GoBack` no se emite nunca. */
   | { tipo: 'marcador'; nombre: string }
   /**
@@ -159,6 +161,9 @@ export type ParteParrafo =
  */
 export interface InfoLista { textoMarcador: string; fuenteMarcador?: string; escalaMarcador?: number }
 
+/** Título de un párrafo (E-114): `nivel` = `w:outlineLvl` efectivo (0 = nivel 1 ... 8), `texto` = texto visible (número de lista incluido, sin campos). */
+export interface TituloDocx { nivel: number; texto: string; marca: string }
+
 export interface Parrafo {
   tipo: 'parrafo';
   partes: ParteParrafo[];
@@ -177,6 +182,8 @@ export interface Parrafo {
   saltoPaginaAntes: boolean;
   nivelEncabezado: number | null;
   lista: InfoLista | null;
+  /** Título para el árbol de marcadores del PDF (E-114): solo párrafos del cuerpo con `w:outlineLvl` efectivo 0-8 y texto. `marca` es el nombre interno del marcador que fija su posición al paginar. */
+  titulo?: TituloDocx;
   /** Tamaño de fuente de referencia del párrafo (primer run, o el de la marca de párrafo si no hay texto) — usado para la altura de las líneas en blanco. */
   tamanoBasePt: number;
   /** `w:keepNext` (o un título sin `keepNext` explícito): la última línea del párrafo no puede quedar sola al pie de una página, sin la primera línea del siguiente. */
@@ -754,6 +761,8 @@ interface Contexto {
   estiloTabla: string | null;
   /** Campos complejos (`w:fldChar`) abiertos, el más interno al final. `suprimir`: el resultado cacheado se descarta porque ya se emitió un `campo`. */
   camposAbiertos: CampoAbierto[];
+  /** Títulos del cuerpo ya registrados (E-114): da nombre único a cada marca interna. */
+  titulos: number;
   /** Notas al pie y al final (E-109). */
   notas: { pie: ClaseNotas; final: ClaseNotas; enNota: boolean; numeroActual: string | null };
 }
@@ -855,7 +864,14 @@ function procesarRun(runEl: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, parte
     }
     // Resultado cacheado de un campo ya sustituido (PAGE/NUMPAGES): se descarta, el número real se pinta al maquetar.
     if (ctx.camposAbiertos.some((c) => c.suprimir) && (h.nombre === 'w:t' || h.nombre === 'w:tab' || h.nombre === 'w:br' || h.nombre === 'w:cr' || h.nombre === 'w:noBreakHyphen')) continue;
-    if (h.nombre === 'w:t') { const t = textoDirecto(h); if (t.length > 0) empujarTexto(t, acc, formato, partes); }
+    if (h.nombre === 'w:t') {
+      const t = textoDirecto(h);
+      if (t.length > 0) {
+        const n0 = partes.length;
+        empujarTexto(t, acc, formato, partes);
+        if (ctx.camposAbiertos.length > 0) for (let i = n0; i < partes.length; i++) { const x = partes[i]!; if (x.tipo === 'texto') x.deCampo = true; }
+      }
+    }
     else if (h.nombre === 'w:tab') partes.push({ tipo: 'tab' });
     else if (h.nombre === 'w:br') {
       if (h.atributos['w:type'] === 'column') anotar(ctx, 'saltoColumna');
@@ -1204,6 +1220,7 @@ function procesarFldSimple(h: XmlElemento, baseRuns: RPrAcum, ctx: Contexto, par
     return;
   }
   avisarCampo(ctx, clase, tmp.some((x) => (x.tipo === 'texto' && x.texto.trim() !== '') || x.tipo === 'imagen'));
+  for (const x of tmp) if (x.tipo === 'texto') x.deCampo = true;
   partes.push(...tmp);
 }
 
@@ -1295,6 +1312,26 @@ function baseRunsDeParrafo(estiloParrafo: string | null, pPr: XmlElemento | null
   return rPrEfectivo(ctx, { estiloTabla: ctx.enCelda ? ctx.estiloTabla : null, estiloParrafo, marca: pPr ? primerHijo(pPr, 'w:rPr') : null });
 }
 
+/**
+ * Título del párrafo para el outline del PDF (E-114), o `undefined`. Criterio: `w:outlineLvl` EFECTIVO (directo o por la cadena de
+ * estilos, ya resuelto en `pPrEfectivo`) entre 0 y 8; NO el nombre del estilo (está localizado: «Heading 1», «Título 1»...). Sin
+ * título en encabezados, pies, notas ni celdas, y sin texto no hay marcador. El texto lleva el número de la lista si es visible
+ * (no una viñeta) y deja fuera los resultados de campos, las referencias de nota y las imágenes.
+ */
+function tituloDeParrafo(outlineLvl: number | null, lista: InfoLista | null, partes: ParteParrafo[], ctx: Contexto): TituloDocx | undefined {
+  if (outlineLvl === null || !Number.isInteger(outlineLvl) || outlineLvl < 0 || outlineLvl > 8) return undefined;
+  if (ctx.zona || ctx.enCelda || ctx.notas.enNota) return undefined;
+  let texto = '';
+  for (const p of partes) {
+    if (p.tipo === 'texto') { if (!p.deCampo && p.nota === undefined && p.pageref === undefined) texto += p.texto; }
+    else if (p.tipo === 'tab' || p.tipo === 'saltoLinea') texto += ' ';
+  }
+  texto = texto.replace(/\s+/g, ' ').trim();
+  if (texto === '') return undefined;
+  const numero = lista && /[\p{L}\p{N}]/u.test(lista.textoMarcador) ? lista.textoMarcador.trim() : '';
+  return { nivel: outlineLvl, texto: numero ? `${numero} ${texto}` : texto, marca: ` titulo#${ctx.titulos++}` };
+}
+
 function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
   const { pPr, estiloEfectivo, acc } = pPrEfectivo(el, ctx);
 
@@ -1309,9 +1346,10 @@ function procesarParrafo(el: XmlElemento, ctx: Contexto): Parrafo {
   for (const p of partes) if (p.tipo === 'texto') { tamanoBasePt = p.formato.sizeLineaPt ?? p.formato.sizePt; break; }
 
   const lista = listaDeParrafo(acc, ctx);
+  const titulo = tituloDeParrafo(acc.outlineLvl, lista, partes, ctx);
 
   return {
-    tipo: 'parrafo', partes,
+    tipo: 'parrafo', partes, ...(titulo ? { titulo } : {}),
     alineacion: acc.alineacion,
     sangriaIzqPt: acc.sangriaIzqPt, sangriaDerPt: acc.sangriaDerPt, sangriaPrimeraLineaPt: acc.sangriaPrimeraLineaPt,
     espacioAntesPt: acc.espacioAntesPt, espacioDespuesPt: acc.espacioDespuesPt,
@@ -1650,7 +1688,7 @@ export function construirModeloDocx(documentXml: string, stylesXml: string | nul
     : { numMap: new Map<string, string>(), abstractNums: new Map<string, AbstractNumDef>() };
   const rels = relsXml ? leerRelaciones(relsXml) : null;
 
-  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), vinetasAvisadas: new Set(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, pPrTabla: [], estiloTabla: null, camposAbiertos: [], notas: { pie: claseNotasVacia('decimal'), final: claseNotasVacia('lowerRoman'), enNota: false, numeroActual: null } };
+  const ctx: Contexto = { estilos, docDefaultsPPr, docDefaultsRPr, estiloParrafoPorDefecto, numMap, abstractNums, contadoresListas: new Map(), vinetasAvisadas: new Set(), rels, advertenciasExtra: [], perdidas: new Map(), zona: false, enCelda: false, pPrTabla: [], estiloTabla: null, camposAbiertos: [], titulos: 0, notas: { pie: claseNotasVacia('decimal'), final: claseNotasVacia('lowerRoman'), enNota: false, numeroActual: null } };
   // Notas (E-109): sus partes ya vienen decodificadas en `extras.partes`; la numeración sale de settings.xml y de la sección final.
   ctx.notas.pie = leerClaseNotas(extras.partes?.['word/footnotes.xml'], extras.relsPartes?.['word/footnotes.xml'], 'w:footnote', 'decimal');
   ctx.notas.final = leerClaseNotas(extras.partes?.['word/endnotes.xml'], extras.relsPartes?.['word/endnotes.xml'], 'w:endnote', 'lowerRoman');

@@ -245,6 +245,11 @@ export interface InsertTextSpec {
 export interface OutlineItem {
   title: string;
   pageIndex: number | null;
+  /**
+   * Altura del destino dentro de `pageIndex` (E-114): pt PDF, origen ABAJO (borde superior de la línea a la que lleva el
+   * marcador). Ausente = el destino ocupa la página entera (`/Fit`). Solo tiene sentido con `pageIndex` no nulo.
+   */
+  yPt?: number;
   children: OutlineItem[];
   /**
    * Acción del marcador cuando NO es un destino de página. Ausente = destino de
