@@ -85,7 +85,7 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
   // blanco de reserva" de más abajo es solo para un párrafo REALMENTE vacío
   // (el usuario pulsó Intro sin escribir nada, y sin imagen), que sí debe
   // conservar su alto de línea.
-  const tieneSaltoPagina = p.partes.some((parte) => parte.tipo === 'saltoPagina');
+  const tieneSaltoPagina = p.partes.some((parte) => parte.tipo === 'saltoPagina' || parte.tipo === 'saltoColumna');
   // Fase 2c: con tabulaciones (o con flotantes que el texto rodea) las líneas se maquetan al paginar, no antes.
   const tieneTabs = p.partes.some((parte) => parte.tipo === 'tab');
   const usaFlex = opc.flex || tieneTabs;
@@ -159,6 +159,10 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
     } else if (parte.tipo === 'saltoPagina') {
       volcar();
       salida.push({ kind: 'pagebreak' });
+      terminaEnEspacio = true;
+    } else if (parte.tipo === 'saltoColumna') {
+      volcar();
+      salida.push({ kind: 'columnbreak' });
       terminaEnEspacio = true;
     } else if (parte.tipo === 'imagen' && parte.flotante) {
       // Imagen flotante (fase 2b): SIN ajuste de texto. Ocupa 0 pt de flujo; `paginar` la coloca en su posición en la página del contenido siguiente.
@@ -291,8 +295,8 @@ function celdaAGrupos(celda: CeldaTabla, xIniPt: number, xFinPt: number, tabDefe
 }
 
 /** Contadores de degradaciones de tabla (se convierten en avisos al final de `renderizarModeloDocx`). */
-interface AvisosTabla { imagenEscalada: number; imagenAlta: number; filasPartidas: number; anchoEscalado: number; gridAmpliado: number; mergeDemasiadoAlto: number; siguienteMerge: number; saltoEnZona: number; zonaAcotada: number }
-const nuevosAvisos = (): AvisosTabla => ({ imagenEscalada: 0, imagenAlta: 0, filasPartidas: 0, anchoEscalado: 0, gridAmpliado: 0, mergeDemasiadoAlto: 0, siguienteMerge: 0, saltoEnZona: 0, zonaAcotada: 0 });
+interface AvisosTabla { tablaColumnasDesiguales: number; imagenEscalada: number; imagenAlta: number; filasPartidas: number; anchoEscalado: number; gridAmpliado: number; mergeDemasiadoAlto: number; siguienteMerge: number; saltoEnZona: number; zonaAcotada: number }
+const nuevosAvisos = (): AvisosTabla => ({ tablaColumnasDesiguales: 0, imagenEscalada: 0, imagenAlta: 0, filasPartidas: 0, anchoEscalado: 0, gridAmpliado: 0, mergeDemasiadoAlto: 0, siguienteMerge: 0, saltoEnZona: 0, zonaAcotada: 0 });
 
 /** Una celda ya colocada en la rejilla de SU fila (x absoluto de página, en pt). */
 interface CeldaPos {
@@ -537,6 +541,7 @@ function mensajesTabla(av: AvisosTabla): Advertencia[] {
   if (av.gridAmpliado > 0) out.push(aproximado(c(av.gridAmpliado, 'Una tabla tenía filas con más celdas que columnas en su rejilla; se ampliaron las columnas (72 pt cada una) para no perder celdas.', '{n} tablas tenían filas con más celdas que columnas en su rejilla; se ampliaron las columnas (72 pt cada una) para no perder celdas.')));
   if (av.anchoEscalado > 0) out.push(aproximado(c(av.anchoEscalado, 'Una tabla más ancha que la página se escaló proporcionalmente al ancho útil.', '{n} tablas más anchas que la página se escalaron proporcionalmente al ancho útil.')));
   if (av.zonaAcotada > 0) out.push(aproximado(c(av.zonaAcotada, 'Un encabezado o pie era más alto de lo permitido (un tercio de la página): se redujeron sus imágenes y se recortó lo que no cabía.', '{n} encabezados o pies eran más altos de lo permitido (un tercio de la página): se redujeron sus imágenes y se recortó lo que no cabía.')));
+  if (av.tablaColumnasDesiguales > 0) out.push(aproximado(c(av.tablaColumnasDesiguales, 'Una tabla dentro de columnas de distinto ancho se maquetó al ancho de la columna más estrecha.', '{n} tablas dentro de columnas de distinto ancho se maquetaron al ancho de la columna más estrecha.')));
   if (av.saltoEnZona > 0) out.push(aproximado(c(av.saltoEnZona, 'Un salto de página dentro de un encabezado o pie se ignoró.', '{n} saltos de página dentro de encabezados o pies se ignoraron.')));
   return out;
 }
@@ -615,7 +620,7 @@ function itemsDeZona(bloques: BloqueDocx[], sec: SeccionDocx, medir: Medir, camp
   }
   const utiles = items.filter((it) => {
     if (it.kind === 'pagebreak') { av.saltoEnZona++; return false; }
-    return it.kind !== 'keepStart' && it.kind !== 'keepEnd';
+    return it.kind !== 'keepStart' && it.kind !== 'keepEnd' && it.kind !== 'columnbreak';
   });
   while (utiles.length > 0 && utiles[0]!.kind === 'gap') utiles.shift();
   while (utiles.length > 0 && utiles[utiles.length - 1]!.kind === 'gap') utiles.pop();
@@ -726,7 +731,7 @@ function renderizarUnaVez(modelo: ModeloDocx, medir: Medir): ResultadoDocx {
   const geos: PageGeometry[] = [];
   // Notas al pie (E-109): cada una se maqueta con los márgenes de la sección de su referencia y `paginar` la coloca en la página de esa línea.
   const notasFlujo = new Map<number, NotaFlujo>();
-  const ultima: { sec: SeccionDocx | null } = { sec: null };
+  const ultima: { sec: SeccionDocx | null; geo: PageGeometry | null; idx: number } = { sec: null, geo: null, idx: 0 };
   secciones.forEach((sec, idx) => {
     const altoCab = altoMax(sec.encabezados, sec);
     const altoPie = altoMax(sec.pies, sec);
@@ -739,19 +744,29 @@ function renderizarUnaVez(modelo: ModeloDocx, medir: Medir): ResultadoDocx {
     geos.push(geo);
     // Una sección final sin ningún bloque no abre una página en blanco.
     if (idx > 0 && sec.finBloque === sec.inicioBloque) return;
-    items.push({ kind: 'section', geo, continua: sec.tipo === 'continuous' && idx > 0, seccion: idx });
-    ultima.sec = sec;
+    items.push({ kind: 'section', geo, continua: sec.tipo === 'continuous' && idx > 0, seccion: idx, ...(sec.columnas ? { columnas: sec.columnas } : {}) });
+    ultima.sec = sec; ultima.geo = geo; ultima.idx = idx;
     const alturaUtilPt = geo.heightPt - geo.marginTopPt - geo.marginBottomPt;
+    // Columnas (E-118): el contenido se maqueta al ancho de la columna MÁS ESTRECHA, con el margen derecho virtual que lo deja así; `paginar` lo
+    // coloca en cada columna (y reajusta los párrafos al ancho real de la suya). Las notas al pie usan el ancho de la primera columna.
+    const anchosCol = sec.columnas?.anchosPt;
+    const margenDerCuerpo = anchosCol ? sec.paginaAnchoPt - sec.margenIzqPt - Math.min(...anchosCol) : sec.margenDerPt;
+    const columnasDesiguales = !!anchosCol && Math.max(...anchosCol) - Math.min(...anchosCol) > 0.5;
+    const opcSeccion: OpcionesFlujo = anchosCol ? { ...opcCuerpo, flex: true } : opcCuerpo;
+    const secNota: SeccionDocx = anchosCol ? { ...sec, margenDerPt: sec.paginaAnchoPt - sec.margenIzqPt - anchosCol[0]! } : sec;
     const bloques: BloqueRenderizado[] = [];
     for (const bloque of modelo.bloques.slice(sec.inicioBloque, sec.finBloque)) {
       for (const k of notasDeBloque(bloque)) {
         const nota = modelo.notasAlPie?.[k];
         if (!nota || notasFlujo.has(k)) continue;
-        const its = itemsDeNota(nota, sec, medir, tabDefectoPt);
+        const its = itemsDeNota(nota, secNota, medir, tabDefectoPt);
         notasFlujo.set(k, { items: its, altoPt: its.reduce((s, x) => s + x.height, 0) });
       }
-      if (esParrafo(bloque)) bloques.push({ items: renderizarParrafo(bloque, sec.margenIzqPt, sec.margenDerPt, sec.paginaAnchoPt, medir, null, opcCuerpo), keepNext: bloque.mantenerConSiguiente, keepLines: bloque.mantenerLineasJuntas });
-      else if (esTabla(bloque)) bloques.push({ items: renderizarTabla(bloque, sec.margenIzqPt, sec.margenDerPt, sec.paginaAnchoPt, alturaUtilPt, medir, av, opcCuerpo), keepNext: false, keepLines: false });
+      if (esParrafo(bloque)) bloques.push({ items: renderizarParrafo(bloque, sec.margenIzqPt, margenDerCuerpo, sec.paginaAnchoPt, medir, null, opcSeccion), keepNext: bloque.mantenerConSiguiente, keepLines: bloque.mantenerLineasJuntas });
+      else if (esTabla(bloque)) {
+        if (columnasDesiguales) av.tablaColumnasDesiguales++;
+        bloques.push({ items: renderizarTabla(bloque, sec.margenIzqPt, margenDerCuerpo, sec.paginaAnchoPt, alturaUtilPt, medir, av, opcSeccion), keepNext: false, keepLines: false });
+      }
     }
     items.push(...agruparKeep(bloques));
   });
@@ -762,6 +777,8 @@ function renderizarUnaVez(modelo: ModeloDocx, medir: Medir): ResultadoDocx {
     const sec: SeccionDocx = ultima.sec;
     const ancho = sec.paginaAnchoPt - sec.margenIzqPt - sec.margenDerPt;
     const porNota = finales.map((n) => itemsDeNota(n, sec, medir, tabDefectoPt));
+    // Si la última sección tiene columnas, las notas al final vuelven a una sola columna a todo el ancho (cierra la región, equilibrándola si toca).
+    if (sec.columnas && ultima.geo) items.push({ kind: 'section', geo: ultima.geo, continua: true, seccion: ultima.idx, sintetica: true });
     items.push({ kind: 'keepStart' }, { kind: 'rule', height: SEPARADOR_NOTAS.altoPt, xPt: sec.margenIzqPt, wPt: Math.min(SEPARADOR_NOTAS.anchoPt, ancho), color: [0, 0, 0], bars: [] }, ...(porNota[0] ?? []), { kind: 'keepEnd' });
     for (const its of porNota.slice(1)) items.push(...its);
   }

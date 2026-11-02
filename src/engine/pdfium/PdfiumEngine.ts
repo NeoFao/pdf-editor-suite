@@ -2201,7 +2201,8 @@ export class PdfiumEngine implements PdfEngine {
       case PDFACTION_GOTO: { const dest = this.p.FPDFAction_GetDest(doc, action); return dest ? dePagina(dest) : { tipo: 'otro' }; }
       case PDFACTION_URI: {
         const uri = leerCadenaPdfium(this.mem, (buf, len) => this.p.FPDFAction_GetURIPath(doc, action, buf, len), (ptr) => this.mem.UTF8ToString(ptr));
-        return validarUrlEnlace(uri) !== null ? { tipo: 'uri', uri } : { tipo: 'otro' };
+        // Esquema no permitido (javascript:, file:, data:...): se conserva la URI solo para AVISAR; la UI nunca la abre (E-116).
+        return validarUrlEnlace(uri) !== null ? { tipo: 'uri', uri } : { tipo: 'bloqueado', uri };
       }
       default: return { tipo: 'otro' };
     }
