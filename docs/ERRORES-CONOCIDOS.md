@@ -3592,7 +3592,6 @@ de código fiable.
 **Límites.** Una selección de ratón de un solo carácter hecha hacia atrás se trata como directa al extenderla con el teclado (el modelo del ratón no guarda
 `inversa`). Al cruzar, `goToPage` coloca la página del foco al principio de la vista.
 
-
 ### E-118 · Word → PDF: las columnas de sección (`w:cols`) se maquetaban a una sola columna con aviso, y el salto de columna era un salto de línea
 
 **Síntoma.** Un documento con texto en dos o tres columnas (boletines, artículos, cartas con cuadro lateral) salía con el texto a todo el ancho de la página, con un aviso `aproximado` («Se omitió la distribución en columnas»). Un `w:br w:type="column"` se convertía en un salto de línea y el separador entre columnas (`w:sep`) no se dibujaba. Una sección continua que pasaba de 1 a 2 columnas en la misma página no se distinguía de una sola columna.
@@ -3605,3 +3604,14 @@ de código fiable.
 
 **Límites.** Las tablas y las imágenes en línea se maquetan al ancho de la columna MÁS ESTRECHA (con columnas de ancho distinto avisa `aproximado` para las tablas) y se colocan a la izquierda de su columna. Las notas al pie usan el ancho de la primera columna y van al pie de la página, no al de la columna de su referencia. Las flotantes con ajuste de texto dentro de una región de columnas usan sus coordenadas de página (sin comprobar a qué columna afectan). `w:type="nextColumn"` se sigue tratando como página nueva (aviso existente). El equilibrado solo repite la ÚLTIMA página de la región: si el último párrafo de la región cruza un salto de página no se equilibra, y si la página arranca con la cola de un párrafo en la columna 1, esa cola queda fija. Un `keepNext` en un párrafo de columnas mantiene el párrafo entero. Los encabezados y pies siguen a una columna. Los saltos de columna dentro de una celda de tabla son saltos de línea (avisan).
 
+### E-119 · Markdown → PDF: tablas, imágenes, saltos duros, enlaces internos y emoji se perdían o salían corrompidos sin aviso
+
+**Síntoma.** Auditado con un corpus propio (`tests/fixtures/corpus-markdown.md`) frente a CommonMark/GFM. Perdido o mal en silencio: tablas GFM (salían como líneas de `|---|`), imágenes (`!` + enlace), saltos duros (`  ` y `\`) y encabezados setext (`===` literal), notas al pie `[^1]`, escapes `\*`, entidades `&amp;`, tachado `~~`, enlaces de referencia/automáticos/URL desnuda, `***x***` (asteriscos sueltos), `snake_case` en cursiva, listas sueltas (partidas en varias listas), líneas de continuación de ítem (párrafos aparte), código sangrado, URL largas y líneas de código fuera del margen, y la coma tras una negrita separada por un espacio. Emoji y CJK salían como `ÿ` (el motor trunca el carácter) sin ningún aviso. Los enlaces `#titulo` se descartaban con un aviso y no había marcadores (outline).
+
+**Causa raíz.** El parser cubría solo el subconjunto del PR #60 y el maquetador asumía que todo texto cabe en Helvetica; no existía un camino de «no representable» que avisara. Las palabras de nodos distintos se unían siempre con espacio (`pegado` no se calculaba).
+
+**Arreglo.** `parse.ts` (setext, `br`, escapes, entidades, `del`, énfasis con reglas de flanqueo, enlaces con paréntesis balanceados/referencia/automáticos, imágenes, tablas, tareas, listas sueltas, continuación, código sangrado, notas); `layout.ts` (tablas con cabecera repetida, imágenes `data:` escaladas, notas al final con enlace, `trocear` de palabras largas, código partido, ids de título y resolución de `#ancla`); `limpiarTexto` sustituye lo no representable por `?` y avisa `aproximado`; HTML en línea se muestra como texto y avisa; imágenes no incrustables (remotas/relativas) muestran su alt y avisan `omitido`. `ConversorMarkdownNavegador` emite `addInternalLink` (E-106) y `setOutline` con los títulos.
+
+**Cómo se detecta ahora.** `tests/unit/markdown-parse-fidelidad.test.ts`, `markdown-layout-fidelidad.test.ts` y `ConversorMarkdownNavegador-fidelidad.test.ts` (motor real: texto, anotaciones Link con destino, outline y avisos del corpus). Vistos fallar antes del arreglo. Sin regla guard.
+
+**Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
