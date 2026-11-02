@@ -327,28 +327,26 @@ test('un elemento desconocido con texto dentro se avisa en vez de descartarse', 
   expect(avisos(xml)).toMatch(/no reconocid/i);
 });
 
-test('ecuaciones, símbolos, objetos incrustados y saltos de columna se avisan', () => {
+test('ecuaciones, símbolos y objetos incrustados se avisan', () => {
   const xml = `<w:document><w:body>
     <w:p><m:oMath><m:r><m:t>x=1</m:t></m:r></m:oMath></w:p>
     <w:p><w:r><w:sym w:font="Wingdings" w:char="F04A"/></w:r></w:p>
     <w:p><w:r><w:object/></w:r></w:p>
-    <w:p><w:r><w:br w:type="column"/></w:r></w:p>
   </w:body></w:document>`;
   const t = avisos(xml);
   expect(t).toMatch(/ecuaci/i);
   expect(t).toMatch(/símbolo/i);
   expect(t).toMatch(/objeto/i);
-  expect(t).toMatch(/columna/i);
 });
 
-test('las columnas de texto se avisan; varias secciones ya NO avisan (fase 2c: cada una conserva su geometría)', () => {
+test('las columnas de texto ya NO se avisan (E-118) ni varias secciones (fase 2c: cada una conserva su geometría)', () => {
   const xml = `<w:document><w:body>
     <w:p><w:pPr><w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr></w:pPr><w:r><w:t>a</w:t></w:r></w:p>
     <w:sectPr><w:pgSz w:w="15840" w:h="12240"/><w:cols w:num="2"/></w:sectPr>
   </w:body></w:document>`;
   const t = avisos(xml);
   expect(t).not.toMatch(/última|todo el documento/i);
-  expect(t).toMatch(/columnas/i);
+  expect(t).not.toMatch(/columnas/i);
 });
 
 test('una lista cuyo numId no está definido se avisa (el marcador se perdería)', () => {
