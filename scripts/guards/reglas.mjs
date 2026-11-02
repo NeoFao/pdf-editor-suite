@@ -306,7 +306,24 @@ export function analizarRegistroErrores(texto, historicos = ERRORES_FUERA_DE_ORD
   const problemas = [];
   let anterior = null;
   const vistos = new Set();
-  texto.split('\n').forEach((linea, i) => {
+  const lineas = texto.split('\n');
+  // Entrada cortada: un fusionado `union` que intercale dos entradas deja un
+  // encabezado sin cuerpo antes del siguiente (o al final del fichero).
+  let cabecera = null;
+  let conCuerpo = false;
+  const cerrar = () => {
+    if (cabecera && !conCuerpo) problemas.push({ linea: cabecera.linea, mensaje: `E-${cabecera.num} no tiene cuerpo (entrada cortada o intercalada)` });
+  };
+  lineas.forEach((linea, i) => {
+    const h = /^### E-(\d+)\b/.exec(linea);
+    if (h) {
+      cerrar();
+      cabecera = { linea: i + 1, num: h[1] };
+      conCuerpo = false;
+    } else if (cabecera && linea.trim() && !/^-{3,}\s*$/.test(linea)) conCuerpo = true;
+  });
+  cerrar();
+  lineas.forEach((linea, i) => {
     const m = /^### E-(\d+)\b/.exec(linea);
     if (!m) return;
     const n = Number(m[1]);
