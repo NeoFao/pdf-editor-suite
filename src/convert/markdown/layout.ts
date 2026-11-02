@@ -116,8 +116,6 @@ export interface OpcionesLayoutMarkdown {
 interface Ctx {
   medir: Medir;
   imagenes: Map<string, { width: number; height: number }>;
-  /** Caracteres sin glifo en las fuentes estándar → sustituidos por "?". */
-  sinGlifo: Set<string>;
   rechazadas: string[];
   htmlEtiquetas: number;
   imagenesOmitidas: string[];
@@ -129,32 +127,13 @@ interface Ctx {
   avisos: Advertencia[];
 }
 
-/** Caracteres fuera de Latin-1 que WinAnsi (las fuentes estándar del PDF) sí representa. */
-const WINANSI_EXTRA = new Set([0x20ac, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039, 0x0152, 0x017d, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x017e, 0x0178]);
-/** Marcas invisibles (unión de emoji, selectores de variación...): se descartan sin aviso. */
-function esInvisible(cp: number): boolean {
-  return (cp >= 0x200b && cp <= 0x200f) || (cp >= 0xfe00 && cp <= 0xfe0f) || cp === 0x2060 || cp === 0xfeff || cp === 0x00ad;
-}
-
 /**
- * Deja solo lo que las fuentes estándar saben pintar. Lo demás (emoji, CJK, símbolos...) se sustituye por UN "?" por
- * racha y se anota en `ctx.sinGlifo` para avisar: sin esto el motor lo escribe truncado a un carácter cualquiera
- * (p. ej. un emoji salía como "ÿ"), una corrupción silenciosa.
+ * Normaliza el texto de un inline para el maquetador: el tabulador pasa a espacio. NO sustituye ni descarta nada más: los
+ * caracteres sin glifo, los controles y los espacios Unicode los trata `CodificadorTexto` (`src/convert/codificacion.ts`,
+ * E-120), la única ruta para Word y Markdown, que además avisa (`caracteresSinFuente`, `caracteresControl`).
  */
-function limpiarTexto(ctx: Ctx, s: string): string {
-  let out = '';
-  let enRacha = false;
-  for (const ch of s) {
-    const cp = ch.codePointAt(0)!;
-    if (esInvisible(cp)) continue;
-    if (cp === 0x09) { out += ' '; enRacha = false; continue; }
-    if ((cp >= 0x20 && cp <= 0x7e) || (cp >= 0xa0 && cp <= 0xff) || WINANSI_EXTRA.has(cp)) { out += ch; enRacha = false; continue; }
-    if (cp < 0x20 || cp === 0x7f) continue;
-    ctx.sinGlifo.add(ch);
-    if (!enRacha) out += '?';
-    enRacha = true;
-  }
-  return out;
+function limpiarTexto(_ctx: Ctx, s: string): string {
+  return s.replace(/	/g, ' ');
 }
 
 const RE_HTML = /<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*)?\/?>|<!--/g;
@@ -571,7 +550,7 @@ export function layoutMarkdown(blocks: Block[], medir: Medir, opciones?: Opcione
   const vacio = (): ResultadoMarkdown => ({ totalPaginas: 1, trazos: [], barras: [], imagenes: [], enlaces: [], enlacesAncla: [], marcadores: new Map(), advertencias: [], paginas: [{ geo: PAGE_GEOMETRY, seccion: 0 }], titulos: [], enlacesInternos: [] });
   if (blocks.length === 0) return vacio();
   const ctx: Ctx = {
-    medir, imagenes: opciones?.imagenes ?? new Map(), sinGlifo: new Set(), rechazadas: [], htmlEtiquetas: 0, imagenesOmitidas: [],
+    medir, imagenes: opciones?.imagenes ?? new Map(), rechazadas: [], htmlEtiquetas: 0, imagenesOmitidas: [],
     idDeTitulo: new WeakMap(), titulos: [], numeroNota: new Map(), refsVistas: new Set(), avisos: []
   };
   asignarIds(blocks, ctx.idDeTitulo, new Map());
@@ -594,11 +573,6 @@ export function layoutMarkdown(blocks: Block[], medir: Medir, opciones?: Opcione
 
   // Avisos: nada se pierde en silencio.
   const avisos: Advertencia[] = [...ctx.avisos];
-  if (ctx.sinGlifo.size > 0) {
-    const lista = [...ctx.sinGlifo];
-    const mostrados = lista.slice(0, 12).join(' ');
-    avisos.push(aproximado(`${lista.length === 1 ? 'Un carácter no existe' : `${lista.length} caracteres no existen`} en las fuentes estándar del PDF (emoji, CJK u otros símbolos) y se sustituyeron por "?": ${mostrados}${lista.length > 12 ? ` y ${lista.length - 12} más` : ''}.`));
-  }
   if (ctx.htmlEtiquetas > 0) avisos.push(aproximado(`El documento contiene HTML en línea (${ctx.htmlEtiquetas} ${ctx.htmlEtiquetas === 1 ? 'etiqueta' : 'etiquetas'}): no se interpreta, se muestra como texto.`));
   const urls = [...new Set(ctx.rechazadas)];
   for (const u of urls) avisos.push(aproximado(`El enlace "${u}" no se convirtió en enlace clicable (solo se admiten http:, https: y mailto:, o #título dentro del documento); el texto se conserva.`));

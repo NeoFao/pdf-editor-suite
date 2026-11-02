@@ -1159,7 +1159,11 @@ export class App {
         resultado = await conversor.convertir(file.name, bytes);
       } catch (err) {
         if (err instanceof DocxError) { this.setStatus(err.message); return; }
-        throw err;
+        // Cualquier otro fallo (p. ej. un error del motor) termina con un mensaje, nunca con «Convirtiendo…» para siempre (E-120).
+        console.error('Fallo al convertir', file.name, err);
+        const detalle = err instanceof Error && err.message ? ` (${err.message})` : '';
+        this.setStatus(`No se pudo convertir «${file.name}»${detalle}. Si vuelve a ocurrir, recarga la página.`);
+        return;
       }
       const pdfName = file.name.replace(/\.[^./\\]+$/, '') + '.pdf';
       await this.openBytes(resultado.pdf, pdfName);

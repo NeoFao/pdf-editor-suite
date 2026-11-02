@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { instalarSondaCSP } from './_csp';
 
 /**
  * Smoke del cutover de despliegue (spec §4): corre contra `dist-deploy/`
@@ -55,11 +56,31 @@ test('/legacy/ sirve la app vieja completa, sin 404 de recursos locales', async 
   await expect(page.locator('#aviso-version-anterior')).toContainText('versión anterior');
 });
 
-// `/legacy` sin barra final (resolución de índice de directorio vía el
-// `rewrite` de vercel.json) NO se prueba aquí: `vite preview` (sirv, modo
-// SPA por defecto de Vite) resuelve cualquier ruta sin fichero exacto con
-// SU PROPIO fallback a `dist-deploy/index.html` — la app NUEVA, no
-// `legacy/index.html` — así que este entorno local no puede reproducir el
-// enrutado real de Vercel para ese caso concreto. Se verifica con curl
-// contra la URL de preview de Vercel antes de fusionar (ver la descripción
-// del PR).
+// E-128: `/legacy` sin barra final servía el HTML de la app vieja pero sus
+// rutas relativas (css/, js/) se resolvían contra `/` -> 404 y app sin CSS/JS.
+// Ahora vercel.json redirige (308) `/legacy` -> `/legacy/`.
+test('/legacy sin barra acaba en /legacy/, sin 404, sin violaciones de CSP y con la app viva', async ({ page, baseURL }) => {
+  const sonda = await instalarSondaCSP(page);
+  const origenEsperado = new URL(baseURL!).origin;
+  const recursosRotos: string[] = [];
+  page.on('response', (respuesta) => {
+    if (new URL(respuesta.url()).origin !== origenEsperado) return;
+    if (respuesta.status() === 404) recursosRotos.push(respuesta.url());
+  });
+
+  await page.goto('/legacy');
+  await expect(page).toHaveURL(/\/legacy\/$/);
+  await expect(page.locator('#welcome-dropzone')).toBeVisible();
+  await expect(page.locator('#aviso-version-anterior')).toBeVisible();
+
+  // CSS aplicado de verdad (con 404 el dropzone salía sin estilos).
+  expect(await page.evaluate(() => document.styleSheets.length)).toBeGreaterThan(0);
+
+  // Un control de la app vieja responde: abrir un PDF crea bloques de texto.
+  await page.locator('#main-file-input').setInputFiles(FIXTURE_NATIVO);
+  await expect(page.locator('.acrobat-text-block').first()).toBeAttached();
+
+  expect(recursosRotos).toEqual([]);
+  expect(sonda.mensajesConsola).toEqual([]);
+  expect(await sonda.violaciones()).toEqual([]);
+});
