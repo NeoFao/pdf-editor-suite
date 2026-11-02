@@ -1159,7 +1159,11 @@ export class App {
         resultado = await conversor.convertir(file.name, bytes);
       } catch (err) {
         if (err instanceof DocxError) { this.setStatus(err.message); return; }
-        throw err;
+        // Cualquier otro fallo (p. ej. un error del motor) termina con un mensaje, nunca con «Convirtiendo…» para siempre (E-120).
+        console.error('Fallo al convertir', file.name, err);
+        const detalle = err instanceof Error && err.message ? ` (${err.message})` : '';
+        this.setStatus(`No se pudo convertir «${file.name}»${detalle}. Si vuelve a ocurrir, recarga la página.`);
+        return;
       }
       const pdfName = file.name.replace(/\.[^./\\]+$/, '') + '.pdf';
       await this.openBytes(resultado.pdf, pdfName);
@@ -1466,7 +1470,12 @@ export class App {
   private async handleInsert(pageIndex: number, at: PtPoint): Promise<void> {
     if (this.bloqueado()) return;
     if (this.tool !== 'insert' || !this.bus) return;
-    await this.bus.execute(new InsertTextCmd(pageIndex, { xPt: at.xPt, yPt: at.yPt, text: 'Texto nuevo', sizePt: 16 }));
+    // E-123: el texto se escribe en el espacio de USUARIO (sin girar); en una página con /Rotate se gira esos mismos grados
+    // (antihorarios, como el OCR de E-089) para que se vea horizontal y derecho en pantalla, con el origen en el clic.
+    const giro = this.session?.model.pages[pageIndex]?.rotation ?? 0;
+    await this.bus.execute(new InsertTextCmd(pageIndex, {
+      xPt: at.xPt, yPt: at.yPt, text: 'Texto nuevo', sizePt: 16, ...(giro ? { giroGrados: giro } : {})
+    }));
     this.setStatus('Texto insertado. Haz clic en él para editarlo.');
   }
 

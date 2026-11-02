@@ -11,9 +11,27 @@
  */
 export type TipoAdvertencia = 'omitido' | 'aproximado';
 
+/** Un carácter afectado por un aviso de codificación: el carácter, su código `U+XXXX` y cuántas veces aparece. */
+export interface CaracterAfectado {
+  caracter: string;
+  codigo: string;
+  veces: number;
+}
+
+/**
+ * Identificador estable de los avisos que la UI o los tests deben poder reconocer sin leer el texto (E-120):
+ *  - `caracteresSinFuente`: caracteres sin glifo en las fuentes estándar; se dibujan como `?`.
+ *  - `caracteresControl`: caracteres de control (U+0000...) eliminados antes de llegar al motor.
+ */
+export type CodigoAdvertencia = 'caracteresSinFuente' | 'caracteresControl';
+
 export interface Advertencia {
   tipo: TipoAdvertencia;
   mensaje: string;
+  /** Solo en avisos con identidad propia (ver `CodigoAdvertencia`). */
+  codigo?: CodigoAdvertencia;
+  /** Detalle de los caracteres afectados (únicos, hasta 20), en orden de primera aparición. */
+  caracteres?: readonly CaracterAfectado[];
 }
 
 export const omitido = (mensaje: string): Advertencia => ({ tipo: 'omitido', mensaje });

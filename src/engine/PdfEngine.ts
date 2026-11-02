@@ -113,9 +113,10 @@ export interface NoteInfo { index: number; text: string; rectPt: RectPt }
 /**
  * Destino de una anotación `/Link` leída del documento. `pagina`: destino dentro del propio documento (acción GoTo o `/Dest`),
  * `yPt` = posición vertical del destino (`/XYZ`) en pt de usuario con origen ABAJO (E-084), o `null` si el destino no la fija (p. ej. `/Fit`).
+ * `bloqueado`: acción `/URI` cuyo esquema no es http, https ni mailto (javascript:, file:, data:...); se conserva la URI solo para avisar, nunca se abre.
  * `otro`: cualquier otra acción (GoToR, Launch, JavaScript...): solo se lee, nunca se ejecuta.
  */
-export type DestinoEnlace = { tipo: 'uri'; uri: string } | { tipo: 'pagina'; pageIndex: number; yPt: number | null } | { tipo: 'otro' };
+export type DestinoEnlace = { tipo: 'uri'; uri: string } | { tipo: 'bloqueado'; uri: string } | { tipo: 'pagina'; pageIndex: number; yPt: number | null } | { tipo: 'otro' };
 /** Anotación `/Link` de una página: su caja (pt PDF, origen abajo-izquierda) y adónde lleva. */
 export interface EnlaceLeido { rectPt: RectPt; destino: DestinoEnlace }
 
@@ -235,6 +236,12 @@ export interface InsertTextSpec {
    * `removeMarkedObjects`). `valor` es p. ej. `Encabezado` o `MarcaAgua`.
    */
   marca?: string;
+  /**
+   * Texto real que representa este objeto cuando lo dibujado es un sustituto (el marcador `?` de un carácter sin glifo,
+   * E-120): se emite como `/Span <</ActualText (...)>> BDC`. Va como texto UTF-8 con BOM (PDF 2.0); los lectores que solo
+   * entienden PDF 1.x lo ignoran. PDFium sí lo respeta al extraer texto (`getPageText` devuelve el original, no el `?`).
+   */
+  actualText?: string;
 }
 
 /**
@@ -638,6 +645,21 @@ export interface PdfEngine {
    * orden.
    */
   applyPageOps(doc: DocHandle, pageIndex: number, ops: PageOp[]): PageOpResult[];
+  /**
+   * Construye un documento nuevo de N páginas (tamaño propio en puntos PDF) con las
+   * operaciones de cada una ya aplicadas (E-121). Es la ruta de los conversores
+   * (Markdown/Word → PDF): cada página se escribe con `applyPageOps` en un documento
+   * de UNA sola página y se importa al resultado. Aplicar las ops sobre un documento
+   * con todas las páginas costaba O(páginas²) (en PDFium, cada `GenerateContent` de
+   * texto se encarece con lo ya escrito en el documento). El resultado es el mismo
+   * (texto, posiciones, enlaces, imágenes). Cede el hilo cada cierto número de
+   * páginas e informa del avance. Devuelve el DocHandle (hay que cerrarlo).
+   */
+  buildDocumentFromPages(
+    pages: { widthPt: number; heightPt: number; ops: PageOp[] }[],
+    alProgreso?: (hechas: number, total: number) => void
+  ): Promise<DocHandle>;
+
   /**
    * Elimina de la página SOLO los objetos marcados con `/Artifact <</PDFEditor …>>`
    * (ver `InsertTextSpec.marca`). Con `valor`, solo los de ese valor (p. ej. 'MarcaAgua');

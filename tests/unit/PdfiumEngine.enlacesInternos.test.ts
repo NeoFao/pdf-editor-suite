@@ -47,3 +47,22 @@ test('addInternalLink rechaza una página de destino fuera de rango o no finita,
   expect(eng.getLinks(doc, 0)).toEqual([]);
   eng.close(doc);
 });
+
+test('E-116: una acción /URI con esquema no permitido se lee como bloqueada (con su URI), no como otro', async () => {
+  const { PDFName, PDFString } = await import('pdf-lib');
+  const d = await PDFDocument.create();
+  const p = d.addPage([300, 200]);
+  const ctx = d.context;
+  const link = (uri: string, y: number) => ctx.register(ctx.obj({
+    Type: 'Annot', Subtype: 'Link', Rect: [10, y, 90, y + 20], Border: [0, 0, 0],
+    A: ctx.obj({ Type: 'Action', S: 'URI', URI: PDFString.of(uri) })
+  }));
+  p.node.set(PDFName.of('Annots'), ctx.obj([link('javascript:alert(1)', 10), link('https://example.com/ok', 50)]));
+  const eng = await PdfiumEngine.create();
+  const doc = await eng.open(await d.save());
+  expect(eng.getLinks(doc, 0).map((e) => e.destino)).toEqual([
+    { tipo: 'bloqueado', uri: 'javascript:alert(1)' },
+    { tipo: 'uri', uri: 'https://example.com/ok' }
+  ]);
+  eng.close(doc);
+});

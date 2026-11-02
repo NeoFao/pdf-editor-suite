@@ -2181,6 +2181,36 @@ async function pdfInglete() {
   return doc.save({ useObjectStreams: false });
 }
 
+/**
+ * E-116: enlaces EXTERNOS (/URI) sobre líneas de texto, escritos a mano porque `addLink` rechaza los esquemas peligrosos.
+ * Líneas (y=700, 660, 620, 580, 540): https, mailto, javascript:, /Launch y un https con `&` y espacios codificados.
+ */
+const URL_HTTPS = 'https://ejemplo.test/ruta/larga?a=1&b=dos#frag';
+async function pdfEnlacesExternos() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const p = doc.addPage([595.28, 841.89]);
+  const ctx = doc.context;
+  const filas = [
+    { y: 700, texto: 'Enlace HTTPS externo', accion: { S: 'URI', URI: PDFString.of(URL_HTTPS) } },
+    { y: 660, texto: 'Enlace de correo', accion: { S: 'URI', URI: PDFString.of('mailto:ana@correo.test') } },
+    { y: 620, texto: 'Enlace javascript peligroso', accion: { S: 'URI', URI: PDFString.of('javascript:alert(1)') } },
+    { y: 580, texto: 'Enlace Launch de programa', accion: { S: 'Launch', F: PDFString.of('calc.exe') } },
+    { y: 540, texto: 'Texto sin enlace', accion: null }
+  ];
+  const annots = [];
+  for (const f of filas) {
+    p.drawText(f.texto, { x: 60, y: f.y, size: 14, font });
+    if (!f.accion) continue;
+    annots.push(ctx.register(ctx.obj({
+      Type: 'Annot', Subtype: 'Link', Rect: [58, f.y - 4, 300, f.y + 14], Border: [0, 0, 0],
+      A: ctx.obj({ Type: 'Action', ...f.accion })
+    })));
+  }
+  p.node.set(PDFName.of('Annots'), ctx.obj(annots));
+  return doc.save();
+}
+
 async function main() {
   fs.mkdirSync(SALIDA, { recursive: true });
   const archivos = {
@@ -2192,6 +2222,7 @@ async function main() {
     'rotada-lineas.pdf': await pdfRotadaLineas(),
     'seleccion-giros.pdf': await pdfSeleccionGiros(),
     'cropbox-desplazado.pdf': await pdfCropboxDesplazado(),
+    'enlaces-externos.pdf': await pdfEnlacesExternos(),
     'userunit.pdf': await pdfUserUnit(),
     'userunit-mixto.pdf': await pdfUserUnitMixto(),
     'fuentes.pdf': await pdfFuentes(),
