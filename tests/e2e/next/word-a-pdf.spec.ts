@@ -157,30 +157,12 @@ test('abrir word-encabezados.docx: 3 páginas, pie "Página N de 3" en cada una,
   eng.close(doc);
 });
 
-test('abrir word-flotante.docx: la imagen flotante se coloca (una imagen en la capa) y el aviso visible dice que va sin ajuste de texto', async ({ page }) => {
+test('abrir word-flotante.docx: la imagen flotante (wrapNone) se coloca (una imagen en la capa) y no genera ningún aviso', async ({ page }) => {
   await page.goto('/index.next.html');
   await page.locator('#file-input').setInputFiles(WORD_FLOTANTE);
   await expect(page.locator('.run').first()).toBeVisible();
   await expect(page.locator('.image-box')).toHaveCount(1);
-
-  await expect(page.locator('#conversion-warnings')).toBeVisible();
-  const aviso = (await page.locator('#conversion-warnings').textContent()) ?? '';
-  expect(aviso).toMatch(/imagen flotante colocada sin ajuste de texto/i);
-});
-
-test('T13: la flotante colocada sale en "Incluido con diferencias" y no en "No se pudo incluir"', async ({ page }) => {
-  await page.goto('/index.next.html');
-  await page.locator('#file-input').setInputFiles(WORD_FLOTANTE);
-  await expect(page.locator('.image-box')).toHaveCount(1);
-
-  const aviso = page.locator('#conversion-warnings');
-  await expect(aviso).toBeVisible();
-  await expect(aviso).toHaveAttribute('role', 'status');
-  const aprox = aviso.locator('section[data-tipo="aproximado"]');
-  await expect(aprox).toBeVisible();
-  await expect(aprox.locator('strong')).toHaveText('Incluido con diferencias:');
-  await expect(aprox.locator('li')).toContainText(/imagen flotante colocada sin ajuste de texto/i);
-  await expect(aviso.locator('section[data-tipo="omitido"]')).toBeHidden();
+  await expect(page.locator('#conversion-warnings')).toBeHidden();
 });
 
 test('T13: nota al pie y objeto incrustado salen en "No se pudo incluir"; el enlace rechazado, en "Incluido con diferencias"', async ({ page }) => {

@@ -161,13 +161,13 @@ function ancla(h: string, v: string): string {
   return `<w:drawing><wp:anchor><wp:positionH relativeFrom="${h.split('|')[0]}">${h.split('|')[1]}</wp:positionH><wp:positionV relativeFrom="${v.split('|')[0]}">${v.split('|')[1]}</wp:positionV><wp:extent cx="914400" cy="457200"/><wp:wrapNone/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing>`;
 }
 
-test('imagen flotante (wp:anchor): se coloca (posOffset EMU → pt) y se avisa "sin ajuste de texto"', () => {
+test('imagen flotante (wp:anchor, wrapNone): se coloca (posOffset EMU → pt), delante del texto y sin aviso', () => {
   const doc = `<w:document><w:body><w:p><w:r>${ancla('page|<wp:posOffset>914400</wp:posOffset>', 'margin|<wp:posOffset>-127000</wp:posOffset>')}<w:t>x</w:t></w:r></w:p></w:body></w:document>`;
   const m = construirModeloDocx(doc, null, null, RELS_IMG);
   const img = soloP(m)[0]!.partes.find((x) => x.tipo === 'imagen')!;
   expect(img).toMatchObject({ tipo: 'imagen', refId: 'word/media/image1.png', wPt: 72, hPt: 36 });
-  expect(img.tipo === 'imagen' && img.flotante).toEqual({ h: { rel: 'page', offsetPt: 72 }, v: { rel: 'margin', offsetPt: -10 } });
-  expect(textosAdvertencias(m.advertencias).join(' | ')).toMatch(/imagen flotante colocada sin ajuste de texto/i);
+  expect(img.tipo === 'imagen' && img.flotante).toEqual({ h: { rel: 'page', offsetPt: 72 }, v: { rel: 'margin', offsetPt: -10 }, capa: 'delante' });
+  expect(textosAdvertencias(m.advertencias)).toEqual([]);
   expect(textosAdvertencias(m.advertencias).join(' | ')).not.toMatch(/omiti/i);
 });
 
@@ -175,9 +175,9 @@ test('wp:align y relativeFrom (leftMargin/paragraph/column) se mapean; relativeF
   const doc = `<w:document><w:body><w:p><w:r>${ancla('column|<wp:align>center</wp:align>', 'paragraph|<wp:posOffset>12700</wp:posOffset>')}</w:r></w:p><w:p><w:r>${ancla('leftMargin|<wp:align>right</wp:align>', 'topMargin|<wp:align>bottom</wp:align>')}</w:r></w:p><w:p><w:r>${ancla('rareza|<wp:align>inside</wp:align>', 'line|<wp:posOffset>0</wp:posOffset>')}</w:r></w:p></w:body></w:document>`;
   const ps = soloP(construirModeloDocx(doc, null, null, RELS_IMG));
   const fl = ps.map((p) => { const i = p.partes.find((x) => x.tipo === 'imagen'); return i && i.tipo === 'imagen' ? i.flotante : undefined; });
-  expect(fl[0]).toEqual({ h: { rel: 'margin', align: 'center' }, v: { rel: 'paragraph', offsetPt: 1 } });
-  expect(fl[1]).toEqual({ h: { rel: 'leftMargin', align: 'right' }, v: { rel: 'topMargin', align: 'bottom' } });
-  expect(fl[2]).toEqual({ h: { rel: 'margin', align: 'left' }, v: { rel: 'paragraph', offsetPt: 0 } });
+  expect(fl[0]).toEqual({ h: { rel: 'margin', align: 'center' }, v: { rel: 'paragraph', offsetPt: 1 }, capa: 'delante' });
+  expect(fl[1]).toEqual({ h: { rel: 'leftMargin', align: 'right' }, v: { rel: 'topMargin', align: 'bottom' }, capa: 'delante' });
+  expect(fl[2]).toEqual({ h: { rel: 'margin', align: 'left' }, v: { rel: 'paragraph', offsetPt: 0 }, capa: 'delante' });
 });
 
 test('imagen flotante dentro de una celda: se omite con aviso de imagen en celda', () => {

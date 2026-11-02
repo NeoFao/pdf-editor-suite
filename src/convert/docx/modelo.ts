@@ -6,7 +6,7 @@ import { parseXml, hijosElemento, primerHijo, textoDirecto, buscarDescendiente, 
 import { classifyFont } from '../../engine/fontClassify';
 import { leerRelaciones, rutaMediaDesdeWord, type Relacion } from './rels';
 import { validarUrlEnlace } from '../../engine/validarUrlEnlace';
-import type { PosFlotanteH, PosFlotanteV, AjusteFlotante } from '../flujo/layout';
+import type { PosFlotanteH, PosFlotanteV, AjusteFlotante, CapaFlotante } from '../flujo/layout';
 
 /**
  * Modelo del documento DOCX (§9 fila #4): de `word/document.xml` +
@@ -101,7 +101,7 @@ export interface RunFormato {
 }
 
 /** Posición de una imagen flotante (`wp:anchor`), ya convertida a pt: ver `PosFlotanteH/V` del maquetador (mismo tipo, mismas unidades). `ajuste` (fase 2c): cómo la rodea el texto; sin él, el texto no se aparta. */
-export interface PosicionFlotante { h: PosFlotanteH; v: PosFlotanteV; ajuste?: AjusteFlotante }
+export interface PosicionFlotante { h: PosFlotanteH; v: PosFlotanteV; ajuste?: AjusteFlotante; /** Sin ajuste (`wrapNone`): `behindDoc="1"` = detrás del texto, si no delante. Con ajuste no importa (el texto no la cruza). */ capa?: CapaFlotante }
 
 /** Relleno de una parada de tabulación (`w:leader`). */
 export type LiderTab = 'none' | 'dot' | 'hyphen' | 'underscore';
@@ -1106,9 +1106,11 @@ function resolverImagenDrawing(drawing: XmlElemento, ctx: Contexto): ParteParraf
   const base = { tipo: 'imagen' as const, refId: rutaMediaDesdeWord(rel.target), wPt: cx / EMU_POR_PUNTO, hPt: cy / EMU_POR_PUNTO };
   if (!anchor) return base;
   const ajuste = leerAjuste(anchor, ctx);
-  // Sin ajuste de texto (wrapNone o sin elemento de ajuste) se avisa; dentro de una celda la flotante se omitirá con su propio aviso (`imagenEnCelda`).
-  if (!ajuste && !ctx.enCelda) anotar(ctx, 'flotante');
-  return { ...base, flotante: { ...leerPosicionAnchor(anchor), ...(ajuste ? { ajuste } : {}) } };
+  // `wrapNone` es exacto (Word tampoco aparta el texto): capa detrás o delante, sin aviso. Sin NINGÚN elemento de ajuste no se sabe qué quiere el documento: se avisa.
+  // Dentro de una celda la flotante se omitirá con su propio aviso (`imagenEnCelda`).
+  if (!ajuste && !ctx.enCelda && !primerHijo(anchor, 'wp:wrapNone')) anotar(ctx, 'flotante');
+  const capa: CapaFlotante | undefined = ajuste ? undefined : anchor.atributos['behindDoc'] === '1' || anchor.atributos['behindDoc'] === 'true' ? 'detras' : 'delante';
+  return { ...base, flotante: { ...leerPosicionAnchor(anchor), ...(ajuste ? { ajuste } : {}), ...(capa ? { capa } : {}) } };
 }
 
 /**

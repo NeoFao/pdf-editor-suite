@@ -199,11 +199,10 @@ test('word-encabezados.docx: el título que caería solo al pie de la página 1 
   engine.close(doc);
 });
 
-test('word-flotante.docx: la imagen flotante se coloca en su posición de página (72 pt, 144 pt desde arriba) y se avisa "sin ajuste de texto"', async () => {
+test('word-flotante.docx: la imagen flotante se coloca en su posición de página (72 pt, 144 pt desde arriba) y NO se avisa (wrapNone es exacto)', async () => {
   const engine = await PdfiumEngine.create();
   const { pdf, advertencias } = await new ConversorDocxNavegador(engine).convertir('word-flotante.docx', leerFixture('word-flotante.docx'));
-  expect(textosAdvertencias(advertencias).join(' | ')).toMatch(/imagen flotante colocada sin ajuste de texto/i);
-  expect(textosAdvertencias(advertencias).join(' | ')).not.toMatch(/omiti/i);
+  expect(textosAdvertencias(advertencias)).toEqual([]);
 
   const doc = await engine.open(pdf);
   const imagenes = engine.listImageObjects(doc, 0);
