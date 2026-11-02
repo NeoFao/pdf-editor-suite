@@ -5,6 +5,7 @@ import { validarUrlEnlace } from '../validarUrlEnlace';
 import { leerUserUnits } from '../userUnit';
 import { esCaracterDePalabra } from '../../texto/esCaracterDePalabra';
 import { BEARING_EM } from '../../texto/lineasEditables';
+import { aVisual, claseBidi, logicoDeCajas, tieneRtl } from '../../texto/bidi';
 import type { QuadPt } from '../../coords/quads';
 import type { PdfEngine, CharBox, DocHandle, SizePt, PageBox, TextRun, EditResult, EditLineResult, LineaParaEditar, SetLinePropsResult, ReplaceFontResult, SetSizeResult, RenderResult, InsertTextSpec, InsertImageSpec, RectPt, MarkupKind, NoteInfo, EnlaceLeido, DestinoEnlace, CommentInfo, CommentKind, FormField, FormFieldKind, FormFieldOption, OutlineItem, AccionMarcador, ImagePixels, PageOp, PageOpResult } from '../PdfEngine';
 
@@ -415,6 +416,12 @@ export class PdfiumEngine implements PdfEngine {
   private textoRealPorObjeto(textPage: number, indiceDe: Map<number, number>): Map<number, { texto: string; espacioAntes: boolean }> {
     const out = new Map<number, { texto: string; espacioAntes: boolean }>();
     const total = this.p.FPDFText_CountChars(textPage);
+    // E-117: en una página con escritura de derecha a izquierda PDFium mezcla el orden de los caracteres de un objeto
+    // (cifras y palabras latinas dentro de un tramo RTL salen invertidas, los blancos del borde cambian de lado). Solo
+    // entonces se relee cada objeto por la posición de sus caracteres.
+    const hayRtl = this.paginaConRtl(textPage, total);
+    const cajas = hayRtl ? this.cajasX(textPage) : null;
+    const entradas = new Map<number, { ch: string; x: number }[]>();
     let espacioPendiente = false;
     // Objeto del último carácter real: un espacio que PDFium genera ENTRE dos caracteres del MISMO objeto es un hueco de
     // `TJ` (pdfTeX separa las palabras así, no con un glifo): es una separación real de palabras y entra en el texto (E-086).
@@ -431,20 +438,56 @@ export class PdfiumEngine implements PdfEngine {
       let ch = '';
       try { ch = u > 0 && u <= 0x10ffff ? String.fromCodePoint(u) : ''; } catch { ch = ''; }
       let e = out.get(idx);
-      if (!e) { e = { texto: '', espacioAntes: espacioPendiente }; out.set(idx, e); }
-      else if (espacioPendiente && idx === ultimoIdx && !/\s$/.test(e.texto) && !/^\s/.test(ch)) e.texto += ' ';
+      const x = cajas ? cajas(k) : 0;
+      if (!e) { e = { texto: '', espacioAntes: espacioPendiente }; out.set(idx, e); entradas.set(idx, []); }
+      const lista = entradas.get(idx)!;
+      if (espacioPendiente && idx === ultimoIdx && !/\s$/.test(e.texto) && !/^\s/.test(ch)) {
+        e.texto += ' ';
+        lista.push({ ch: ' ', x: (lista[lista.length - 1]?.x ?? x) + 1e-3 });
+      }
       e.texto += ch;
+      lista.push({ ch, x });
       espacioPendiente = false;
       ultimoIdx = idx;
     }
+    if (hayRtl) for (const [idx, e] of out) e.texto = logicoDeCajas(entradas.get(idx)!);
     return out;
+  }
+
+  /** `true` si algún carácter de la text page es de derecha a izquierda (hebreo, árabe…). */
+  private paginaConRtl(textPage: number, total: number): boolean {
+    for (let k = 0; k < total; k++) {
+      const c = this.p.FPDFText_GetUnicode(textPage, k);
+      if (c >= 0x0590 && (c <= 0x08ff || (c >= 0xfb1d && c <= 0xfdff) || (c >= 0xfe70 && c <= 0xfeff))) {
+        const clase = claseBidi(c);
+        if (clase === 'R' || clase === 'AL') return true;
+      }
+    }
+    return false;
+  }
+
+  /** Función `k → x` (borde izquierdo, pt) de la caja del carácter `k`; −1e9 si no tiene caja. Lee todas de golpe. */
+  private cajasX(textPage: number): (k: number) => number {
+    const l = this.mem.malloc(8), r = this.mem.malloc(8), b = this.mem.malloc(8), t = this.mem.malloc(8);
+    const n = this.p.FPDFText_CountChars(textPage);
+    const xs = new Float64Array(n);
+    for (let k = 0; k < n; k++) {
+      this.p.FPDFText_GetCharBox(textPage, k, l, r, b, t);
+      const L = this.mem.getValue(l, 'double'), R = this.mem.getValue(r, 'double');
+      xs[k] = R > L ? L : -1e9;
+    }
+    [l, r, b, t].forEach((ptr) => this.mem.free(ptr));
+    return (k) => xs[k] ?? -1e9;
   }
 
   /** Texto real (sin caracteres generados) de UN objeto, leyendo solo los caracteres de la text page que le pertenecen. */
   private textoRealDeObjeto(textPage: number, obj: number): string {
+    const total = this.p.FPDFText_CountChars(textPage);
+    const hayRtl = this.paginaConRtl(textPage, total);
+    const cajas = hayRtl ? this.cajasX(textPage) : null;
+    const lista: { ch: string; x: number }[] = [];
     let texto = '';
     let pendiente = false;
-    const total = this.p.FPDFText_CountChars(textPage);
     for (let k = 0; k < total; k++) {
       const u = this.p.FPDFText_GetUnicode(textPage, k);
       if (this.p.FPDFText_IsGenerated(textPage, k) === 1) {
@@ -457,13 +500,17 @@ export class PdfiumEngine implements PdfEngine {
       try {
         if (u > 0 && u <= 0x10ffff) {
           // Hueco de `TJ` entre dos caracteres del mismo objeto: separación de palabras real (E-086).
-          if (pendiente && texto !== '' && !/\s$/.test(texto) && u !== 32) texto += ' ';
+          if (pendiente && texto !== '' && !/\s$/.test(texto) && u !== 32) {
+            texto += ' ';
+            lista.push({ ch: ' ', x: (lista[lista.length - 1]?.x ?? 0) + 1e-3 });
+          }
           texto += String.fromCodePoint(u);
+          lista.push({ ch: String.fromCodePoint(u), x: cajas ? cajas(k) : 0 });
         }
       } catch { /* unidad suelta: se omite */ }
       pendiente = false;
     }
-    return texto;
+    return hayRtl ? logicoDeCajas(lista) : texto;
   }
 
   /** Texto actual de un run para reescribirlo: el REAL (sin espacios generados por PDFium); si no hay, el de `GetText`. */
@@ -809,8 +856,27 @@ export class PdfiumEngine implements PdfEngine {
       }
       // Edición EN SITIO: mismo objeto → conserva fuente, tamaño, color y matriz. Se escribe y se RELEE (E-079): si la
       // fuente no tiene algún glifo se cierra la página sin generar contenido y no queda nada escrito.
-      this.escribirTexto(obj, newText);
+      // E-117: texto de derecha a izquierda. El `Tj` guarda los glifos en orden VISUAL (izquierda a derecha): se escribe
+      // `aVisual(newText)`, se relee el texto LÓGICO y el borde derecho se conserva (una línea RTL crece hacia la
+      // izquierda). La base de dirección es la del objeto actual; si no coincide al releer, nada se escribe.
+      const rtl = tieneRtl(newText);
+      let derAntes = NaN;
+      if (rtl) {
+        const tp = this.p.FPDFText_LoadPage(page);
+        let actual = '';
+        try { actual = this.textoRealDeObjeto(tp, obj); } finally { this.p.FPDFText_ClosePage(tp); }
+        const mt = this.matrizDe(obj);
+        if (Math.abs(mt[1]) > 1e-3 || Math.abs(mt[2]) > 1e-3 || mt[0] < 0) return { ok: false, reason: 'glyph-missing' };
+        derAntes = this.cajaUnida([obj]).r;
+        this.escribirTexto(obj, aVisual(newText, tieneRtl(actual) ? 'rtl' : 'ltr'));
+      } else {
+        this.escribirTexto(obj, newText);
+      }
       if (!this.textoEscritoCoincide(page, obj, newText)) return { ok: false, reason: 'glyph-missing' };
+      if (rtl && Number.isFinite(derAntes)) {
+        const dx = derAntes - this.cajaUnida([obj]).r;
+        if (Math.abs(dx) > 1e-3) this.p.FPDFPageObj_Transform(obj, 1, 0, 0, 1, dx, 0);
+      }
       this.p.FPDFPage_GenerateContent(page);
       return { ok: true };
     } finally {
@@ -823,6 +889,8 @@ export class PdfiumEngine implements PdfEngine {
     if (textoNuevo === '') return { ok: false, reason: 'empty-text' };
     if (textoNuevo === linea.text) return { ok: true, sinCambios: true };
     if (linea.runIds.length === 0) return { ok: false, reason: 'not-a-text-run' };
+    // E-117: una línea con aviso (árabe, varios objetos con RTL, RTL girado) no se reescribe a medias.
+    if (linea.aviso) return { ok: false, reason: 'bidi-no-fiel' };
     // Línea de un solo objeto (nativo.pdf, Word…): exactamente el camino de siempre.
     if (linea.runIds.length === 1) {
       const runId = linea.runIds[0]!;
