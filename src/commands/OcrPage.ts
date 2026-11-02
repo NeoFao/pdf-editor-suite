@@ -30,7 +30,7 @@ export class OcrPageCmd implements Command {
     const caja = c.engine.pageBox(c.doc, this.pageIndex);
     const gira = caja.rotacion === 90 || caja.rotacion === 270;
     const anchoVisual = gira ? caja.tamanoPt.heightPt : caja.tamanoPt.widthPt;
-    // E-126: si el motor acotó el bitmap, los px del OCR están a la escala EFECTIVA (px de bitmap por pt), no a la pedida.
+    // E-129: si el motor acotó el bitmap, los px del OCR están a la escala EFECTIVA (px de bitmap por pt), no a la pedida.
     const escalaReal = reducida ? width / anchoVisual : this.scale;
     const specs = mapOcrLines(lines, escalaReal, {
       anchoVisualPt: anchoVisual,

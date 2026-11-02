@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { MAX_PIXELES_BITMAP } from '../../../src/engine/limiteBitmap';
 
 /**
- * E-126: el tamaño del bitmap por página no estaba acotado de forma absoluta (A-2, A-3 del QA de funciones). Una página
+ * E-129: el tamaño del bitmap por página no estaba acotado de forma absoluta (A-2, A-3 del QA de funciones). Una página
  * válida de 7200x7200 o 14400x14400 pt (límite de Acrobat) bloqueaba el hilo segundos, y un MediaBox de 1e9 lanzaba
  * «Invalid typed array length» dejando la página en blanco y sin aviso. Aquí se fija el contrato por TRABAJO (píxeles del
  * canvas, mensajes, errores), no por tiempo de reloj (E-040).

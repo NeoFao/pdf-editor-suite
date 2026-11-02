@@ -1,8 +1,9 @@
-import type { PdfEngine, DocHandle, TextRun, CharBox } from '../engine/PdfEngine';
+import type { PdfEngine, DocHandle, TextRun, CharBox, RectPt } from '../engine/PdfEngine';
 import { DocumentModel } from './DocumentModel';
 import type { PageModel } from './types';
 import { contarGetPageText } from '../diagnostico';
 import { tamanoPaginaValido, TAMANO_PAGINA_SUSTITUTO } from '../engine/limiteBitmap';
+import { cajaVisible } from '../texto/visibilidad';
 
 /**
  * Sesión de edición: une motor + documento abierto + modelo, y sabe
@@ -59,7 +60,7 @@ export class EditSession {
   }
 
   /**
-   * `sizePt` + `userUnit` (+ `tamanoInvalido`) de una página. Un tamaño absurdo (E-126: NaN, ≤ 0, > 14400 pt × UserUnit)
+   * `sizePt` + `userUnit` (+ `tamanoInvalido`) de una página. Un tamaño absurdo (E-129: NaN, ≤ 0, > 14400 pt × UserUnit)
    * no se propaga a la maquetación ni al render: se sustituye por un A4 para poder pintar el marcador de error y que el
    * resto del documento siga funcionando.
    */
@@ -88,18 +89,28 @@ export class EditSession {
     const page = this.model.pages[pageIndex];
     if (!page) return [];
     if (!this.loadedText.has(pageIndex)) {
-      page.runs = this.engine.getPageText(this.doc, pageIndex);
+      page.runs = this.soloVisibles(pageIndex, this.engine.getPageText(this.doc, pageIndex));
       this.loadedText.add(pageIndex);
       contarGetPageText();
     }
     return page.runs;
   }
 
+  /**
+   * E-123: descarta del texto/caracteres ofrecidos los que quedan fuera de la caja visible (CropBox). No toca el PDF.
+   * Los `runId` no cambian (son el índice del objeto en la página), así que lo demás sigue direccionable igual.
+   */
+  private soloVisibles<T extends { boxPt: RectPt }>(pageIndex: number, items: T[]): T[] {
+    if (this.model.pages[pageIndex]?.tamanoInvalido) return items; // E-129: caja absurda (NaN/1e9), no hay recorte fiable
+    const v = this.engine.pageBox(this.doc, pageIndex);
+    return items.filter((it) => cajaVisible(it.boxPt, v));
+  }
+
   /** Caracteres de la página con su caja (selección de texto), cargados del motor la primera vez y cacheados. */
   ensureChars(pageIndex: number): CharBox[] {
     if (!this.model.pages[pageIndex]) return [];
     let c = this.chars.get(pageIndex);
-    if (!c) { c = this.engine.getCharBoxes(this.doc, pageIndex); this.chars.set(pageIndex, c); }
+    if (!c) { c = this.soloVisibles(pageIndex, this.engine.getCharBoxes(this.doc, pageIndex)); this.chars.set(pageIndex, c); }
     return c;
   }
 
@@ -132,7 +143,7 @@ export class EditSession {
       ...EditSession.tamanoPagina(this.engine, this.doc, pageIndex),
       origenPt: this.engine.pageBox(this.doc, pageIndex).origenPt,
       rotation: this.engine.pageRotation(this.doc, pageIndex),
-      runs: this.engine.getPageText(this.doc, pageIndex)
+      runs: this.soloVisibles(pageIndex, this.engine.getPageText(this.doc, pageIndex))
     };
     this.loadedText.add(pageIndex);
     this.chars.delete(pageIndex);

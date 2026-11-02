@@ -1310,7 +1310,7 @@ export class Viewer {
     this.rendered.delete(i);
   }
 
-  /** Marcador de error de una página con tamaño absurdo (E-126): sin bitmap ni capas; el resto del documento sigue igual. */
+  /** Marcador de error de una página con tamaño absurdo (E-129): sin bitmap ni capas; el resto del documento sigue igual. */
   private pintarPaginaInvalida(wrapper: HTMLElement): void {
     wrapper.textContent = '';
     const m =document.createElement('div');
@@ -1344,7 +1344,7 @@ export class Viewer {
     const cssAncho = page.sizePt.widthPt * escala, cssAlto = page.sizePt.heightPt * escala;
     this.dprPintado = window.devicePixelRatio;
     const factor = factorNitidez(this.dprPintado, cssAncho, cssAlto);
-    // E-126: el motor acota el bitmap (píxeles y lado); `reducida` lo avisa. El CSS de abajo no cambia: geometría exacta.
+    // E-129: el motor acota el bitmap (píxeles y lado); `reducida` lo avisa. El CSS de abajo no cambia: geometría exacta.
     const { width, height, data, reducida } = this.session.engine.renderPage(this.session.doc, i, escala * factor);
     const canvas = document.createElement('canvas');
     canvas.width = width; canvas.height = height;

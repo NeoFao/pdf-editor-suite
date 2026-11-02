@@ -10,7 +10,7 @@ export interface PageModel {
   /** `/UserUnit` de la página (1 por defecto). Solo la VISTA lo multiplica a la escala; `sizePt` y las coordenadas no lo llevan (E-099). */
   userUnit: number;
   /**
-   * `true` si el motor declara un tamaño absurdo (no finito, ≤ 0 o > 14400 pt × `userUnit`, E-126): `sizePt` es entonces
+   * `true` si el motor declara un tamaño absurdo (no finito, ≤ 0 o > 14400 pt × `userUnit`, E-129): `sizePt` es entonces
    * un tamaño SUSTITUTO (A4) para poder maquetar y la vista pinta un marcador de error en vez del bitmap.
    */
   tamanoInvalido?: true;

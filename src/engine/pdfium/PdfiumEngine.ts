@@ -310,12 +310,12 @@ export class PdfiumEngine implements PdfEngine {
     const page = this.p.FPDF_LoadPage(doc, pageIndex);
     if (!page) throw new Error(`No se pudo cargar la página ${pageIndex}`);
     const wPt = this.p.FPDF_GetPageWidthF(page), hPt = this.p.FPDF_GetPageHeightF(page);
-    // E-126: tamaño absurdo (NaN, ≤ 0, > 14400 pt × UserUnit) -> error claro, no un typed array de 4e18 bytes.
+    // E-129: tamaño absurdo (NaN, ≤ 0, > 14400 pt × UserUnit) -> error claro, no un typed array de 4e18 bytes.
     if (!tamanoPaginaValido(wPt, hPt, this.userUnit(doc, pageIndex))) {
       this.p.FPDF_ClosePage(page);
       throw new Error(`Tamaño de página no válido (${wPt} x ${hPt} pt)`);
     }
-    // E-126: tope absoluto de píxeles/lado del bitmap; solo baja la RESOLUCIÓN (el llamador fija el tamaño CSS aparte).
+    // E-129: tope absoluto de píxeles/lado del bitmap; solo baja la RESOLUCIÓN (el llamador fija el tamaño CSS aparte).
     const lim = escalaAcotada(wPt, hPt, scale);
     const width = Math.max(1, Math.round(wPt * lim.escala));
     const height = Math.max(1, Math.round(hPt * lim.escala));
@@ -493,6 +493,11 @@ export class PdfiumEngine implements PdfEngine {
    */
   private escribirTexto(obj: number, texto: string): void {
     if (texto === '') throw new Error('Texto vacío: FPDFText_SetText("") bloquea el motor; para borrar se elimina el objeto.');
+    // Un NUL (y el resto de controles C0 salvo tab/salto de línea) también mata el WASM («RuntimeError: unreachable», E-120).
+    for (let i = 0; i < texto.length; i++) {
+      const c = texto.charCodeAt(i);
+      if (c < 0x20 && c !== 9 && c !== 10) throw new Error('Texto con caracteres de control (NUL...): FPDFText_SetText los rechaza; hay que eliminarlos antes.');
+    }
     const wptr = this.mem.wide(texto);
     try { this.p.FPDFText_SetText(obj, wptr); } finally { this.mem.free(wptr); }
   }
@@ -2733,6 +2738,11 @@ export class PdfiumEngine implements PdfEngine {
               runId = this.p.FPDFPage_CountObjects(page) - 1;
             }
             if (spec.marca) this.marcarArtefacto(doc, obj, spec.marca);
+            if (spec.actualText) {
+              // PDF 2.0: cadena de texto en UTF-8 con BOM (EF BB BF). Una UTF-16BE llevaría bytes 0x00 y la API de cadenas de PDFium termina en NUL.
+              const span = this.p.FPDFPageObj_AddMark(obj, 'Span');
+              if (span) this.p.FPDFPageObjMark_SetStringParam(doc, obj, span, 'ActualText', '﻿' + spec.actualText);
+            }
             mutado = true;
             results.push({ type: 'insertText', runId });
             break;
@@ -2825,6 +2835,51 @@ export class PdfiumEngine implements PdfEngine {
       return results;
     } finally {
       this.p.FPDF_ClosePage(page);
+    }
+  }
+
+  async buildDocumentFromPages(
+    pages: { widthPt: number; heightPt: number; ops: PageOp[] }[],
+    alProgreso?: (hechas: number, total: number) => void
+  ): Promise<DocHandle> {
+    if (pages.length === 0) throw new Error('buildDocumentFromPages: hace falta al menos una página');
+    // Una página en blanco POR TAMAÑO distinto (las secciones de Word pueden variar).
+    const enBlanco = new Map<string, Uint8Array<ArrayBuffer>>();
+    const blancoDe = (w: number, h: number): Uint8Array<ArrayBuffer> => {
+      const clave = `${w}x${h}`;
+      let b = enBlanco.get(clave);
+      if (!b) { b = this.createBlank(w, h); enBlanco.set(clave, b); }
+      return b;
+    };
+    // PDF de UNA página con sus ops ya aplicadas (documento efímero: su coste no depende del resto de páginas).
+    const paginaListo = async (pg: { widthPt: number; heightPt: number; ops: PageOp[] }): Promise<Uint8Array<ArrayBuffer>> => {
+      const blanco = blancoDe(pg.widthPt, pg.heightPt);
+      if (pg.ops.length === 0) return blanco;
+      const tmp = await this.open(blanco);
+      try {
+        this.applyPageOps(tmp, 0, pg.ops);
+        return this.save(tmp);
+      } finally {
+        this.close(tmp);
+      }
+    };
+    const doc = await this.open(await paginaListo(pages[0]!));
+    try {
+      let ultimaCesion = performance.now();
+      for (let i = 1; i < pages.length; i++) {
+        this.importPages(doc, await paginaListo(pages[i]!), i);
+        // Cede el hilo como mucho cada ~50 ms de trabajo continuo para que la interfaz pinte el progreso.
+        if (performance.now() - ultimaCesion >= 50) {
+          alProgreso?.(i + 1, pages.length);
+          await new Promise<void>((r) => setTimeout(r, 0));
+          ultimaCesion = performance.now();
+        }
+      }
+      alProgreso?.(pages.length, pages.length);
+      return doc;
+    } catch (e) {
+      this.close(doc);
+      throw e;
     }
   }
 

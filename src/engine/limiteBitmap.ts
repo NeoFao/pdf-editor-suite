@@ -1,5 +1,5 @@
 /**
- * Tope ABSOLUTO del bitmap de una página (E-126, A-2/A-3 del QA de funciones).
+ * Tope ABSOLUTO del bitmap de una página (E-129, A-2/A-3 del QA de funciones).
  *
  * Antes solo `factorNitidez` (E-078) acotaba los píxeles, y solo el FACTOR de DPR, que nunca baja de 1: a escala 1 una
  * página de 14400x14400 pt pedía 207 Mpx (830 MB RGBA), 18-23 s de hilo bloqueado, y un MediaBox de 1e9 pedía un
