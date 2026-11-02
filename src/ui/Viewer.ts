@@ -13,6 +13,7 @@ import { SeleccionTexto } from './SeleccionTexto';
 import { marcadoBajoPunto, ordenLecturaMarcados, type MarcadoHit, type QuadPt } from '../coords/quads';
 import { textoDeMarcado } from '../texto/seleccionTexto';
 import { lineaDeRun } from '../texto/lineasEditables';
+import { seguirEnlaceExterno, etiquetaEnlaceExterno } from './enlaceExterno';
 
 const GAP = 16;
 /** Margen (px CSS) que se deja sobre la línea de destino de un enlace interno al desplazar el visor. */
@@ -1099,13 +1100,15 @@ export class Viewer {
    * `pointer-events: none` (el texto de debajo se edita o se selecciona como siempre, E-106) y solo sirven de objetivo de teclado
    * (`role="link"`, Intro navega). Ctrl+clic (Cmd+clic en Mac) sigue el enlace: un único manejador en CAPTURA sobre la página
    * hace el hit-test contra los rectángulos (px CSS de página). Es un listener del propio elemento de la página, que se descarta con
-   * ella (nada global que quitar). Solo con la herramienta "ninguna". Los enlaces externos (URI) no se tratan aquí.
+   * ella (nada global que quitar). Solo con la herramienta "ninguna". Los enlaces externos (URI) siguen el mismo patrón pero pasan por el diálogo de
+   seguridad de `enlaceExterno.ts` (E-116); los GoToR/Launch/JavaScript no se tratan.
    */
   private drawLinks(i: number): void {
     const wrapper = this.wrappers[i];
     if (!wrapper) return;
     wrapper.querySelector('.link-layer')?.remove();
-    const internos = this.session.engine.getLinks(this.session.doc, i).filter((e) => e.destino.tipo === 'pagina');
+    // Internos (a otra página) y externos (/URI, incluidos los bloqueados por esquema: avisan, no abren). GoToR/Launch/JS ('otro') no se tratan.
+    const internos = this.session.engine.getLinks(this.session.doc, i).filter((e) => e.destino.tipo === 'pagina' || e.destino.tipo === 'uri' || e.destino.tipo === 'bloqueado');
     if (internos.length === 0) { this.enlacesPorPagina.delete(wrapper); return; }
     const geom = this.geoms[i]!;
     const layer = document.createElement('div');
@@ -1114,17 +1117,21 @@ export class Viewer {
     const objetivos: { left: number; top: number; width: number; height: number; ir: () => void }[] = [];
     for (const e of internos) {
       const d = e.destino;
-      if (d.tipo !== 'pagina') continue;
+      if (d.tipo === 'otro') continue;
       const css = geom.rectPtToCss(e.rectPt);
       const caja = document.createElement('div');
       caja.className = 'link-box';
       caja.setAttribute('role', 'link');
       caja.setAttribute('tabindex', '0');
-      const etiqueta = `Ctrl+clic para ir a la página ${d.pageIndex + 1}`;
+      const etiqueta = d.tipo === 'pagina' ? `Ctrl+clic para ir a la página ${d.pageIndex + 1}` : etiquetaEnlaceExterno(d.uri);
       caja.setAttribute('aria-label', etiqueta);
       caja.title = etiqueta;
       Object.assign(caja.style, { position: 'absolute', left: `${css.left}px`, top: `${css.top}px`, width: `${css.width}px`, height: `${css.height}px`, pointerEvents: 'none' });
-      const ir = (): void => { if (this.tool === 'none') this.cb.onEnlaceInterno?.(d.pageIndex, d.yPt); };
+      const ir = (): void => {
+        if (this.tool !== 'none') return;
+        if (d.tipo === 'pagina') this.cb.onEnlaceInterno?.(d.pageIndex, d.yPt);
+        else seguirEnlaceExterno(d.uri); // externo: diálogo de confirmación (o aviso si está bloqueado), E-116
+      };
       caja.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') { ev.preventDefault(); ir(); } });
       objetivos.push({ ...css, ir });
       layer.appendChild(caja);
