@@ -2,6 +2,7 @@ import type { PdfEngine, DocHandle, TextRun, CharBox } from '../engine/PdfEngine
 import { DocumentModel } from './DocumentModel';
 import type { PageModel } from './types';
 import { contarGetPageText } from '../diagnostico';
+import { tamanoPaginaValido, TAMANO_PAGINA_SUSTITUTO } from '../engine/limiteBitmap';
 
 /**
  * Sesión de edición: une motor + documento abierto + modelo, y sabe
@@ -48,14 +49,25 @@ export class EditSession {
     for (let i = 0; i < count; i++) {
       pages.push({
         index: i,
-        sizePt: engine.pageSize(doc, i),
+        ...EditSession.tamanoPagina(engine, doc, i),
         origenPt: engine.pageBox(doc, i).origenPt,
-        userUnit: engine.userUnit(doc, i),
         rotation: engine.pageRotation(doc, i),
         runs: []
       });
     }
     return pages;
+  }
+
+  /**
+   * `sizePt` + `userUnit` (+ `tamanoInvalido`) de una página. Un tamaño absurdo (E-126: NaN, ≤ 0, > 14400 pt × UserUnit)
+   * no se propaga a la maquetación ni al render: se sustituye por un A4 para poder pintar el marcador de error y que el
+   * resto del documento siga funcionando.
+   */
+  private static tamanoPagina(engine: PdfEngine, doc: DocHandle, i: number): Pick<PageModel, 'sizePt' | 'userUnit' | 'tamanoInvalido'> {
+    const sizePt = engine.pageSize(doc, i);
+    const userUnit = engine.userUnit(doc, i);
+    if (tamanoPaginaValido(sizePt.widthPt, sizePt.heightPt, userUnit)) return { sizePt, userUnit };
+    return { sizePt: { ...TAMANO_PAGINA_SUSTITUTO }, userUnit: 1, tamanoInvalido: true };
   }
 
   static async open(engine: PdfEngine, bytes: Uint8Array): Promise<EditSession> {
@@ -117,9 +129,8 @@ export class EditSession {
     if (pageIndex < 0 || pageIndex >= this.model.pages.length) return;
     const page: PageModel = {
       index: pageIndex,
-      sizePt: this.engine.pageSize(this.doc, pageIndex),
+      ...EditSession.tamanoPagina(this.engine, this.doc, pageIndex),
       origenPt: this.engine.pageBox(this.doc, pageIndex).origenPt,
-      userUnit: this.engine.userUnit(this.doc, pageIndex),
       rotation: this.engine.pageRotation(this.doc, pageIndex),
       runs: this.engine.getPageText(this.doc, pageIndex)
     };

@@ -2459,6 +2459,7 @@ export class App {
     if (this.thumbRendered.has(i)) return;
     const s = this.session;
     if (!s) return;
+    if (s.model.pages[i]?.tamanoInvalido) { this.thumbRendered.add(i); this.thumbObserver?.unobserve(canvas); return; } // E-126: tamaño absurdo, la miniatura queda en blanco
     const scale = Number(canvas.dataset.scale);
     contarRenderPage();
     const { width, height, data } = s.engine.renderPage(s.doc, i, scale);

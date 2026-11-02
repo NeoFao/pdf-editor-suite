@@ -6,6 +6,8 @@
  * Unidades: `cssAncho`/`cssAlto` son px CSS de la página a la escala actual; el factor es px de bitmap por px CSS.
  */
 
+import { MAX_PIXELES_BITMAP } from '../engine/limiteBitmap';
+
 /** Tope del factor (DPR 3 de un móvil gasta 2,25x más memoria que 2: 2,5 es nítido sin disparar la RAM). */
 export const MAX_DPR_PAGINA = 2.5;
 
@@ -13,7 +15,7 @@ export const MAX_DPR_PAGINA = 2.5;
  * Tope de píxeles de bitmap por página (8 Mpx = 32 MB RGBA). El visor mantiene como mucho 12 páginas pintadas
  * (E-045), así que el peor caso son ~384 MB; sin este límite un zoom alto a DPR 2,5 pasaría de 1 GB.
  */
-export const MAX_PIXELES_PAGINA = 8_000_000;
+export const MAX_PIXELES_PAGINA = MAX_PIXELES_BITMAP;
 
 /** Factor de bitmap por px CSS: el DPR acotado a `MAX_DPR_PAGINA`, reducido si la página superaría `MAX_PIXELES_PAGINA`, nunca por debajo de 1. */
 export function factorNitidez(dpr: number, cssAncho: number, cssAlto: number): number {
