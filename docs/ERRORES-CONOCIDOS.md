@@ -3606,6 +3606,22 @@ de código fiable.
 
 **Límites.** Sin N0 (paréntesis emparejados), sin espejado de glifos, sin marcas de control explícitas. La reescritura de un objeto hebreo con letras que su subconjunto no trae falla con `glyph-missing` como cualquier fuente subconjunto. Un objeto RTL con cifras o latín dentro de un mismo `Tj` se relee por posición; si no se puede verificar queda en el orden del motor.
 
+### E-116 · Los enlaces externos (`/URI`) de un PDF no hacían nada en el visor, y los de esquema peligroso se descartaban en silencio
+
+**Síntoma.** Un PDF con un enlace a una web o a un correo (los de Word, de un informe, de una factura) no se podía seguir desde el visor; Acrobat lo abre con Ctrl+clic tras un aviso de seguridad. Además `getLinks` degradaba un `javascript:` o `file:` a `otro`, igual que un `/Launch`: la UI no podía distinguir "enlace bloqueado" de "no es un enlace".
+
+**Causa raíz.** `Viewer.drawLinks` solo pintaba los destinos `pagina` (E-106). El motor ya validaba el esquema al leer (`validarUrlEnlace`) pero perdía la URI de las acciones no permitidas.
+
+**Arreglo.** `drawLinks` pinta también `uri` y el nuevo destino `bloqueado`, con el patrón de E-106: clic normal edita o selecciona (cajas `pointer-events: none`); Ctrl+clic o Intro con el foco sigue el enlace. `src/ui/enlaceExterno.ts` decide (`decidirEnlaceExterno`, pura) y muestra un `<dialog>` (`mostrarModal`) con la URL COMPLETA como `textContent` (§2.2), botones Abrir/Cancelar y la casilla "No volver a preguntar para <dominio>" (conjunto en memoria, sin `localStorage`). Solo http, https y mailto (los de `validarUrlEnlace`, sin ampliar) se pueden abrir, con `window.open(url, '_blank', 'noopener,noreferrer')`. Un `bloqueado` abre un aviso sin "Abrir" ni casilla, ni aunque su dominio estuviera omitido. `/Launch`, `/GoToR` y JavaScript siguen siendo `otro`: sin caja ni acción. Etiqueta de la caja: "Ctrl+clic para abrir <dominio>".
+
+**Cómo se detecta ahora.** `tests/e2e/next/enlaces-externos.spec.ts` (Chromium real, red interceptada): clic normal edita sin abrir, Ctrl+clic muestra la URL exacta, Cancelar no abre página, Abrir abre una pestaña con esa URL y sin `opener`, casilla de dominio, mailto, `javascript:` sin "Abrir", `/Launch` inerte, Intro con el foco. `tests/unit/enlaceExterno.test.ts` (decisión y dominio, incluido el subdominio engañoso) y `tests/unit/PdfiumEngine.enlacesInternos.test.ts` (`bloqueado`). Fixture `enlaces-externos.pdf`.
+
+**Suplantación (revisión de seguridad).** La URL se analiza UNA vez con `new URL` y ese `href` normalizado es a la vez lo que se valida, se muestra y se abre (antes se mostraba la cadena del PDF y se abría otra). El diálogo destaca el `hostname` (punycode si es IDN) y debajo el `href`; los bidi y de control (U+200E-F, U+202A-E, U+2066-9, C0/C1) se escapan y avisan, y con ellos no se ofrece la casilla ni se omite la pregunta; una URL con usuario o contraseña (`user@evil.com`) se bloquea sin "Abrir". Tests unitarios de IDN, U+202E, credenciales y coincidencia mostrado/abierto, y el E2E compara lo abierto con el href mostrado.
+
+**mailto.** Se analiza decodificado (lo que lee el usuario): bidi/control se buscan ahí (`%E2%80%AE` ya no pasa), todo lo mostrado, `dominio` incluido, pasa por `escaparPeligrosos`, cada dominio debe ser un hostname válido (punycode si IDN) o el enlace se bloquea sin "Abrir", y varias direcciones o `?cc=`/`?bcc=`/`?body=` se muestran enteros y nunca omiten la pregunta.
+
+**Límites.** La casilla vale para la sesión y por host exacto (`a.test` no cubre `x.a.test`). El dominio mostrado de un mailto es el de la dirección. Nada de esto envía datos del documento a ningún sitio: solo se abre la URL que el usuario aprueba.
+
 ### E-118 · Word → PDF: las columnas de sección (`w:cols`) se maquetaban a una sola columna con aviso, y el salto de columna era un salto de línea
 
 **Síntoma.** Un documento con texto en dos o tres columnas (boletines, artículos, cartas con cuadro lateral) salía con el texto a todo el ancho de la página, con un aviso `aproximado` («Se omitió la distribución en columnas»). Un `w:br w:type="column"` se convertía en un salto de línea y el separador entre columnas (`w:sep`) no se dibujaba. Una sección continua que pasaba de 1 a 2 columnas en la misma página no se distinguía de una sola columna.
@@ -3629,3 +3645,65 @@ de código fiable.
 **Cómo se detecta ahora.** `tests/unit/markdown-parse-fidelidad.test.ts`, `markdown-layout-fidelidad.test.ts` y `ConversorMarkdownNavegador-fidelidad.test.ts` (motor real: texto, anotaciones Link con destino, outline y avisos del corpus). Vistos fallar antes del arreglo. Sin regla guard.
 
 **Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
+
+---
+
+### E-120 · Word/Markdown → PDF: todo carácter fuera de WinAnsi salía como `ÿ` SIN aviso, y un NUL colgaba la conversión
+
+**Síntoma.** Polaco (Ł ą č), cirílico, griego, CJK, emoji, flechas y símbolos matemáticos salían como `ÿ` (`advertencias=[]`): un documento ruso, griego o chino quedaba ilegible sin que nadie lo supiera. Además un `U+0000` en el texto hacía lanzar `RuntimeError: unreachable` al motor (WASM muerto) y la app se quedaba en «Convirtiendo…» (`App.openFile` solo capturaba `DocxError`); con el NUL dentro de una línea se truncaba el resto.
+
+**Causa raíz.** Las 14 fuentes estándar solo dibujan lo que tienen y `FPDFText_SetText` codifica lo que no encuentra como el código 0xFF (`ÿ`). Nadie clasificaba los caracteres antes de escribirlos: ni el maquetador ni los conversores sabían qué fuente podía dibujar cada uno, y los controles C0 llegaban hasta el motor.
+
+**Arreglo.** Punto único `src/convert/codificacion.ts` (`CodificadorTexto`), usado por ambos conversores para medir (`medir`) y para escribir (`prepararTrazos`). Cada carácter va por una sola vía, con prioridad WinAnsi > Symbol > ZapfDingbats:
+- WinAnsi (ASCII, Latin-1 y extras de Windows-1252): la fuente del estilo.
+- `Symbol`: griego sin tilde, flechas, operadores y símbolos matemáticos (Δ, Ω y μ con el alias de código que Symbol sí tiene). `ZapfDingbats`: ✓ ✔ ✗ ★ ❤ ✂... El trazo se parte por fuente y la X de cada tramo avanza con su anchura real.
+- Sin glifo en ninguna: se dibuja `?` y se emite el aviso `omitido` `caracteresSinFuente` (únicos, hasta 20, con `U+XXXX` y número de apariciones). El texto original va en `/Span <</ActualText>>` (UTF-8 con BOM, PDF 2.0).
+- Controles (NUL, resto de C0, DEL, C1; se conservan tab y salto de línea): se eliminan antes del motor con aviso `caracteresControl`. `escribirTexto` rechaza además cualquier control con un error recuperable. Espacios Unicode (nbsp, em-space...) pasan a espacio; invisibles (ZWSP, guion blando, selectores de variación) se quitan; ligaduras ﬁ ﬂ se expanden; NFD se recompone a NFC.
+- `App.openFile`: cualquier fallo de conversión termina con «No se pudo convertir…» en `#status`.
+Las tablas de glifos se midieron en PDFium (viaje de ida y vuelta por fuente), no se escribieron de memoria.
+
+**Cómo se detecta ahora.** `tests/unit/codificacion-conversor.test.ts` (mapeo WinAnsi/Symbol/Dingbats/sin glifo, controles, avisos), `tests/unit/conversor-caracteres-fuera-winansi.test.ts` (motor real, Word y Markdown con polaco, griego, cirílico y emoji: sin `ÿ`, griego con glifo Symbol, aviso exacto, `/ActualText`, NUL sin colgar), `tests/e2e/next/conversion-error-motor.spec.ts` (error del motor → mensaje, no «Convirtiendo…»).
+
+**Límites.** Griego con tilde (ά), Latin Extendido-A, cirílico, CJK, hebreo, árabe y emoji NO tienen glifo: salen como `?` en el PDF visible. PDFium devuelve el `/ActualText` al extraer texto salvo para caracteres fuera del BMP (emoji); otros lectores solo lo usan si entienden cadenas UTF-8 de PDF 2.0. Cobertura real exigiría incrustar una fuente (ver el spike en `docs/superpowers/spikes/2026-11-02-fuentes-cobertura-unicode.md`, no implementado). Unifica la ruta de Markdown de E-119 (sustitución por `?` y aviso `aproximado` dentro de `markdown/layout.ts`): ahora es una sola ruta para Word y Markdown y un solo aviso, `caracteresSinFuente`, de tipo `omitido`.
+### E-121 · Convertir un documento largo (Markdown o Word → PDF) costaba O(páginas²): 295 s con 1500 páginas
+
+**Síntoma.** QA de conversores (A4/M6): Markdown con 20000 párrafos (1500 páginas) 295 s y Word con 4000 párrafos 18 s, con el hilo principal bloqueado. Medido en el motor real (Node), Markdown 4000 párrafos (300 páginas): 14,1 s; Word 4000: 13,5 s. Por página, `applyPageOps` pasaba de ~10 ms con 8 páginas a ~160 ms con 600: el coste de escribir UNA página crecía con las páginas ya escritas del documento.
+
+**Causa raíz.** Los dos conversores creaban el documento con TODAS las páginas en blanco y aplicaban el lote de cada página (`applyPageOps`) sobre él. En PDFium, `FPDFPage_GenerateContent` de una página con texto se encarece con lo ya generado en el documento (aislado: con rectángulos el coste es plano; con texto crece ~linealmente con las páginas escritas; un documento nuevo de una página tarda ~5 ms siempre). Cada objeto de texto además deja su propio diccionario de fuente en el resultado, con o sin handle de fuente compartido (probado con `FPDFText_LoadStandardFont` + `CreateTextObj`: sin efecto, descartado). No es `importPages` ni `measureText`. El mecanismo interno exacto de PDFium no se localizó; la solución evita la condición que lo dispara, y el test cuenta esa condición.
+
+**Arreglo.** `PdfEngine.buildDocumentFromPages(paginas, alProgreso?)`: cada página (tamaño propio + sus ops) se escribe con `applyPageOps` en un documento efímero de UNA página, se guarda y se importa al resultado; las páginas sin ops reutilizan la página en blanco de su tamaño. Los dos conversores lo usan en lugar de «blancas + bucle de `applyPageOps`». Cede el hilo con `setTimeout(0)` como mucho cada ~50 ms de trabajo continuo (la interfaz puede pintar y no parece colgada); el parámetro `alProgreso` queda disponible, pero la UI de conversión aún no lo muestra (propuesto). El resultado es el mismo: se comparó antes y después en 24 documentos (Markdown de 300 secciones y los 22 `.docx` de los fixtures) texto, fuente, tamaño, caja y `runId` de cada run, imágenes, enlaces, tamaño de página y avisos, sin diferencia, y los bytes del PDF de los documentos largos son idénticos.
+
+**Medido después** (misma máquina, Node, información y no test): Markdown 100/1000/4000 párrafos 285/1858/14123 ms → 223/1762/4498 ms; Word 183/1338/13545 ms → 186/1003/4480 ms. Lineal desde entonces (el resto es maquetación y medición).
+
+**Cómo se detecta ahora.** `tests/unit/conversores-lineal.test.ts` (Markdown y Word, motor real, sin reloj, E-040): espía `applyPageOps` y suma, en cada llamada, las páginas del documento sobre el que se aplica; con 4× párrafos la suma debe crecer menos de 6× (antes del arreglo: 14× y 15×). `tests/unit/PdfiumEngine.buildDocument.test.ts`: mismas páginas, textos, posiciones y enlaces que la ruta antigua, con tamaños mixtos y páginas sin ops. Sin regla guard: depende de qué documento recibe la llamada, no de un patrón léxico.
+
+**Límites.** Quien aplique ops sobre un documento ya grande (editar un PDF abierto) sigue pagando el coste de PDFium; esto cubre la construcción desde cero de los conversores. Un documento de miles de páginas sigue ocupando el hilo principal en bloques de ~50 ms (no en un bloque único), sin cancelación.
+### E-123 · Insertar texto en una página girada lo dejaba vertical o boca abajo, y el texto recortado por la CropBox seguía como línea editable
+
+**Síntoma.** (D2) Con «Insertar texto» en una página `/Rotate` 90 o 270 el texto salía vertical, y con 180 boca abajo, aunque el origen sí caía en
+el clic. (D4) El texto fuera de la CropBox (invisible) aparecía como línea editable fuera de la página y entraba en la selección y la búsqueda.
+
+**Causa raíz.** (D2) `handleInsert` escribía el objeto con la matriz identidad en el espacio de USUARIO (sin girar); el OCR ya compensaba el giro
+(E-089) pero la inserción manual no. (D4) `getPageText`/`getCharBoxes` devuelven todo el texto del contenido, también el que cae fuera de la caja
+visible, y la capa de texto lo pintaba tal cual.
+
+**Arreglo.** (D2) `handleInsert` pasa `giroGrados = /Rotate` de la página (antihorario, igual que el OCR). (D4) `EditSession` descarta, al cargar runs y
+caracteres, los que no solapan la caja visible (`src/texto/visibilidad.ts`, pt de usuario sin girar con `pageBox`); NO se borra nada del PDF (§2.3) y los
+`runId` no cambian.
+
+**Cómo se detecta ahora.** `tests/e2e/next/insertar-girado-y-crop.spec.ts`: insertar en 0/90/180/270, releer el PDF guardado y comprobar que el texto es
+más ancho que alto en pantalla, con los caracteres de izquierda a derecha y el origen en el clic; y PDF con texto fuera de la CropBox (con origen
+desplazado y /Rotate 90): ninguna caja de la capa queda fuera de la página y el PDF guardado conserva ese texto.
+
+**Límites.** Una línea que solapa parcialmente la CropBox se sigue ofreciendo entera. Notas, sellos y firma no usan este camino (anotaciones/imágenes).
+**Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
+
+### E-128 · `/legacy` sin barra final servía la app vieja sin CSS ni JS (5 recursos 404)
+
+**Síntoma.** En producción, `/legacy` mostraba el HTML de la app vieja pero sin estilos ni scripts: sus rutas relativas (`css/…`, `js/…`) se resolvían contra `/` en vez de `/legacy/` y daban 404. `/legacy/` y `/` funcionaban. (QA-06.)
+
+**Causa raíz.** `vercel.json` tenía un `rewrite` `/legacy` → `/legacy/index.html`: la URL del navegador seguía siendo `/legacy` y, para el navegador, el documento vive en `/`, así que toda URL relativa se resuelve mal. Un rewrite no cambia la URL base. El proyecto `deploy` no lo detectaba porque solo probaba `/legacy/` (el caso sin barra se dejó sin probar).
+
+**Arreglo.** El `rewrite` se sustituye por `redirects` `/legacy` → `/legacy/` con `permanent: true` (308). Solo toca el enrutado de `/legacy` (CSP y cabeceras intactas, dentro del cutover autorizado). `scripts/servir-despliegue.mjs` aplica ahora también los `redirects` de `vercel.json` para que el entorno local sea fiel. Sin bucle: el `source` se ancla estricto, `/legacy` no casa con `/legacy/`, y `/legacy/` se sirve por índice de directorio; `cleanUrls` solo reescribe `*.html`/`index` hacia su forma limpia y no añade ni quita barra final con `trailingSlash` sin definir (semántica de `redirects`, `cleanUrls` y `trailingSlash` en la documentación de Vercel, "Configuring projects with vercel.json"; no se ha podido contrastar contra el despliegue real aquí, se verifica en la preview del PR).
+
+**Cómo se detecta ahora.** `tests/e2e/deploy/humo.spec.ts` (`/legacy` acaba en `/legacy/`, cero 404, CSS aplicado, un PDF abre en la app vieja, cero violaciones de CSP; visto fallar antes) y `scripts/servir-despliegue.test.mjs` (`aplicarRedirects`, 308, sin bucle). Sin regla guard.

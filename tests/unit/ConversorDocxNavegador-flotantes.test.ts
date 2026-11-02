@@ -21,8 +21,9 @@ const TOL = 1;
 async function convertir() {
   const engine = await PdfiumEngine.create();
   const operaciones = new Map<number, PageOp[]>();
-  const original = engine.applyPageOps.bind(engine);
-  engine.applyPageOps = (doc, pagina, ops) => { operaciones.set(pagina, ops); return original(doc, pagina, ops); };
+  // E-121: el lote de cada página llega ahora por `buildDocumentFromPages` (una entrada por página), no por applyPageOps(doc, pagina, ops).
+  const original = engine.buildDocumentFromPages.bind(engine);
+  engine.buildDocumentFromPages = (paginas, alProgreso) => { paginas.forEach((p, i) => operaciones.set(i, p.ops)); return original(paginas, alProgreso); };
   const nombre = 'word-flotantes.docx';
   const bytes = new Uint8Array(fs.readFileSync(path.resolve(AQUI, '../fixtures/generados', nombre)));
   const { pdf, advertencias } = await new ConversorDocxNavegador(engine).convertir(nombre, bytes);
