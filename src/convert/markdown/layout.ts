@@ -3,7 +3,7 @@ import { validarUrlEnlace } from '../../engine/validarUrlEnlace';
 import { aproximado, omitido, type Advertencia } from '../advertencia';
 import { textoPlano, slugTitulo } from './texto';
 import {
-  wrapAtoms, lineToFlowLine, paginar as paginarFlujo,
+  wrapAtoms, partirPalabrasLargas, lineToFlowLine, paginar as paginarFlujo,
   type Atom, type RGB, type Medir, type FlowItem, type FlowLine, type FlowTableRow, type RelBarra, type RelLinea,
   type BarSeg, type BgSeg, type Seg, type ResultadoLayout, type PageGeometry
 } from '../flujo/layout';
@@ -258,27 +258,8 @@ function aplanar(ctx: Ctx, nodes: Inline[], est: Estilo, acc: Acum): void {
   }
 }
 
-/** Parte en trozos las palabras más anchas que `maxWidthPt` (URL largas...): `wrapAtoms` no parte palabras y se saldrían del margen. */
-function trocear(atoms: Atom[], maxWidthPt: number, medir: Medir): Atom[] {
-  const out: Atom[] = [];
-  for (const a of atoms) {
-    if (a.text.length < 2 || medir(a.font, a.sizePt, a.text) <= maxWidthPt) { out.push(a); continue; }
-    const chars = Array.from(a.text);
-    let desde = 0;
-    let primero = true;
-    while (desde < chars.length) {
-      let hasta = desde + 1;
-      while (hasta < chars.length && medir(a.font, a.sizePt, chars.slice(desde, hasta + 1).join('')) <= maxWidthPt) hasta++;
-      const trozo: Atom = { ...a, text: chars.slice(desde, hasta).join('') };
-      // Los trozos siguientes van pegados al anterior (si cambian de línea el espacio no cuenta) y no repiten los marcadores.
-      if (!primero) { trozo.pegado = true; delete trozo.marcas; }
-      primero = false;
-      out.push(trozo);
-      desde = hasta;
-    }
-  }
-  return out;
-}
+/** Parte en trozos las palabras más anchas que `maxWidthPt` (URL largas...): motor común (`partirPalabrasLargas`, E-124). */
+const trocear = partirPalabrasLargas;
 
 // ---------------------------------------------------------------------------
 // Bloques -> ítems de flujo vertical (independientes de página)

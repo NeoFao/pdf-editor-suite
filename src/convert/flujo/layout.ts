@@ -285,10 +285,11 @@ export function sameColor(a: RGB, b: RGB): boolean { return a[0] === b[0] && a[1
 
 /**
  * Empaqueta átomos en líneas sin superar `maxWidthPt`, midiendo con `medir`.
- * Una palabra más ancha que `maxWidthPt` por sí sola ocupa su propia línea
- * igualmente (esta fase no parte palabras).
+ * Una palabra más ancha que `maxWidthPt` se parte por caracteres
+ * (`partirPalabrasLargas`, E-124): ninguna línea se sale de su ancho.
  */
-export function wrapAtoms(atoms: Atom[], maxWidthPt: number, medir: Medir): Atom[][] {
+export function wrapAtoms(atomsOriginales: Atom[], maxWidthPt: number, medir: Medir): Atom[][] {
+  const atoms = partirPalabrasLargas(atomsOriginales, maxWidthPt, medir);
   const lines: Atom[][] = [];
   let current: Atom[] = [];
   let width = 0;
@@ -306,6 +307,48 @@ export function wrapAtoms(atoms: Atom[], maxWidthPt: number, medir: Medir): Atom
   }
   if (current.length > 0) lines.push(current);
   return lines;
+}
+
+/**
+ * Parte en trozos las palabras (átomos) MÁS ANCHAS que `maxWidthPt` (URL, DOI, código...), por caracteres, como
+ * `overflow-wrap: break-word` o Word: `wrapAtoms`/`tomarLinea` nunca parten una palabra y una que no cabe ni en una
+ * línea vacía se saldría del margen (E-124). Los trozos siguientes van `pegado`s al anterior (si cambian de línea el
+ * espacio no cuenta) y no repiten `marcas`; cada trozo conserva fuente, color, `url`, etc. Un átomo que cabe (o una
+ * tabulación) se devuelve tal cual (misma referencia). Se corta por puntos de código (un emoji no se parte). Cada trozo
+ * se busca con una búsqueda exponencial + binaria: O(log n) mediciones por trozo en vez de una por carácter.
+ */
+export function partirPalabrasLargas(atoms: Atom[], maxWidthPt: number, medir: Medir): Atom[] {
+  const out: Atom[] = [];
+  for (const a of atoms) {
+    if (a.tab || a.text.length < 2 || medir(a.font, a.sizePt, a.text) <= maxWidthPt) { out.push(a); continue; }
+    const chars = Array.from(a.text);
+    const cabe = (desde: number, n: number): boolean => medir(a.font, a.sizePt, chars.slice(desde, desde + n).join('')) <= maxWidthPt;
+    let desde = 0;
+    let primero = true;
+    while (desde < chars.length) {
+      const resto = chars.length - desde;
+      // Mayor n en [1, resto] con `cabe` (siempre se toma al menos un carácter, aunque uno solo no quepa).
+      let ok = 1;
+      let paso = 1;
+      while (ok < resto) {
+        const probar = Math.min(resto, ok + paso);
+        if (cabe(desde, probar)) { ok = probar; paso *= 2; } else break;
+      }
+      let malo = Math.min(resto, ok + paso);
+      if (ok < resto) {
+        while (malo - ok > 1) {
+          const medio = (ok + malo) >> 1;
+          if (cabe(desde, medio)) ok = medio; else malo = medio;
+        }
+      }
+      const trozo: Atom = { ...a, text: chars.slice(desde, desde + ok).join('') };
+      if (!primero) { trozo.pegado = true; delete trozo.marcas; }
+      primero = false;
+      out.push(trozo);
+      desde += ok;
+    }
+  }
+  return out;
 }
 
 /** Tamaño con el que se calcula el ALTO de la línea de un átomo: el nominal si el dibujado está reducido (superíndice, versalitas), para que el interlineado no salte (E-105). */
@@ -531,7 +574,8 @@ export interface OpcionesParrafoFlex {
  * `wrapAtoms` + `lineToFlowLine`; con una franja más estrecha (obstáculo) o con tabulaciones, las calcula al vuelo.
  */
 export function parrafoFlex(o: OpcionesParrafoFlex): FlowParrafoFlex {
-  const { atoms, medir } = o;
+  const { medir } = o;
+  const atoms = partirPalabrasLargas(o.atoms, o.wPt, medir); // E-124: una palabra más ancha que la franja se parte, no se sale
   const primeraDelParrafo = o.primeraDelParrafo ?? true;
   const paso = (desde: number, libre: Intervalo, primera: boolean): { linea: FlowLine; siguiente: number } | null => {
     if (desde >= atoms.length) return null;
