@@ -1530,6 +1530,24 @@ async function pdfRotadaLineas() {
   return doc.save();
 }
 
+/**
+ * E-122: cinco páginas de 300x400 pt con CUATRO líneas de texto normal ("Pn-Lk alfa bravo charlie", horizontal en
+ * el espacio de usuario) y distinto giro: /Rotate 0, 90, 180, 270 y 90 con CropBox desplazado. En 90/270 las
+ * líneas quedan verticales en pantalla. Coordenadas en pt de usuario (origen abajo-izq, sin girar).
+ */
+async function pdfSeleccionGiros() {
+  const doc = await PDFDocument.create();
+  const font = await doc.embedFont(StandardFonts.Helvetica);
+  const casos = [{ rot: 0 }, { rot: 90 }, { rot: 180 }, { rot: 270 }, { rot: 90, crop: [20, 30, 280, 380] }];
+  casos.forEach((c, i) => {
+    const p = doc.addPage([300, 400]);
+    if (c.crop) p.setCropBox(...c.crop);
+    p.setRotation(degrees(c.rot));
+    for (let k = 1; k <= 4; k++) p.drawText(`P${i + 1}-L${k} alfa bravo charlie`, { x: 50, y: 340 - 40 * (k - 1), size: 14, font });
+  });
+  return doc.save();
+}
+
 /* ───────────────────────────── N1 · F0: fixtures de línea editable ───────────────────────────── */
 
 /** Escapa un carácter latino-1 para una cadena literal PDF `( … )`. */
@@ -2120,6 +2138,7 @@ async function main() {
     'apaisado.pdf': await pdfApaisado(),
     'rotada.pdf': await pdfRotada(),
     'rotada-lineas.pdf': await pdfRotadaLineas(),
+    'seleccion-giros.pdf': await pdfSeleccionGiros(),
     'cropbox-desplazado.pdf': await pdfCropboxDesplazado(),
     'userunit.pdf': await pdfUserUnit(),
     'userunit-mixto.pdf': await pdfUserUnitMixto(),

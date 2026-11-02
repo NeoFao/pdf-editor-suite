@@ -2,6 +2,7 @@ import type { PdfEngine, DocHandle, TextRun, CharBox } from '../engine/PdfEngine
 import { DocumentModel } from './DocumentModel';
 import type { PageModel } from './types';
 import { contarGetPageText } from '../diagnostico';
+import { ordenLecturaCaracteres } from '../texto/seleccionTexto';
 
 /**
  * Sesión de edición: une motor + documento abierto + modelo, y sabe
@@ -87,7 +88,11 @@ export class EditSession {
   ensureChars(pageIndex: number): CharBox[] {
     if (!this.model.pages[pageIndex]) return [];
     let c = this.chars.get(pageIndex);
-    if (!c) { c = this.engine.getCharBoxes(this.doc, pageIndex); this.chars.set(pageIndex, c); }
+    if (!c) {
+      // PDFium entrega las líneas al revés en /Rotate 90 (E-122): se normaliza al orden de lectura aquí, una sola vez.
+      c = ordenLecturaCaracteres(this.engine.getCharBoxes(this.doc, pageIndex), this.model.pages[pageIndex]!.rotation);
+      this.chars.set(pageIndex, c);
+    }
     return c;
   }
 

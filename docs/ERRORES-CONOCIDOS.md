@@ -3591,3 +3591,31 @@ de código fiable.
 
 **Límites.** Una selección de ratón de un solo carácter hecha hacia atrás se trata como directa al extenderla con el teclado (el modelo del ratón no guarda
 `inversa`). Al cruzar, `goToPage` coloca la página del foco al principio de la vista.
+
+### E-122 · En páginas con `/Rotate` 90 copiar y marcar con arrastre daba el tramo complementario y el resaltado salía en un rectángulo por carácter
+
+**Síntoma.** En un PDF con `/Rotate 90`, arrastrar de la línea 1 a la 3 copiaba (y marcaba) «cola de la 3, línea 2, cabeza de la 1»: orden
+inverso y extremos cambiados, en ambos sentidos de arrastre. Con 0, 180 y 270 iba bien. Además, con 90 y 270 el resaltado tenía un `.sel-rect`
+por carácter (24 para 3 líneas) en vez de uno por línea. Lo halló el QA del núcleo (D1 y D3).
+
+**Causa raíz.** Dos causas, ambas por razonar en el espacio equivocado. (1) PDFium entrega los caracteres de una página `/Rotate 90` con las
+LÍNEAS en orden inverso (L4, L3, L2, L1; por dentro cada línea sale bien) porque ordena el texto en el espacio girado, donde el texto normal queda
+vertical. La selección trabaja con rangos de ÍNDICES entre ancla y foco, así que con ese orden el rango entre la línea 1 y la 3 era el tramo
+complementario. (2) `bandasDeLinea` agrupaba los caracteres en líneas por solape vertical en el espacio VISUAL (ya girado); en 90/270 el texto
+normal queda vertical en pantalla, así que dos caracteres consecutivos no solapaban nunca y cada uno era su propia línea.
+
+**Arreglo.** (1) `ordenLecturaCaracteres` (`src/texto/seleccionTexto.ts`), aplicada UNA vez en `EditSession.ensureChars` (única vía a los
+caracteres para selección, copia y texto bajo un marcado): con `/Rotate 90`, líneas horizontales en usuario y el primer bloque debajo del último,
+invierte el orden de los bloques (no el de los caracteres de cada uno); en cualquier otro caso devuelve el mismo array. (2) `bandasDeLinea`
+agrupa en pt de USUARIO (sin girar), decidiendo con el primer par de caracteres si la línea avanza en X o en Y; `quadsDeRango` entrega las cajas
+con el id de su línea y `quadsPorLinea` (`CajaMarcable.linea`) las funde por id sin adivinar por solape. Vale con cualquier `/Rotate`, texto
+contragirado y CropBox desplazado.
+
+**Cómo se detecta ahora.** `tests/e2e/next/seleccion-paginas-giradas.spec.ts` (fixture `seleccion-giros.pdf`: 4 líneas en `/Rotate` 0, 90, 180, 270
+y 90 con CropBox desplazado; arrastre de la línea 1 a la 3 en ambos sentidos copia cola, línea 2 y cabeza en orden, y pinta 3 rectángulos sobre
+las líneas 1, 2 y 3; visto fallar en 90, 270 y 90+CropBox antes del arreglo) y `tests/unit/seleccionGiros.test.ts` (orden y quads con PDFium
+real en las cuatro rotaciones y en 90 con CropBox, más casos puros). Sin regla guard: no hay patrón de código fiable.
+
+**Límites.** La detección del orden inverso es heurística (líneas horizontales en usuario, primera debajo de la última): un `/Rotate 90` con
+varias columnas o bloques mezclados puede quedar con el orden de PDFium. La navegación por líneas con Mayús+↓/↑ en texto vertical en pantalla
+sigue usando la columna visual `x` (no la distancia a lo largo de la línea).
