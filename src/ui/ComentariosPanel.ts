@@ -139,6 +139,20 @@ export class ComentariosPanel {
   private pintar(progreso?: string): void {
     const todos = this.todos();
     const vistos = todos.filter((c) => !this.filtro || `${c.text} ${c.marcado} ${c.author} ${ETIQUETA[c.kind]}`.toLowerCase().includes(this.filtro));
+    // QA ronda 3: si el foco estaba en una fila (Editar/Borrar…), al repintar se recupera en la misma fila y botón;
+    // si la fila ya no existe (borrada) pasa a la que ocupa su sitio. Antes caía en body.
+    const activo = document.activeElement;
+    let foco: { clave: string | null; boton: number; fila: number } | null = null;
+    if (activo instanceof HTMLElement && this.listaEl.contains(activo)) {
+      const li = activo.closest('li.comentario');
+      if (li) {
+        foco = {
+          clave: (li as HTMLElement).dataset['clave'] ?? null,
+          boton: Array.from(li.querySelectorAll('button')).indexOf(activo as HTMLButtonElement),
+          fila: Array.from(this.listaEl.querySelectorAll('li.comentario')).indexOf(li)
+        };
+      }
+    }
     this.listaEl.textContent = '';
     if (progreso) this.estadoEl.textContent = progreso;
     else if (this.hooks.totalPaginas() === 0) this.estadoEl.textContent = '';
@@ -156,11 +170,22 @@ export class ComentariosPanel {
       }
       this.listaEl.appendChild(this.crearFila(c));
     }
+    if (foco) this.restaurarFoco(foco);
+  }
+
+  private restaurarFoco(foco: { clave: string | null; boton: number; fila: number }): void {
+    const filas = Array.from(this.listaEl.querySelectorAll<HTMLLIElement>('li.comentario'));
+    const misma = foco.clave ? filas.find((f) => f.dataset['clave'] === foco.clave) : undefined;
+    const fila = misma ?? filas[Math.min(foco.fila, filas.length - 1)];
+    const botones = fila ? fila.querySelectorAll<HTMLButtonElement>('button') : [];
+    const destino = misma ? botones[Math.max(0, foco.boton)] : botones[0];
+    (destino ?? this.filtroEl).focus();
   }
 
   private crearFila(c: Fila): HTMLLIElement {
     const li = document.createElement('li');
     li.className = 'comentario';
+    li.dataset['clave'] = `${c.pageIndex}:${c.index}`;
     const pagina = c.pageIndex + 1;
     const abrir = document.createElement('button');
     abrir.type = 'button';

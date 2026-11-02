@@ -48,6 +48,8 @@ const RADIO_BORRADOR_CSS = 6;
 
 export interface ViewerCallbacks {
   onEdit: (req: EditRequest) => void;
+  /** Línea RTL que no se reescribe con fidelidad (E-117): aviso `aproximado` para el estado. */
+  onAviso?: (mensaje: string) => void;
   onSelect: (pageIndex: number, runId: number) => void;
   onBackgroundClick: (pageIndex: number, at: PtPoint) => void;
   /** Doble clic en el marcador de una nota (B4): abre su editor con el texto actual. */
@@ -1380,6 +1382,7 @@ export class Viewer {
     new TextLayer(layer, page, geom, {
       colocando: () => this.tool !== 'none',
       onEdit: this.cb.onEdit,
+      onAviso: this.cb.onAviso,
       onSelect: (pageIndex, runId) => { this.textoSel.limpiar(); this.cb.onSelect(pageIndex, runId); },
       onMove: (pageIndex, runId, dxCss, dyCss, runIds) => {
         // La conversión pt es afín: el delta no depende del punto base.
