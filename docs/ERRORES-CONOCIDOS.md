@@ -3537,6 +3537,18 @@ no se modelan `w:spacing`/`w:position`/`w:w`/`w:kern`/`w:emboss`/`w:outline`/`w:
 
 **Límites.** `relativeFrom="character"` (horizontal) se aproxima al margen y `line` (vertical) al tope del párrafo. `wrapText="left"|"right"|"largest"` se resuelve siempre como «el lado libre más ancho». Las flotantes dentro de celdas de tabla siguen omitiéndose con aviso. No hay recorte por contorno (`wrapTight` es un rectángulo) ni orden entre varias imágenes (`relativeHeight`).
 
+### E-113 · Los puertos E2E eran fijos: dos worktrees no podían correr Playwright a la vez y `e2e:liberar` mataba los servidores del otro
+
+**Síntoma.** Con varios agentes o worktrees trabajando en paralelo, el segundo `playwright test` fallaba con "puerto ya en uso" (3100, 4173 y 4174 son fijos y el `webServer` de `next` y `deploy` nunca reutiliza servidor, E-033). La salida del error sugería `npm run e2e:liberar`, que cerraba los `node`/`vite` de esos puertos y los huérfanos cuya línea de comandos citaba la ruta del repo: un worktree tumbaba la corrida del vecino. Además `tests/e2e/deploy/humo.spec.ts` y `servir-despliegue.mjs` llevaban el 4174 escrito como valor por defecto.
+
+**Causa raíz.** Los puertos eran constantes, no una función del entorno, y `e2e:liberar` decidía por puerto y nombre de proceso, sin saber a qué checkout pertenecía. Los worktrees viven dentro del checkout principal (`.claude/worktrees/<nombre>`), así que la ruta del principal es prefijo de la de cada worktree y "cita la ruta del repo" no distingue.
+
+**Arreglo.** `scripts/puertos-e2e.mjs` calcula los puertos con `calcularPuertosE2E(env)`: sin `E2E_PUERTO_BASE` valen exactamente 3100/4173/4174 (CI no cambia); con ella (entero 1..61361, p. ej. 10000, 20000) se suma a los tres; un valor inválido lanza un error claro. `playwright.config.js` (webServer y `baseURL` vía `urlLocal`), `servir-preview.mjs`, `servir-despliegue.mjs` y el spec `deploy` leen esa fuente. `e2e:liberar` solo toca los puertos del desplazamiento activo y decide con la función pura `decidirLiberacionPuerto`: mata únicamente `node`/`vite` con línea de comandos legible, no protegidos y que no citen otro worktree ni el checkout principal visto desde un worktree (`perteneceAOtroWorktree`); `clasificarProceso` también deja de tratar como del repo a un proceso de otro worktree.
+
+**Cómo se detecta ahora.** `scripts/puertos-e2e.test.mjs` (sin variable, con base, base inválida, sin colisiones, tope), `scripts/procesos-e2e.test.mjs` (protección entre worktrees, sin matar nada de verdad) y la regla `sin-puerto-a-mano-en-tests`, que prohíbe 3100/4173/4174 y `127.0.0.1:<n>`/`localhost:<n>` fuera de comentarios en `tests/` y `playwright.config.js` (test en `reglas.test.mjs`). Vistos fallar antes del arreglo.
+
+**Límites.** La lista de procesos no incluye el cwd, solo la línea de comandos: un proceso lanzado con ruta relativa (`node server.js`) no se puede atribuir a un worktree, así que solo se libera si escucha en un puerto del desplazamiento activo. El desplazamiento no evita que dos worktrees elijan la misma base: hay que dar una distinta a cada uno.
+
 ### E-114 · Word → PDF: el PDF no llevaba árbol de marcadores (outline) aunque el documento tuviera títulos
 
 **Síntoma.** Un documento de Word con títulos (Título 1, 2, 3...) salía del conversor sin panel de marcadores: Acrobat, o el propio panel de esta app, mostraba «Este documento no tiene marcadores». Word, al exportar a PDF con «Crear marcadores a partir de títulos», sí los escribe. Quedaba anotado como propuesto en los límites de E-106.
