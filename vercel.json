@@ -4,10 +4,11 @@
   "installCommand": "npm ci",
   "outputDirectory": "dist-deploy",
   "cleanUrls": true,
-  "rewrites": [
+  "redirects": [
     {
       "source": "/legacy",
-      "destination": "/legacy/index.html"
+      "destination": "/legacy/",
+      "permanent": true
     }
   ],
   "headers": [

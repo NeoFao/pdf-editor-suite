@@ -108,18 +108,6 @@ export class ConversorDocxNavegador implements ConversorDocumento {
     const { rgbaPorId, advertenciasImagenes } = await this.resolverImagenes(zip, imagenes);
     const advertencias = [...modelo.advertencias, ...avisosMaquetacion, ...advertenciasImagenes];
 
-    // Una página en blanco POR TAMAÑO distinto (las secciones pueden cambiar de tamaño y de orientación), en el orden del layout.
-    const enBlanco = new Map<string, Uint8Array<ArrayBuffer>>();
-    const blancoDe = (i: number): Uint8Array<ArrayBuffer> => {
-      const { widthPt, heightPt } = paginas[i]!.geo;
-      const clave = `${widthPt}x${heightPt}`;
-      let b = enBlanco.get(clave);
-      if (!b) { b = this.engine.createBlank(widthPt, heightPt); enBlanco.set(clave, b); }
-      return b;
-    };
-    const doc: DocHandle = await this.engine.open(blancoDe(0));
-    for (let i = 1; i < totalPaginas; i++) this.engine.importPages(doc, blancoDe(i), i);
-
     // Lote por página (E-037, docs/ERRORES-CONOCIDOS.md): ver el mismo
     // razonamiento en `ConversorMarkdownNavegador`. Orden de dibujo: fondos
     // y bordes (fillRect) primero, luego imágenes, luego texto encima;
@@ -146,7 +134,11 @@ export class ConversorDocxNavegador implements ConversorDocumento {
     for (const e of enlaces) {
       agregar(e.page, { type: 'addLink', rect: { xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt }, url: e.url });
     }
-    for (const [page, ops] of opsPorPagina) this.engine.applyPageOps(doc, page, ops);
+    // E-121: el documento se construye página a página (cada lote en un documento de UNA página, ver
+    // `PdfEngine.buildDocumentFromPages`); las secciones pueden cambiar el tamaño, de ahí `paginas[i].geo`.
+    const doc: DocHandle = await this.engine.buildDocumentFromPages(
+      Array.from({ length: totalPaginas }, (_v, i) => ({ widthPt: paginas[i]!.geo.widthPt, heightPt: paginas[i]!.geo.heightPt, ops: opsPorPagina.get(i) ?? [] }))
+    );
     // Enlaces internos (w:hyperlink w:anchor): ya con página y altura de su marcador. Van DESPUÉS del lote porque necesitan que todas las páginas existan.
     for (const e of enlacesInternos) {
       this.engine.addInternalLink(doc, e.page, { xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt }, e.destPage, e.destYPt);
