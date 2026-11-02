@@ -961,7 +961,7 @@ describe('puertos-e2e-sincronizados (E-062)', () => {
   });
 });
 
-describe('sin-puerto-a-mano-en-tests (E-112)', () => {
+describe('sin-puerto-a-mano-en-tests (E-113)', () => {
   const regla = TODAS.find((r) => r.id === 'sin-puerto-a-mano-en-tests');
 
   test('detecta puertos por defecto y URLs con puerto escritos a mano', () => {

@@ -23,7 +23,7 @@ const SEGMENTO_WORKTREE = '/.claude/worktrees/';
 /**
  * ¿La línea de comandos cita OTRO worktree (o el checkout principal visto desde un worktree, o un worktree visto
  * desde el principal)? Solo mira rutas absolutas en la línea de comandos: el cwd no está en la lista de procesos
- * (E-112). Una ruta relativa (`node server.js`) no se puede atribuir y devuelve false.
+ * (E-113). Una ruta relativa (`node server.js`) no se puede atribuir y devuelve false.
  * @param {string|null} cmd
  * @param {string} raizRepo raíz del worktree/checkout que ejecuta el script
  */

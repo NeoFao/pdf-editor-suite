@@ -1,5 +1,5 @@
 /**
- * Fuente ÚNICA de los puertos de los servidores de test E2E (E-062, E-112).
+ * Fuente ÚNICA de los puertos de los servidores de test E2E (E-062, E-113).
  *
  * Lo importan `playwright.config.js` (webServer y baseURL de cada proyecto),
  * `scripts/servir-preview.mjs` y `scripts/liberar-puertos.mjs`

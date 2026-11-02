@@ -136,14 +136,16 @@ export class ConversorDocxNavegador implements ConversorDocumento {
     for (const b of barras) {
       agregar(b.page, { type: 'fillRect', rect: { xPt: b.xPt, yPt: b.yPt, wPt: b.wPt, hPt: b.hPt }, color: b.color });
     }
-    for (const img of imagenes) {
+    const agregarImagen = (img: ImagenColocada): void => {
       const rgba = rgbaPorId.get(img.imgId);
-      if (!rgba) continue; // decodificación fallida: ya se avisó en resolverImagenes, el hueco queda en blanco
+      if (!rgba) return; // decodificación fallida: ya se avisó en resolverImagenes, el hueco queda en blanco
       agregar(img.page, { type: 'insertImage', spec: { rgba: rgba.rgba, imgWidth: rgba.width, imgHeight: rgba.height, xPt: img.xPt, yPt: img.yPt, wPt: img.wPt, hPt: img.hPt } });
-    }
+    };
+    for (const img of imagenes) if (img.capa !== 'delante') agregarImagen(img);
     for (const t of trazos) {
       agregar(t.page, { type: 'insertText', spec: { xPt: t.xPt, yPt: t.yPt, text: t.text, sizePt: t.sizePt, fontName: t.font, color: t.color } });
     }
+    for (const img of imagenes) if (img.capa === 'delante') agregarImagen(img); // flotantes delante del texto (`wrapNone`, `behindDoc=0`): sobre el texto
     for (const e of enlaces) {
       agregar(e.page, { type: 'addLink', rect: { xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt }, url: e.url });
     }

@@ -1,7 +1,7 @@
 /**
  * Libera los puertos que usan los servidores de test E2E (por defecto 3100 app
  * vieja, 4173 app nueva, 4174 despliegue; con E2E_PUERTO_BASE se desplazan y
- * SOLO se liberan los desplazados — E-112; la lista sale de
+ * SOLO se liberan los desplazados — E-113; la lista sale de
  * scripts/puertos-e2e.mjs, la misma que usa playwright.config.js — E-062) y
  * cierra los procesos huérfanos de ESTE repo (node/vite/vitest/chrome cuya
  * línea de comandos cita la ruta del repo; nunca el propio script ni sus
@@ -13,7 +13,7 @@
  *
  * SOLO mata el proceso que escucha en el puerto si su nombre es node o vite
  * (el propio `vite preview`, o `node server.js`), si se puede leer su línea de
- * comandos y si ésta no cita OTRO worktree ni el checkout principal (E-112).
+ * comandos y si ésta no cita OTRO worktree ni el checkout principal (E-113).
  * Nunca mata un proceso ajeno: si no se puede identificar, avisa y lo deja
  * vivo. La decisión es una función pura (`decidirLiberacionPuerto`).
  *

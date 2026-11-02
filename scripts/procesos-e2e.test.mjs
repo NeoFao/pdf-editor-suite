@@ -88,7 +88,7 @@ describe('parsers de la lista de procesos', () => {
   });
 });
 
-describe('protección entre worktrees (E-112)', () => {
+describe('protección entre worktrees (E-113)', () => {
   const PRINCIPAL = 'C:\\Users\\andre\\Documents\\BIBLIOTECA APPS\\PDF Editor';
   const WT_A = `${PRINCIPAL}\\.claude\\worktrees\\agent-aaa`;
   const WT_B = `${PRINCIPAL}\\.claude\\worktrees\\agent-bbb`;

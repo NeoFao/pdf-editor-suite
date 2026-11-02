@@ -161,7 +161,7 @@ function renderizarParrafo(p: Parrafo, margenIzqPt: number, margenDerPt: number,
       terminaEnEspacio = true;
     } else if (parte.tipo === 'imagen' && parte.flotante) {
       // Imagen flotante (fase 2b): SIN ajuste de texto. Ocupa 0 pt de flujo; `paginar` la coloca en su posición en la página del contenido siguiente.
-      salida.push({ kind: 'floatImage', imgId: parte.refId, wPt: parte.wPt, hPt: parte.hPt, h: parte.flotante.h, v: parte.flotante.v, ...(parte.flotante.ajuste ? { ajuste: parte.flotante.ajuste } : {}) });
+      salida.push({ kind: 'floatImage', imgId: parte.refId, wPt: parte.wPt, hPt: parte.hPt, h: parte.flotante.h, v: parte.flotante.v, ...(parte.flotante.ajuste ? { ajuste: parte.flotante.ajuste } : {}), ...(parte.flotante.capa ? { capa: parte.flotante.capa } : {}) });
     } else if (parte.tipo === 'imagen') {
       volcar();
       huboImagen = true;

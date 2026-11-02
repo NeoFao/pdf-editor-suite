@@ -186,10 +186,10 @@ test('wrapTopAndBottom: ninguna línea de texto se cruza con la imagen; el texto
   expect(res.trazos.some((t) => t.yPt < img.yPt)).toBe(true);
 });
 
-test('con wrapNone el texto NO se aparta (como hasta ahora) y avisa', () => {
+test('con wrapNone el texto NO se aparta (como en Word) y no avisa', () => {
   const { img, lineas: ls, m } = conFlotante('<wp:wrapNone/>');
   expect(ls.some((l) => l.y > img.yPt && l.y < img.yPt + img.hPt && l.fin > img.xPt)).toBe(true);
-  expect(textosAdvertencias(m.advertencias).join(' ')).toMatch(/sin ajuste/i);
+  expect(textosAdvertencias(m.advertencias)).toEqual([]);
 });
 
 // ---------------------------------------------------------------------------

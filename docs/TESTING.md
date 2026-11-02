@@ -94,7 +94,7 @@ vivo. No forma parte de `npm run verify`: matar procesos automáticamente en
 un pipeline es invasivo, y el propio mensaje de error de Playwright ya dice
 qué hacer.
 
-## E2E en paralelo en varios worktrees (E-112)
+## E2E en paralelo en varios worktrees (E-113)
 
 Los puertos por defecto (3100, 4173, 4174) son fijos, así que dos worktrees no
 pueden correr Playwright a la vez. Dale a cada worktree una `E2E_PUERTO_BASE`

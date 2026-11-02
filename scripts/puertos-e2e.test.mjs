@@ -1,5 +1,5 @@
 /**
- * Tests de los puertos E2E con desplazamiento opcional E2E_PUERTO_BASE (E-112).
+ * Tests de los puertos E2E con desplazamiento opcional E2E_PUERTO_BASE (E-113).
  */
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';

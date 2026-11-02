@@ -1534,7 +1534,7 @@ export const sinPromptNativo = {
   }
 };
 
-/* ── E-112 · ni tests/ ni playwright.config.js escriben puertos de E2E a mano ── */
+/* ── E-113 · ni tests/ ni playwright.config.js escriben puertos de E2E a mano ── */
 /**
  * Pura: hallazgos de puertos E2E escritos a mano (3100/4173/4174 o `127.0.0.1:<n>` / `localhost:<n>`) fuera de
  * comentarios. Con E2E_PUERTO_BASE los puertos cambian: un literal haría que el test hable con el servidor de otro
@@ -1557,7 +1557,7 @@ export const sinPuertoE2eAMano = {
   titulo: 'ningún test ni playwright.config.js escribe un puerto de E2E a mano',
   comoArreglar:
     'Usa el `baseURL` del proyecto de Playwright (page.goto("/ruta")) o importa PUERTOS_E2E / urlLocal de ' +
-    'scripts/puertos-e2e.mjs. Con E2E_PUERTO_BASE (varios worktrees en paralelo, E-112) los puertos se desplazan ' +
+    'scripts/puertos-e2e.mjs. Con E2E_PUERTO_BASE (varios worktrees en paralelo, E-113) los puertos se desplazan ' +
     'y un literal apunta al servidor de otro.',
   ejecutar() {
     const hallazgos = [];

@@ -3525,7 +3525,19 @@ no se modelan `w:spacing`/`w:position`/`w:w`/`w:kern`/`w:emboss`/`w:outline`/`w:
 
 **Límites.** PAGEREF con el conmutador `\p` (arriba/abajo) y los campos en encabezados, pies y notas conservan su caché (solo se resuelven en el cuerpo y las tablas). Ningún otro campo se calcula (SEQ, STYLEREF, NUMWORDS...): se dibuja lo que Word guardó. TOC sigue sin regenerarse: si el documento cambia de longitud respecto a lo guardado, solo se corrigen los números, no las entradas. Si la convergencia falla se avisa y se conserva la segunda pasada.
 
-### E-112 · Los puertos E2E eran fijos: dos worktrees no podían correr Playwright a la vez y `e2e:liberar` mataba los servidores del otro
+### E-112 · Word → PDF: las imágenes flotantes sin ajuste (`wrapNone`) avisaban siempre y no respetaban «delante del texto»
+
+**Síntoma.** Una imagen anclada con `wp:wrapNone` (marca de agua, sello, fondo, logo suelto) producía el aviso `aproximado` «imagen flotante colocada sin ajuste de texto» aunque Word hace exactamente eso (el texto no se aparta). Además se dibujaba SIEMPRE bajo el texto: una imagen `behindDoc="0"` («delante del texto») quedaba tapada por las líneas que debía cubrir.
+
+**Causa raíz.** El modelo trataba «sin ajuste» como una degradación y no leía `behindDoc`; el conversor insertaba todas las imágenes antes que el texto (orden fijo fondos, imágenes, texto), así que no existía el concepto de capa. Las posiciones (`positionH/V`, `relativeFrom`, `posOffset`/`align`) y los ajustes `wrapSquare`/`wrapTopAndBottom` ya estaban bien (fase 2c) y se midieron antes de tocar nada: no cambian.
+
+**Arreglo.** `leerAjuste`/`resolverImagenDrawing`: `wrapNone` es exacto y solo aporta una capa, `PosicionFlotante.capa` = `detras` (`behindDoc="1"`) o `delante` (`behindDoc="0"`); se propaga por `FlowFloatImage.capa` a `ImagenColocada.capa` (cuerpo y zonas de encabezado/pie). `ConversorDocxNavegador` inserta primero las imágenes sin capa o `detras` (bajo el texto, como siempre) y las `delante` DESPUÉS del texto. El aviso `flotante` queda solo para un `wp:anchor` sin ningún elemento de ajuste (el documento no dice qué quiere). `wrapTight`/`wrapThrough` siguen siendo `square` con aviso `aproximado` (`flotanteAprox`).
+
+**Cómo se detecta ahora.** `tests/unit/docx-flotantes.test.ts` (capa y avisos del modelo), `tests/unit/flujo-layout-flotantes.test.ts` (exclusión por línea en la banda de la imagen con posición relativa a página y margen, `topAndBottom` centrada, capas, flotante de un párrafo «mantener junto» que salta de página con su párrafo) y `tests/unit/ConversorDocxNavegador-flotantes.test.ts` (motor real sobre `word-flotantes.docx`: ninguna línea invade la imagen cuadrada, el texto de la `topAndBottom` empieza bajo ella, x/y de las tres con su fórmula, orden de dibujo detrás < texto < delante). Vistos fallar antes del arreglo (aviso falso y orden de capas). Sin regla guard: es funcionalidad con test.
+
+**Límites.** `relativeFrom="character"` (horizontal) se aproxima al margen y `line` (vertical) al tope del párrafo. `wrapText="left"|"right"|"largest"` se resuelve siempre como «el lado libre más ancho». Las flotantes dentro de celdas de tabla siguen omitiéndose con aviso. No hay recorte por contorno (`wrapTight` es un rectángulo) ni orden entre varias imágenes (`relativeHeight`).
+
+### E-113 · Los puertos E2E eran fijos: dos worktrees no podían correr Playwright a la vez y `e2e:liberar` mataba los servidores del otro
 
 **Síntoma.** Con varios agentes o worktrees trabajando en paralelo, el segundo `playwright test` fallaba con "puerto ya en uso" (3100, 4173 y 4174 son fijos y el `webServer` de `next` y `deploy` nunca reutiliza servidor, E-033). La salida del error sugería `npm run e2e:liberar`, que cerraba los `node`/`vite` de esos puertos y los huérfanos cuya línea de comandos citaba la ruta del repo: un worktree tumbaba la corrida del vecino. Además `tests/e2e/deploy/humo.spec.ts` y `servir-despliegue.mjs` llevaban el 4174 escrito como valor por defecto.
 
