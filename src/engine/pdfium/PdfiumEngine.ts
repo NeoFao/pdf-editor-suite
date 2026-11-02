@@ -2819,6 +2819,51 @@ export class PdfiumEngine implements PdfEngine {
     }
   }
 
+  async buildDocumentFromPages(
+    pages: { widthPt: number; heightPt: number; ops: PageOp[] }[],
+    alProgreso?: (hechas: number, total: number) => void
+  ): Promise<DocHandle> {
+    if (pages.length === 0) throw new Error('buildDocumentFromPages: hace falta al menos una página');
+    // Una página en blanco POR TAMAÑO distinto (las secciones de Word pueden variar).
+    const enBlanco = new Map<string, Uint8Array<ArrayBuffer>>();
+    const blancoDe = (w: number, h: number): Uint8Array<ArrayBuffer> => {
+      const clave = `${w}x${h}`;
+      let b = enBlanco.get(clave);
+      if (!b) { b = this.createBlank(w, h); enBlanco.set(clave, b); }
+      return b;
+    };
+    // PDF de UNA página con sus ops ya aplicadas (documento efímero: su coste no depende del resto de páginas).
+    const paginaListo = async (pg: { widthPt: number; heightPt: number; ops: PageOp[] }): Promise<Uint8Array<ArrayBuffer>> => {
+      const blanco = blancoDe(pg.widthPt, pg.heightPt);
+      if (pg.ops.length === 0) return blanco;
+      const tmp = await this.open(blanco);
+      try {
+        this.applyPageOps(tmp, 0, pg.ops);
+        return this.save(tmp);
+      } finally {
+        this.close(tmp);
+      }
+    };
+    const doc = await this.open(await paginaListo(pages[0]!));
+    try {
+      let ultimaCesion = performance.now();
+      for (let i = 1; i < pages.length; i++) {
+        this.importPages(doc, await paginaListo(pages[i]!), i);
+        // Cede el hilo como mucho cada ~50 ms de trabajo continuo para que la interfaz pinte el progreso.
+        if (performance.now() - ultimaCesion >= 50) {
+          alProgreso?.(i + 1, pages.length);
+          await new Promise<void>((r) => setTimeout(r, 0));
+          ultimaCesion = performance.now();
+        }
+      }
+      alProgreso?.(pages.length, pages.length);
+      return doc;
+    } catch (e) {
+      this.close(doc);
+      throw e;
+    }
+  }
+
   /** Añade `/Artifact <</PDFEditor valor>>` al objeto (contenido de marca; ver `InsertTextSpec.marca`). */
   private marcarArtefacto(doc: DocHandle, obj: number, valor: string): void {
     const mark = this.p.FPDFPageObj_AddMark(obj, 'Artifact');

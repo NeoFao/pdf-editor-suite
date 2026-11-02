@@ -56,21 +56,9 @@ export class ConversorMarkdownNavegador implements ConversorDocumento {
     const dimensiones = new Map([...rgbaPorSrc].map(([src, im]) => [src, { width: im.width, height: im.height }]));
     const { totalPaginas, trazos, barras, imagenes, enlaces, enlacesInternos, titulos, advertencias } = layoutMarkdown(ast, medir, { imagenes: dimensiones });
 
-    // Documento base: una página en blanco (createBlank), y tantas páginas
-    // más como haga falta importando la MISMA página en blanco una y otra
-    // vez (importPages ya existe en el contrato; evita tener que añadir un
-    // método de "página nueva" solo para esto).
-    const blank = this.engine.createBlank(PAGE_WIDTH_PT, PAGE_HEIGHT_PT);
-    const doc: DocHandle = await this.engine.open(blank);
-    for (let i = 1; i < totalPaginas; i++) this.engine.importPages(doc, blank, i);
-
-    // Lote por página (E-037, docs/ERRORES-CONOCIDOS.md): fillRect/insertText
-    // sueltos regeneran el contenido de la página en CADA llamada (coste que
-    // crece con el número de objetos ya insertados) — con cientos de trazos
-    // eso son varios segundos, todos en el hilo principal. Se agrupan las
-    // ops por página (barras antes que trazos DENTRO de cada página, para
-    // conservar el mismo orden de dibujo/z-order que el bucle original) y se
-    // aplican con una sola llamada a applyPageOps por página.
+    // Lote por página (E-037, docs/ERRORES-CONOCIDOS.md): las ops se agrupan por
+    // página (barras antes que trazos DENTRO de cada página, para conservar el
+    // z-order) y cada página se aplica con UNA sola llamada a applyPageOps.
     const opsPorPagina = new Map<number, PageOp[]>();
     const agregar = (page: number, op: PageOp): void => {
       let lista = opsPorPagina.get(page);
@@ -90,7 +78,11 @@ export class ConversorMarkdownNavegador implements ConversorDocumento {
     for (const e of enlaces) {
       agregar(e.page, { type: 'addLink', rect: { xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt }, url: e.url });
     }
-    for (const [page, ops] of opsPorPagina) this.engine.applyPageOps(doc, page, ops);
+    // E-121: el documento se construye página a página (cada una con su lote en un documento de UNA página, ver
+    // `PdfEngine.buildDocumentFromPages`); aplicar los lotes sobre el documento con todas las páginas era O(páginas²).
+    const doc: DocHandle = await this.engine.buildDocumentFromPages(
+      Array.from({ length: totalPaginas }, (_v, i) => ({ widthPt: PAGE_WIDTH_PT, heightPt: PAGE_HEIGHT_PT, ops: opsPorPagina.get(i) ?? [] }))
+    );
     // Enlaces internos (`#titulo`): ya con página y altura de su destino. Van DESPUÉS del lote porque necesitan que todas las páginas existan.
     for (const e of enlacesInternos) {
       this.engine.addInternalLink(doc, e.page, { xPt: e.xPt, yPt: e.yPt, wPt: e.wPt, hPt: e.hPt }, e.destPage, e.destYPt);
