@@ -177,6 +177,9 @@ export class Viewer {
 
   limpiarSeleccionTexto(): void { this.textoSel.limpiar(); }
 
+  /** Página del foco de la selección de texto (la que se mueve con Mayús+flecha), o `null` si no hay (E-115). */
+  paginaFocoSeleccion(): number | null { return this.textoSel.paginaFoco; }
+
   /**
    * Mayús+flecha desde la línea enfocada `runId` de la página `pageIndex` (T16): amplía o reduce la selección
    * de texto un carácter o una línea. Devuelve el texto seleccionado ('' si queda vacía) o `null` si no
@@ -1310,7 +1313,7 @@ export class Viewer {
     // `page` sigue viendo los runs recién cargados más abajo.
     this.session.ensureText(i);
     const wrapper = this.wrappers[i]!;
-    if (this.textoSel.esExtremo(i)) this.textoSel.limpiar(); // repintar un extremo descarta la selección (E-057); una intermedia solo recupera su capa al final
+    if (this.textoSel.esExtremo(i) && wrapper.querySelector('canvas')) this.textoSel.limpiar(); // repintar un extremo con DOM descarta la selección (E-057); la primera pintura (E-115) o una intermedia solo recupera su capa al final
     if (this.marcadoSel?.pageIndex === i) { this.marcadoSel = null; this.cb.onMarcadoSelect?.(null); }
     wrapper.textContent = '';
     contarRenderPage();
