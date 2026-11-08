@@ -238,11 +238,19 @@ button { font-family: inherit; }
 #props-panel { display: none; align-items: center; gap: var(--ed-sp-2); padding: 0 var(--ed-sp-2); }
 #props-panel label { display: flex; align-items: center; gap: 4px; font-size: var(--ed-font-xs); color: var(--ed-text-muted); }
 #props-panel label { font-weight: var(--ed-peso-medio); }
+#props-panel.visible { display: flex; }
+.prop-tam { width: 4.5em; }
 /* Rango de páginas de «Dividir» (#btn-range): campo del sistema, centrado en la barra. */
 .context-bar #btn-range { align-self: center; width: 7.5em; min-height: var(--ed-control-h); }
 
 #swatches { display: flex; align-items: center; gap: 4px; }
-#swatches .swatch { border-radius: var(--ed-radius-xs); cursor: pointer; transition: transform var(--ed-dur-1) var(--ed-curva); }
+/* A-07 (WCAG 2.5.8): área clicable de 24x24; el cuadro de color visible es de 18x18 (24 - 2*3 de padding,
+   `background-clip: content-box`). El color es un dato y llega como `--muestra` (App.ts). */
+#swatches .swatch {
+  width: 24px; height: 24px; padding: 3px; box-sizing: border-box; border: 0;
+  background: var(--muestra) content-box;
+  border-radius: var(--ed-radius-xs); cursor: pointer; transition: transform var(--ed-dur-1) var(--ed-curva);
+}
 #swatches .swatch:hover { transform: scale(1.1); }
 #swatches .swatch[aria-pressed="true"] { outline: 2px solid var(--ed-text); outline-offset: 1px; }
 
@@ -279,6 +287,8 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   outline-offset: 3px;
   transition: box-shadow var(--ed-dur-1) var(--ed-curva);
 }
+#thumbs canvas.thumb.active { outline: 2px solid var(--ed-accent); }
+#outline-toolbar:not(.oculto) { display: flex; }
 #thumbs canvas.thumb:hover { box-shadow: var(--ed-sombra-papel), 0 0 0 3px var(--ed-hover); }
 #outline-panel { color: var(--ed-text); font-size: var(--ed-font-sm); }
 .outline-item, .outline-toggle { color: inherit; }
@@ -490,6 +500,7 @@ select, input[type="text"], input[type="search"], input[type="number"] {
  * siendo el cajón deslizante que abre `#btn-drawer`.
  */
 #btn-drawer, #btn-more { display: none; }
+.hoja-asa, .hoja-velo { display: none; }
 #drawer-backdrop { display: none; }
 
 @media (max-width: 768px) {
@@ -516,28 +527,88 @@ select, input[type="text"], input[type="search"], input[type="number"] {
      pestaña activa — en móvil no hay concepto de pestaña visible, ver el
      comentario de `#toolbar-more` arriba), con su propio scroll vertical
      para no desbordar la ventana. */
-  #toolbar-more { display: none; }
-  #toolbar-more.open {
+  /* Hoja inferior de vidrio (E-134): SIEMPRE en el árbol, fuera de pantalla y sin visibilidad cuando está cerrada,
+     para poder animar la entrada y la salida (translateY). `visibility` con retardo = la salida se ve entera y
+     luego deja de ser tabulable. Con prefers-reduced-motion las duraciones son 0 (tema.css). */
+  #toolbar-more {
     display: flex;
     flex-direction: column;
-    width: 100%;
-    /* Hoja desplegable con scroll vertical propio (E-069): nunca más alta que la
-       ventana menos la cabecera; dvh sigue a la barra de URL del móvil. */
-    max-height: min(70vh, calc(100dvh - 120px));
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 60;
+    width: auto;
+    /* Hoja desplegable con scroll vertical propio (E-069): nunca más alta que la ventana; dvh sigue a la barra
+       de URL del móvil. */
+    max-height: min(78dvh, calc(100dvh - var(--ed-sp-8)));
     overflow-y: auto;
     overflow-x: hidden;
     overscroll-behavior: contain;
-    border-top: 1px solid var(--ed-border);
     box-sizing: border-box;
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    background: var(--ed-glass);
+    -webkit-backdrop-filter: var(--ed-blur);
+    backdrop-filter: var(--ed-blur);
+    border: 0;
+    border-radius: var(--ed-radius-xl) var(--ed-radius-xl) 0 0;
+    box-shadow: inset 0 1px 0 var(--ed-glass-borde), var(--ed-sombra-3);
+    transform: translateY(100%);
+    visibility: hidden;
+    transition: transform var(--ed-dur-3) var(--ed-curva-entrada), visibility 0s linear var(--ed-dur-3);
   }
+  #toolbar-more.open {
+    transform: translateY(0);
+    visibility: visible;
+    transition-delay: 0s;
+  }
+  /* Asa: botón de 44 px que cierra la hoja; pegada arriba mientras se desplaza el contenido. */
+  .hoja-asa {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    flex: 0 0 auto;
+    width: 100%;
+    min-height: 44px;
+    padding: 0;
+    border: 0;
+    background: var(--ed-glass);
+    cursor: pointer;
+    border-radius: var(--ed-radius-xl) var(--ed-radius-xl) 0 0;
+  }
+  .hoja-asa::before {
+    content: "";
+    width: 40px;
+    height: 5px;
+    border-radius: var(--ed-radius-pill);
+    background: var(--ed-control-border);
+  }
+  .hoja-asa:focus-visible { outline-offset: -3px; }
+  /* Velo tras la hoja: toca fuera para cerrar. Aparece con fundido. */
+  .hoja-velo {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    background: var(--ed-velo);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity var(--ed-dur-3) var(--ed-curva), visibility 0s linear var(--ed-dur-3);
+  }
+  .hoja-velo.visible { opacity: 1; visibility: visible; transition-delay: 0s; }
+  /* «Más» queda por encima del velo: el mismo botón que abre la hoja la cierra. */
+  .topbar #btn-more { position: relative; z-index: 61; }
   .context-bar.activa { display: none; }
   #toolbar-more.open .context-bar {
     display: flex;
     align-items: stretch;
     flex: 0 0 auto;
     min-height: 0;
-    border-top: 1px solid var(--ed-border-strong);
-    padding: var(--ed-sp-2) var(--ed-sp-3) var(--ed-sp-3);
+    border-top: 1px solid var(--ed-border);
+    padding: var(--ed-sp-2) var(--ed-sp-4) var(--ed-sp-3);
     gap: var(--ed-sp-2);
     box-sizing: border-box;
     min-width: 0;
@@ -547,11 +618,9 @@ select, input[type="text"], input[type="search"], input[type="number"] {
     display: block;
     flex: 1 0 100%;
     padding: var(--ed-sp-1) 0;
-    font-size: var(--ed-font-sm);
-    font-weight: 700;
-    color: var(--ed-text-muted);
-    text-transform: uppercase;
-    letter-spacing: .04em;
+    font-size: var(--ed-font-md);
+    font-weight: var(--ed-peso-fuerte);
+    color: var(--ed-text);
   }
   /* En una hoja apilada cada botón es tan alto como su contenido: el `height: 100%`
      de escritorio se resolvía contra la barra entera y los botones de filas
@@ -559,6 +628,7 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   #toolbar-more.open .context-bar .icon-btn {
     height: auto;
     min-height: 44px;
+    min-width: 44px;
     max-width: 100%;
     flex: 0 1 auto;
   }
@@ -576,13 +646,17 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   /* Campos de texto/número del panel: también objetivo táctil de >= 40 px. */
   #toolbar-more.open input[type="text"],
   #toolbar-more.open input[type="number"],
+  #toolbar-more.open input[type="color"],
   #toolbar-more.open select {
-    min-height: 40px;
+    min-height: 44px;
+    min-width: 44px;
     box-sizing: border-box;
     max-width: 100%;
   }
   #toolbar-more.open #btn-range { flex: 1 1 8em; min-width: 0; }
-  #toolbar-more.open #swatches { flex-wrap: wrap; }
+  #toolbar-more.open #swatches { flex-wrap: wrap; gap: 0; }
+  /* Destino táctil de 44 px (el cuadro de color visible se queda en 28 px: padding + content-box). */
+  #toolbar-more.open #swatches button.swatch { width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 8px; }
   #toolbar-more.open #props-panel { flex-wrap: wrap; padding: 0; row-gap: var(--ed-sp-2); }
 
   #app { position: relative; }
@@ -629,16 +703,28 @@ select, input[type="text"], input[type="search"], input[type="number"] {
     transition: transform var(--ed-dur-3) var(--ed-curva);
     /* Sin sombra mientras está cerrado: fuera de pantalla, su difuminado se derramaría sobre la página. */
   }
-  #sidebar.abierto { transform: translateX(0); box-shadow: var(--ed-sombra-3); }
-  #sidebar button { min-height: 40px; }
+  #sidebar.abierto { transform: translateX(0); box-shadow: inset -1px 0 0 var(--ed-glass-borde), var(--ed-sombra-3); }
+  /* Cajón de vidrio con las esquinas libres redondeadas y destinos táctiles de 44 px. */
+  #sidebar {
+    background: var(--ed-glass);
+    -webkit-backdrop-filter: var(--ed-blur);
+    backdrop-filter: var(--ed-blur);
+    border-right: 0;
+    border-radius: 0 var(--ed-radius-xl) var(--ed-radius-xl) 0;
+  }
+  #sidebar button { min-height: 44px; }
 
-  #drawer-backdrop.visible {
+  #drawer-backdrop {
     display: block;
     position: absolute;
     inset: 0;
     background: var(--ed-velo);
     z-index: 40;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity var(--ed-dur-3) var(--ed-curva), visibility 0s linear var(--ed-dur-3);
   }
+  #drawer-backdrop.visible { opacity: 1; visibility: visible; transition-delay: 0s; }
 }
 
 /* A-05: el panel de compresión es un <dialog>; solo es flex mientras está abierto. */
@@ -755,4 +841,52 @@ dialog.encabezado-panel::backdrop { background: color-mix(in srgb, var(--ed-velo
   .run { forced-color-adjust: none; color: transparent; }
   .run:focus-visible, .run.selected { outline-color: Highlight; }
   .sel-rect { forced-color-adjust: none; }
+}
+
+/* ── Campos de formulario sobre la página (E-134) ────────────────────────
+   Presentación de los controles que Viewer.drawFormFields superpone al PDF. La POSICIÓN y el TAMAÑO
+   (left/top/width/height en px CSS de página) y la fuente en px los pone el Viewer en línea: son geometría.
+   Aquí solo color, borde, foco y estados, con tokens "campo sobre papel": la hoja es blanca en los dos
+   temas, así que el campo no cambia en oscuro. `color-scheme: light` evita que el motor pinte la casilla, el
+   radio y la lista con la paleta oscura (texto claro sobre papel blanco: defecto visible en tema oscuro). */
+.form-field {
+  color-scheme: light;
+  accent-color: var(--ed-campo-papel-foco);
+  color: var(--ed-campo-papel-texto);
+  /* Anulan los mínimos táctiles genéricos del móvil: el campo mide lo que mide su caja en el PDF. */
+  min-width: 0;
+  min-height: 0;
+  transition: background-color var(--ed-dur-1) var(--ed-curva), border-color var(--ed-dur-1) var(--ed-curva), box-shadow var(--ed-dur-1) var(--ed-curva);
+}
+.form-field:where(input[type="text"], select) {
+  padding: 0 var(--ed-sp-1);
+  border: 1px solid var(--ed-campo-papel-borde);
+  border-radius: var(--ed-radius-xs);
+  background: var(--ed-campo-papel-fondo);
+}
+.form-field:where(input[type="text"], select):hover:not(:disabled) {
+  background: var(--ed-campo-papel-fondo-hover);
+  border-color: var(--ed-campo-papel-foco);
+}
+.form-field:focus-visible,
+#app .form-field:focus-visible {
+  outline: none;
+  border-color: var(--ed-campo-papel-foco);
+  box-shadow: 0 0 0 2px var(--ed-campo-papel-foco);
+}
+.form-field:where(input[type="checkbox"], input[type="radio"]):focus-visible,
+#app .form-field:where(input[type="checkbox"], input[type="radio"]):focus-visible {
+  box-shadow: none;
+  outline: 2px solid var(--ed-campo-papel-foco);
+  outline-offset: 1px;
+}
+.form-field:where(input[type="checkbox"], input[type="radio"]) { cursor: pointer; }
+.form-field:disabled {
+  opacity: 1;
+  cursor: not-allowed;
+  color: var(--ed-campo-papel-texto-inactivo);
+}
+.form-field:where(input[type="text"], select):disabled {
+  background: var(--ed-campo-papel-fondo-inactivo);
+  border-style: dashed;
 }

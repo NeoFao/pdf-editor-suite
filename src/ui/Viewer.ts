@@ -1020,12 +1020,9 @@ export class Viewer {
         Object.assign(input.style, posStyle);
         input.type = 'text';
         input.value = field.value;
-        Object.assign(input.style, {
-          font: `${Math.max(8, c.height * 0.7)}px sans-serif`,
-          border: '1px solid #94a3b8',
-          // Casi opaco: tapa el valor que el motor ya rasterizó debajo (ver comentario de la clase).
-          background: 'rgba(255,255,255,0.95)'
-        });
+        // Tamaño de letra en px CSS de página (geometría). Color, borde y fondo casi opaco —que tapa el valor
+        // que el motor ya rasterizó debajo— salen de `.form-field` (estilos.css, tokens --ed-campo-papel-*).
+        input.style.font = `${Math.max(8, c.height * 0.7)}px sans-serif`;
         const oldValue = field.value;
         input.addEventListener('change', () => {
           this.cb.onFormText?.(i, field.annotIndex, input.value, oldValue);
@@ -1068,11 +1065,7 @@ export class Viewer {
         select.dataset.fieldName = field.name;
         select.disabled = field.readOnly;
         Object.assign(select.style, posStyle);
-        Object.assign(select.style, {
-          font: `${Math.max(8, Math.min(c.height, 18) * 0.65)}px sans-serif`,
-          border: '1px solid #94a3b8',
-          background: 'rgba(255,255,255,0.95)'
-        });
+        select.style.font = `${Math.max(8, Math.min(c.height, 18) * 0.65)}px sans-serif`;
         if (field.kind === 'list') {
           select.multiple = field.multiSelect;
           select.size = Math.max(1, field.options.length);
