@@ -1636,7 +1636,7 @@ export const FICHERO_TEMA = 'src/ui/tema.css';
  */
 export const TOPE_COLORES_LITERALES = {
   'src/ui/EncabezadoPanel.ts': 2,
-  'src/ui/Viewer.ts': 10,
+  'src/ui/Viewer.ts': 8,
 };
 
 const COLOR_LITERAL = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(\s*[\d.]/g;

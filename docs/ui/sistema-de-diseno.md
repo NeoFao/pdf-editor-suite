@@ -144,14 +144,14 @@ Ordenadas por impacto visible (lo que más se usa y peor se ve primero). Cada l�
 5. **MisFirmasPanel** (`src/ui/MisFirmasPanel.ts`): lista de firmas, fondo `#fff` de miniatura. Tope 2.
 6. **enlaceExterno** (`src/ui/enlaceExterno.ts`): confirmación de enlace externo; URL en caja `#f3f4f6`, aviso `#b91c1c`. Tope 4.
 7. ~~**AtajosPanel**~~ — migrado (fase 2): tabla `.atajos-tabla` con `<kbd>`, una alternativa por línea, `.enlace` a `/legacy`; tope eliminado.
-8. **Barra de buscar y reemplazar** (`.replace-bar` en `App.ts`/`estilos.css`): pasar `.replace-btn` a `.btn`, casillas a `.casilla`.
+8. **Barra de buscar y reemplazar** (`.replace-bar` en `App.ts`/`estilos.css`): pasar `.replace-btn` a `.btn`, casillas a `.casilla`. **HECHO** (`ui-busqueda-avisos.spec.ts`).
 9. ~~**Panel de propiedades de línea** y **paleta**~~ — migrados (fase 2): `#props-panel` y `#swatches` son grupos compactos de cinta (borde `--ed-border`, radio 8); tamaño de muestra en CSS, solo el color queda inline (dato).
-10. **Panel de comentarios** (`ComentariosPanel.ts`): filas como tarjetas `.vidrio` ligeras, filtro con etiqueta visible.
-11. **Panel de marcadores** (`PanelMarcadores.ts`, `#outline-toolbar`): acciones como `.btn--fantasma`, árbol con estados de `--ed-hover`/`--ed-accent-soft`.
-12. **Aviso de conversión** (`.conversion-warnings`): convertir en `.toast--aviso` anclado bajo la barra.
+10. **Panel de comentarios** (`ComentariosPanel.ts`): filas como tarjetas `.vidrio` ligeras, filtro con etiqueta visible. **HECHO** (sin fecha: `CommentInfo` no la trae).
+11. **Panel de marcadores** (`PanelMarcadores.ts`, `#outline-toolbar`): acciones como `.btn--fantasma`, árbol con estados de `--ed-hover`/`--ed-accent-soft`. **HECHO**.
+12. **Aviso de conversión** (`.conversion-warnings`): convertir en `.toast--aviso` anclado bajo la barra. **HECHO** (franja con grupos y recuento, no toast).
 13. *(hecho, E-134)* **Hoja «Más» móvil** (`#toolbar-more.open`, ≤ 768 px) y **cajón lateral**: `.vidrio`, títulos de grupo sin mayúsculas.
 14. *(hecho, E-134)* **Campos de formulario sobre la página** (`Viewer.ts`, ~l. 990–1050): borde `#94a3b8` y fondo casi opaco son literales; tokens nuevos de "campo sobre papel" (los dos temas iguales: la hoja es blanca).
-15. **Avisos sobre la página** (`Viewer.ts`: `.pagina-invalida`, `.aviso-resolucion`, resaltados de búsqueda): pasar a clases con `--ed-danger-soft` / `--ed-warning-*`. El amarillo/naranja de búsqueda es dato de anotación (escape). Tope de Viewer 14.
+15. **Avisos sobre la página** (`Viewer.ts`: `.pagina-invalida`, `.aviso-resolucion`, resaltados de búsqueda): pasar a clases con `--ed-danger-soft` / `--ed-warning-*`. El amarillo/naranja de búsqueda es dato de anotación (escape). Tope de Viewer 14. **HECHO** (tope de Viewer 8).
 16. *(hecho, E-134)* **Botones de herramienta y paleta en `App.ts`**: la paleta `PALETTE` es dato (8 escapes con razón); quitar los `style.*` restantes de miniatura activa y muestras pasando a clases.
 17. **Diálogos de apertura/errores del motor** que lleguen desde `main` después de E-130 (p. ej. `AperturaDialogos.ts`): aplicar la anatomía `.dlg-*` al integrarlos.
 
