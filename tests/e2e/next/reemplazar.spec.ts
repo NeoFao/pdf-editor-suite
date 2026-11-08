@@ -42,7 +42,7 @@ test('Ctrl+H abre la barra: foco en Buscar si está vacío, en Reemplazar si ya 
 
 test('accesibilidad: campos etiquetados y resultado en una región aria-live', async ({ page }) => {
   await abrir(page);
-  await expect(page.locator('#replace-input')).toHaveAttribute('aria-label', 'Reemplazar con');
+  await expect(page.locator('#replace-input')).toHaveAccessibleName('Reemplazar con');
   await expect(page.getByLabel('Distinguir mayúsculas')).toBeVisible();
   await expect(page.getByLabel('Palabra completa')).toBeVisible();
   const vivo = page.locator('#replace-result');

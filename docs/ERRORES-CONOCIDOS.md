@@ -3842,6 +3842,23 @@ foco y no dejar ids duplicados, y retrasarlo cambiaría ese contrato. Los demás
 externos, nota, mis firmas) solo heredan el aspecto base de `.dlg`; su migración completa es la fase 2 (lista ordenada en el doc).
 ---
 
+### E-132 · El campo de contraseña de un PDF cifrado se veía con el aspecto nativo del navegador (claro y sin radio) en la app oscura
+
+**Síntoma.** En tema oscuro, el diálogo «PDF protegido con contraseña» mostraba el campo de contraseña como una caja clara con el borde
+azul por defecto del navegador, desentonando con el resto del diálogo; sin radio, sin borde del sistema ni altura de control.
+
+**Causa raíz.** El estilo base de los campos de `tema.css` (§4.3, especificidad 0 con `:where`) enumeraba `input[type=text|search|number|url]`
+e `input:not([type])`, pero no `input[type=password]`: ese tipo quedaba sin ninguna regla y heredaba el aspecto nativo. Ningún diálogo
+anterior tenía un campo de contraseña dentro del sistema de diseño, así que nunca se vio.
+
+**Arreglo.** `input[type="password"]` entra en el selector base de campos de `tema.css`, y el diálogo de contraseña se migra a la
+anatomía `.dlg-*` (fase 2, junto a nota, firma, Mis firmas, enlace externo y el aviso de error de apertura).
+
+**Cómo se detecta ahora.** `tests/e2e/next/dialogos-fase2.spec.ts` (Chromium real, estilos computados): el campo de contraseña tiene el
+mismo radio, borde y fondo que un campo de texto del sistema, además del contraste AA (≥ 4,5), anatomía y foco visible de los siete
+diálogos migrados en claro y oscuro.
+---
+
 ### E-134 · Campos de formulario ilegibles sobre la página en tema oscuro (texto y casilla claros sobre papel blanco)
 
 **Síntoma.** Con la app en tema oscuro, los campos de formulario superpuestos al PDF (`.form-field`) se veían mal: el valor de un campo

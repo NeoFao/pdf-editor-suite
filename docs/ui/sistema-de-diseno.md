@@ -137,21 +137,21 @@ Cifras entre paréntesis = contraste contra `--ed-surface` (o contra su fondo na
 
 Ordenadas por impacto visible (lo que más se usa y peor se ve primero). Cada línea es un lote independiente.
 
-1. **CompressPanel** (`src/ui/CompressPanel.ts`, Convertir › Comprimir): fondo blanco y texto negro inline (blanco en oscuro), barra de progreso con colores literales. Tope 4.
-2. **TextPanel** (`src/ui/TextPanel.ts`, Convertir › Texto): diálogo con borde y aviso `#555` inline. Tope 2.
+1. ~~**CompressPanel**~~ — migrado (fase 2): anatomía `.dlg-*`, `.campos`, barra `.progreso-*`; tope eliminado.
+2. ~~**TextPanel**~~ — migrado (fase 2): cabecera con cierre, `textarea.texto-salida`, pie con Copiar como primaria; tope eliminado.
 3. **NotaDialogo** (`src/ui/NotaDialogo.ts`): título y barra con estilos inline, ayuda con `opacity: 0.7`. Anatomía `.dlg-*`.
 4. **SignaturePad** (`src/ui/SignaturePad.ts`, Rellenar y firmar › Firmar): lienzo con borde literal, aviso de privacidad `#475569`. El trazo `#000` es dato (escape). Tope 3.
 5. **MisFirmasPanel** (`src/ui/MisFirmasPanel.ts`): lista de firmas, fondo `#fff` de miniatura. Tope 2.
 6. **enlaceExterno** (`src/ui/enlaceExterno.ts`): confirmación de enlace externo; URL en caja `#f3f4f6`, aviso `#b91c1c`. Tope 4.
-7. **AtajosPanel** (`src/ui/AtajosPanel.ts`): tabla de atajos (usar `kbd`), enlace a `/legacy` en `#6366f1`. Tope 2.
-8. **Barra de buscar y reemplazar** (`.replace-bar` en `App.ts`/`estilos.css`): pasar `.replace-btn` a `.btn`, casillas a `.casilla`.
-9. **Panel de propiedades de línea** (`#props-panel`, pestaña Editar) y **paleta** (`#swatches`, Comentar): agrupar como `.grupo` compacto de cinta.
-10. **Panel de comentarios** (`ComentariosPanel.ts`): filas como tarjetas `.vidrio` ligeras, filtro con etiqueta visible.
-11. **Panel de marcadores** (`PanelMarcadores.ts`, `#outline-toolbar`): acciones como `.btn--fantasma`, árbol con estados de `--ed-hover`/`--ed-accent-soft`.
-12. **Aviso de conversión** (`.conversion-warnings`): convertir en `.toast--aviso` anclado bajo la barra.
+7. ~~**AtajosPanel**~~ — migrado (fase 2): tabla `.atajos-tabla` con `<kbd>`, una alternativa por línea, `.enlace` a `/legacy`; tope eliminado.
+8. **Barra de buscar y reemplazar** (`.replace-bar` en `App.ts`/`estilos.css`): pasar `.replace-btn` a `.btn`, casillas a `.casilla`. **HECHO** (`ui-busqueda-avisos.spec.ts`).
+9. ~~**Panel de propiedades de línea** y **paleta**~~ — migrados (fase 2): `#props-panel` y `#swatches` son grupos compactos de cinta (borde `--ed-border`, radio 8); tamaño de muestra en CSS, solo el color queda inline (dato).
+10. **Panel de comentarios** (`ComentariosPanel.ts`): filas como tarjetas `.vidrio` ligeras, filtro con etiqueta visible. **HECHO** (sin fecha: `CommentInfo` no la trae).
+11. **Panel de marcadores** (`PanelMarcadores.ts`, `#outline-toolbar`): acciones como `.btn--fantasma`, árbol con estados de `--ed-hover`/`--ed-accent-soft`. **HECHO**.
+12. **Aviso de conversión** (`.conversion-warnings`): convertir en `.toast--aviso` anclado bajo la barra. **HECHO** (franja con grupos y recuento, no toast).
 13. *(hecho, E-134)* **Hoja «Más» móvil** (`#toolbar-more.open`, ≤ 768 px) y **cajón lateral**: `.vidrio`, títulos de grupo sin mayúsculas.
 14. *(hecho, E-134)* **Campos de formulario sobre la página** (`Viewer.ts`, ~l. 990–1050): borde `#94a3b8` y fondo casi opaco son literales; tokens nuevos de "campo sobre papel" (los dos temas iguales: la hoja es blanca).
-15. **Avisos sobre la página** (`Viewer.ts`: `.pagina-invalida`, `.aviso-resolucion`, resaltados de búsqueda): pasar a clases con `--ed-danger-soft` / `--ed-warning-*`. El amarillo/naranja de búsqueda es dato de anotación (escape). Tope de Viewer 14.
+15. **Avisos sobre la página** (`Viewer.ts`: `.pagina-invalida`, `.aviso-resolucion`, resaltados de búsqueda): pasar a clases con `--ed-danger-soft` / `--ed-warning-*`. El amarillo/naranja de búsqueda es dato de anotación (escape). Tope de Viewer 14. **HECHO** (tope de Viewer 8).
 16. *(hecho, E-134)* **Botones de herramienta y paleta en `App.ts`**: la paleta `PALETTE` es dato (8 escapes con razón); quitar los `style.*` restantes de miniatura activa y muestras pasando a clases.
 17. **Diálogos de apertura/errores del motor** que lleguen desde `main` después de E-130 (p. ej. `AperturaDialogos.ts`): aplicar la anatomía `.dlg-*` al integrarlos.
 
@@ -166,3 +166,5 @@ Ordenadas por impacto visible (lo que más se usa y peor se ve primero). Cada l�
   y `color-scheme: light`. La posición y el tamaño (px CSS de página) siguen en línea: son geometría.
 - **Utilidades**: `.oculto` (display none que no pisa un componente), `#props-panel.visible`. El color de cada muestra de la paleta es un
   dato y viaja como `--muestra`. `App.ts` ya no tiene estilos en línea de aspecto ni colores literales fuera de los datos de la paleta.
+
+**Hecho en la fase 2 (dialogos):** NotaDialogo, SignaturePad (con Deshacer), MisFirmasPanel, enlaceExterno y AperturaDialogos (error y contrasena) usan la anatomia .dlg-* con las piezas de src/ui/dlgPartes.ts y los estilos de src/ui/dialogos.css; spec en tests/e2e/next/dialogos-fase2.spec.ts. Un diálogo nuevo reutiliza dlgPartes.ts y .dlg-aviso (peligro/aviso) en lugar de estilos en linea.

@@ -1,0 +1,121 @@
+/*
+ * E-130 fase 2 · Diálogos con la anatomía del sistema de diseño (docs/ui/sistema-de-diseno.md §3):
+ * nota, firma, Mis firmas, enlace externo y apertura (error y contraseña). Solo tokens de tema.css: ningún color
+ * literal. Las piezas comunes (.dlg-*, .btn, .campos, .casilla, .codigo) viven en tema.css.
+ */
+
+/* Los diálogos de este fichero son columnas: cabecera fija, cuerpo con scroll propio, pie fijo. */
+dialog.nota-dialogo[open],
+dialog.firma-dialogo[open],
+dialog.firmas-dialogo[open],
+dialog.enlace-dialogo[open],
+dialog.apertura-dialogo[open] {
+  display: flex;
+  flex-direction: column;
+}
+dialog.nota-dialogo { width: min(34rem, 94vw); }
+dialog.firma-dialogo { width: min(30rem, 94vw); }
+dialog.firmas-dialogo { width: min(30rem, 94vw); }
+dialog.enlace-dialogo { width: min(32rem, 94vw); }
+dialog.apertura-dialogo { width: min(28rem, 94vw); }
+
+/* El formulario de la contraseña envuelve la anatomía (para que Intro envíe) sin alterar la maquetación. */
+.dlg-form { display: contents; }
+dialog.apertura-dialogo:has(> .dlg-form) { padding: 0; }
+
+/* Alerta del diálogo: el título lo dice en rojo; el cuerpo sigue en texto normal. */
+dialog.dlg--peligro .dlg-titulo { color: var(--ed-danger); }
+
+.dlg-texto { margin: 0; font-size: var(--ed-font-md); line-height: 1.5; color: var(--ed-text); }
+
+/* Aviso dentro del cuerpo (sustituye a los estilos con color en línea). */
+.dlg-aviso {
+  margin: 0;
+  padding: var(--ed-sp-2) var(--ed-sp-3);
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius-sm);
+  font-size: var(--ed-font-sm);
+  line-height: 1.5;
+}
+.dlg-aviso--peligro { background: var(--ed-danger-soft); border-color: var(--ed-danger); color: var(--ed-danger); }
+.dlg-aviso--aviso { background: var(--ed-warning-bg); border-color: var(--ed-warning-border); color: var(--ed-warning-text); }
+
+/* Nota */
+.nota-area { width: 100%; min-height: 8rem; padding: var(--ed-sp-3); resize: vertical; font-size: var(--ed-font-md); line-height: 1.5; }
+
+/* Firma: el papel (blanco en los dos temas) con una línea guía; el lienzo queda transparente encima. */
+.firma-lienzo {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--ed-control-border);
+  border-radius: var(--ed-radius-md);
+  background: var(--ed-papel);
+}
+.firma-lienzo-canvas { position: relative; display: block; width: 100%; height: auto; touch-action: none; cursor: crosshair; }
+.firma-guia {
+  position: absolute;
+  left: var(--ed-sp-6);
+  right: var(--ed-sp-6);
+  bottom: 28%;
+  border-bottom: 1.5px dashed var(--ed-control-border);
+  transition: opacity var(--ed-dur-2) var(--ed-curva);
+}
+.firma-lienzo--con-trazo .firma-guia { opacity: 0.45; }
+.dlg-acciones { display: flex; gap: var(--ed-sp-1); }
+
+/* Mis firmas */
+.firmas-lista { display: grid; gap: var(--ed-sp-2); margin: 0; padding: 0; list-style: none; }
+.firma-item { display: flex; gap: var(--ed-sp-2); align-items: stretch; }
+.firma-item-insertar {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: var(--ed-sp-3);
+  min-width: 0;
+  padding: var(--ed-sp-2);
+  border: 1px solid var(--ed-border-strong);
+  border-radius: var(--ed-radius-md);
+  background: var(--ed-surface-2);
+  color: var(--ed-text);
+  font-size: var(--ed-font-md);
+  font-weight: var(--ed-peso-medio);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--ed-dur-1) var(--ed-curva), border-color var(--ed-dur-1) var(--ed-curva);
+}
+.firma-item-insertar:hover { border-color: var(--ed-accent); background: color-mix(in srgb, var(--ed-surface-2), var(--ed-text) 4%); }
+.firma-item-insertar:focus-visible { outline: 2px solid var(--ed-focus-ring); outline-offset: 2px; }
+.firma-item > .btn { align-self: center; }
+.firma-miniatura {
+  flex: none;
+  height: 44px;
+  max-width: 160px;
+  object-fit: contain;
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius-sm);
+  background: var(--ed-papel);
+}
+.firmas-vacio {
+  margin: 0;
+  padding: var(--ed-sp-6) var(--ed-sp-5);
+  border: 1px dashed var(--ed-border-strong);
+  border-radius: var(--ed-radius-md);
+  color: var(--ed-text-muted);
+  font-size: var(--ed-font-md);
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* Enlace externo: el dominio manda; la URL completa va en caja de código, escapada y con scroll si es larga. */
+.enlace-host { margin: 0 0 calc(-1 * var(--ed-sp-2)); font-size: var(--ed-font-xl); font-weight: var(--ed-peso-fuerte); word-break: break-all; color: var(--ed-text); }
+.enlace-url {
+  display: block;
+  max-height: 9rem;
+  overflow: auto;
+  padding: var(--ed-sp-3);
+  border-radius: var(--ed-radius-md);
+  font-size: var(--ed-font-sm);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}

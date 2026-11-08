@@ -21,38 +21,44 @@ const DPI_OPCIONES = [72, 150, 300];
 export class CompressPanel {
   static open(onConfirm: (opciones: OpcionesPanelCompresion, control: ControlCompresion) => Promise<void>): void {
     // `<dialog>` modal (A-05): role implícito dialog, ::backdrop en lugar del overlay a mano.
+    // Anatomía del sistema de diseño (E-130): cabecera, cuerpo con rejilla `.campos` y pie con la primaria la última.
     const panel = document.createElement('dialog');
     panel.id = 'compress-panel';
-    Object.assign(panel.style, {
-      background: '#fff', color: '#000', padding: '16px', borderRadius: '8px', font: '14px sans-serif',
-      flexDirection: 'column', gap: '10px', minWidth: '240px', border: 'none'
-    });
-    // `display:flex` solo con el diálogo abierto: ver `dialog.compress-panel[open]` en estilos.css.
     panel.classList.add('compress-panel');
 
-    const title = document.createElement('div');
+    const title = document.createElement('h2');
     title.id = 'compress-panel-titulo';
+    title.className = 'dlg-titulo';
     title.textContent = 'Comprimir documento';
-    title.style.fontWeight = 'bold';
+    const cabecera = document.createElement('div');
+    cabecera.className = 'dlg-cabecera';
+    cabecera.appendChild(title);
 
-    const qualityRow = document.createElement('div');
-    Object.assign(qualityRow.style, { display: 'flex', alignItems: 'center', gap: '8px' });
-    const qualityLabel = document.createElement('label');
-    qualityLabel.textContent = 'Calidad:';
-    qualityLabel.htmlFor = 'compress-quality';
+    /** Fila de `.campos`: etiqueta visible a la izquierda, control a la derecha. */
+    const fila = (etiqueta: string, id: string, control: HTMLElement, extra?: HTMLElement): HTMLElement => {
+      const label = document.createElement('label');
+      label.className = 'campo-etiqueta';
+      label.htmlFor = id;
+      label.textContent = etiqueta;
+      const ctl = document.createElement('div');
+      ctl.className = 'campo-control';
+      ctl.append(control);
+      if (extra) ctl.append(extra);
+      const f = document.createElement('div');
+      f.className = 'campo';
+      f.append(label, ctl);
+      return f;
+    };
+
     const quality = document.createElement('input');
     quality.type = 'range'; quality.id = 'compress-quality';
     quality.min = '10'; quality.max = '95'; quality.value = '70';
+    quality.autofocus = true; // foco inicial en el primer campo
     const qualityValue = document.createElement('span');
+    qualityValue.className = 'campo-extra';
     qualityValue.textContent = quality.value;
     quality.addEventListener('input', () => { qualityValue.textContent = quality.value; });
-    qualityRow.append(qualityLabel, quality, qualityValue);
 
-    const dpiRow = document.createElement('div');
-    Object.assign(dpiRow.style, { display: 'flex', alignItems: 'center', gap: '8px' });
-    const dpiLabel = document.createElement('label');
-    dpiLabel.textContent = 'DPI máximo:';
-    dpiLabel.htmlFor = 'compress-dpi';
     const dpi = document.createElement('select');
     dpi.id = 'compress-dpi';
     for (const v of DPI_OPCIONES) {
@@ -61,33 +67,43 @@ export class CompressPanel {
       if (v === 150) opt.selected = true;
       dpi.appendChild(opt);
     }
-    dpiRow.append(dpiLabel, dpi);
+
+    const campos = document.createElement('div');
+    campos.className = 'campos';
+    campos.append(fila('Calidad', 'compress-quality', quality, qualityValue), fila('DPI máximo', 'compress-dpi', dpi));
 
     // Progreso accesible: oculto hasta que empieza a comprimir.
     const progresoCaja = document.createElement('div');
+    progresoCaja.className = 'progreso';
     progresoCaja.hidden = true;
     const progresoTexto = document.createElement('div');
     progresoTexto.id = 'compress-progress-text';
+    progresoTexto.className = 'progreso-texto';
     progresoTexto.setAttribute('aria-live', 'polite');
     const progresoBarra = document.createElement('div');
     progresoBarra.id = 'compress-progress';
+    progresoBarra.className = 'progreso-barra';
     progresoBarra.setAttribute('role', 'progressbar');
     progresoBarra.setAttribute('aria-label', 'Progreso de la compresión');
     progresoBarra.setAttribute('aria-valuemin', '0');
     progresoBarra.setAttribute('aria-valuemax', '100');
     progresoBarra.setAttribute('aria-valuenow', '0');
-    Object.assign(progresoBarra.style, { height: '8px', background: '#ddd', borderRadius: '4px', overflow: 'hidden', marginTop: '4px' });
     const progresoRelleno = document.createElement('div');
-    Object.assign(progresoRelleno.style, { height: '100%', width: '0%', background: '#2563eb' });
+    progresoRelleno.className = 'progreso-relleno';
+    progresoRelleno.style.width = '0%'; // geometría calculada (fracción del avance)
     progresoBarra.appendChild(progresoRelleno);
     progresoCaja.append(progresoTexto, progresoBarra);
 
+    const cuerpo = document.createElement('div');
+    cuerpo.className = 'dlg-cuerpo';
+    cuerpo.append(campos, progresoCaja);
+
     const barra = document.createElement('div');
-    Object.assign(barra.style, { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '4px' });
+    barra.className = 'dlg-pie';
     const btnCancel = document.createElement('button');
-    btnCancel.id = 'compress-cancel'; btnCancel.textContent = 'Cancelar';
+    btnCancel.id = 'compress-cancel'; btnCancel.type = 'button'; btnCancel.className = 'btn btn--secundario'; btnCancel.textContent = 'Cancelar';
     const btnRun = document.createElement('button');
-    btnRun.id = 'btn-compress-run'; btnRun.textContent = 'Comprimir';
+    btnRun.id = 'btn-compress-run'; btnRun.type = 'button'; btnRun.className = 'btn btn--primario'; btnRun.textContent = 'Comprimir';
 
     let ocupado = false;
     const ctl = new AbortController();
@@ -121,7 +137,7 @@ export class CompressPanel {
     });
 
     barra.append(btnCancel, btnRun);
-    panel.append(title, qualityRow, dpiRow, progresoCaja, barra);
+    panel.append(cabecera, cuerpo, barra);
     mostrarModal(panel, {
       tituloId: 'compress-panel-titulo',
       // Escape durante la compresión cancela de forma explícita (y sigue vetando el cierre inmediato).

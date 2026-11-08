@@ -235,24 +235,35 @@ button { font-family: inherit; }
 .context-titulo { display: none; }
 .context-sep { width: 1px; margin: var(--ed-sp-2) var(--ed-sp-2); background: var(--ed-border); flex: 0 0 auto; }
 
-#props-panel { display: none; align-items: center; gap: var(--ed-sp-2); padding: 0 var(--ed-sp-2); }
-#props-panel label { display: flex; align-items: center; gap: 4px; font-size: var(--ed-font-xs); color: var(--ed-text-muted); }
-#props-panel label { font-weight: var(--ed-peso-medio); }
+/* Propiedades de línea (fuente, tamaño, color) y paleta: grupos compactos de cinta (sistema de diseño, E-131). */
+#props-panel, #swatches {
+  align-items: center;
+  align-self: center;
+  box-sizing: border-box;
+  min-height: calc(var(--ed-control-h) + var(--ed-sp-2));
+  padding: 0 var(--ed-sp-2);
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius-md);
+  background: color-mix(in srgb, var(--ed-surface-2) 60%, transparent);
+}
+#props-panel { display: none; gap: var(--ed-sp-3); }
 #props-panel.visible { display: flex; }
+#props-panel label { display: flex; align-items: center; gap: var(--ed-sp-1); font-size: var(--ed-font-sm); font-weight: var(--ed-peso-medio); color: var(--ed-text-muted); }
 .prop-tam { width: 4.5em; }
 /* Rango de páginas de «Dividir» (#btn-range): campo del sistema, centrado en la barra. */
 .context-bar #btn-range { align-self: center; width: 7.5em; min-height: var(--ed-control-h); }
 
-#swatches { display: flex; align-items: center; gap: 4px; }
+#swatches { display: flex; gap: var(--ed-sp-1); }
 /* A-07 (WCAG 2.5.8): área clicable de 24x24; el cuadro de color visible es de 18x18 (24 - 2*3 de padding,
    `background-clip: content-box`). El color es un dato y llega como `--muestra` (App.ts). */
 #swatches .swatch {
   width: 24px; height: 24px; padding: 3px; box-sizing: border-box; border: 0;
   background: var(--muestra) content-box;
-  border-radius: var(--ed-radius-xs); cursor: pointer; transition: transform var(--ed-dur-1) var(--ed-curva);
+  border-radius: var(--ed-radius-sm); cursor: pointer;
+  transition: transform var(--ed-dur-1) var(--ed-curva), box-shadow var(--ed-dur-1) var(--ed-curva);
 }
-#swatches .swatch:hover { transform: scale(1.1); }
-#swatches .swatch[aria-pressed="true"] { outline: 2px solid var(--ed-text); outline-offset: 1px; }
+#swatches .swatch:hover { transform: scale(1.12); }
+#swatches .swatch[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--ed-surface-2), 0 0 0 4px var(--ed-text); }
 
 select, input[type="text"], input[type="search"], input[type="number"] {
   color-scheme: light dark;
@@ -306,22 +317,31 @@ select, input[type="text"], input[type="search"], input[type="number"] {
 }
 
 /* ── Aviso de advertencias de conversión (§9 fila #4) ───────────────────── */
+/* Franja bajo la barra: tokens de aviso, cabecera con cierre y un grupo por tipo con su recuento. Si hay muchas
+   advertencias se desplaza dentro de la franja en vez de empujar el visor fuera de la pantalla. */
 .conversion-warnings {
   flex: 0 0 auto;
+  max-height: 30vh;
+  overflow: auto;
   background: var(--ed-warning-bg);
   border-bottom: 1px solid var(--ed-warning-border);
   color: var(--ed-warning-text);
   font-size: var(--ed-font-sm);
-  padding: var(--ed-sp-2) var(--ed-sp-3);
+  padding: var(--ed-sp-2) var(--ed-sp-3) var(--ed-sp-3);
 }
-.conversion-warnings-header { display: flex; align-items: center; justify-content: space-between; gap: var(--ed-sp-2); }
-.conversion-warnings-close {
-  background: transparent; border: none; cursor: pointer;
-  font-size: 1.1em; line-height: 1; color: inherit; padding: 2px 6px;
-}
-.conversion-warnings-group { margin-top: var(--ed-sp-1); }
+.conversion-warnings-header { display: flex; align-items: center; justify-content: space-between; gap: var(--ed-sp-2); font-size: var(--ed-font-md); }
+.conversion-warnings-close { color: inherit; min-height: var(--ed-control-h-sm); min-width: var(--ed-control-h-sm); }
+.conversion-warnings-close:hover:not(:disabled) { background: color-mix(in srgb, var(--ed-warning-text) 12%, transparent); }
+.conversion-warnings-group { margin-top: var(--ed-sp-2); }
 .conversion-warnings-group[hidden] { display: none; }
-.conversion-warnings-list { margin: var(--ed-sp-1) 0 0; padding-left: 1.25em; }
+.conversion-warnings-grupo-cab { display: flex; align-items: center; gap: var(--ed-sp-2); }
+.conversion-warnings-n {
+  min-width: 1.6em; padding: 0 var(--ed-sp-2); box-sizing: border-box; text-align: center;
+  border: 1px solid var(--ed-warning-border); border-radius: var(--ed-radius-pill);
+  font-size: var(--ed-font-xs); font-variant-numeric: tabular-nums;
+}
+.conversion-warnings-list { margin: var(--ed-sp-1) 0 0; padding-left: 1.4em; line-height: 1.5; }
+.conversion-warnings-list li + li { margin-top: var(--ed-sp-05); }
 
 /* ── Barra de estado ──────────────────────────────────────────────────── */
 .statusbar {
@@ -654,10 +674,10 @@ select, input[type="text"], input[type="search"], input[type="number"] {
     max-width: 100%;
   }
   #toolbar-more.open #btn-range { flex: 1 1 8em; min-width: 0; }
-  #toolbar-more.open #swatches { flex-wrap: wrap; gap: 0; }
+  #toolbar-more.open #swatches { flex-wrap: wrap; gap: 0; padding: var(--ed-sp-2); }
   /* Destino táctil de 44 px (el cuadro de color visible se queda en 28 px: padding + content-box). */
   #toolbar-more.open #swatches button.swatch { width: 44px; height: 44px; min-width: 44px; min-height: 44px; padding: 8px; }
-  #toolbar-more.open #props-panel { flex-wrap: wrap; padding: 0; row-gap: var(--ed-sp-2); }
+  #toolbar-more.open #props-panel { flex-wrap: wrap; padding: var(--ed-sp-2); row-gap: var(--ed-sp-2); }
 
   #app { position: relative; }
   .icon-btn, select, input[type="color"] {
@@ -727,8 +747,33 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   #drawer-backdrop.visible { opacity: 1; visibility: visible; transition-delay: 0s; }
 }
 
-/* A-05: el panel de compresión es un <dialog>; solo es flex mientras está abierto. */
-dialog.compress-panel[open] { display: flex; }
+/* A-05: el panel de compresión es un <dialog>; solo es flex mientras está abierto. Anatomía .dlg-* (E-131). */
+dialog.compress-panel[open], dialog.text-dialog[open], dialog.atajos-dialog[open] { display: flex; flex-direction: column; }
+dialog.compress-panel { width: min(94vw, 400px); }
+.progreso { display: flex; flex-direction: column; gap: var(--ed-sp-2); }
+.progreso[hidden] { display: none; }
+.progreso-texto { font-size: var(--ed-font-sm); color: var(--ed-text-muted); min-height: 1.4em; }
+.progreso-barra { height: 8px; border-radius: var(--ed-radius-pill); background: var(--ed-surface-3); box-shadow: inset 0 0 0 1px var(--ed-border); overflow: hidden; }
+.progreso-relleno { height: 100%; border-radius: inherit; background: var(--ed-accent); transition: width var(--ed-dur-2) var(--ed-curva); }
+
+dialog.text-dialog { width: min(94vw, 680px); max-width: min(94vw, 680px); }
+.texto-salida {
+  width: 100%; height: 320px; max-height: 55vh; resize: vertical;
+  font-family: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace; font-size: var(--ed-font-sm);
+  background: var(--ed-surface-3); line-height: 1.5;
+}
+
+dialog.atajos-dialog { width: min(94vw, 600px); max-width: min(94vw, 600px); }
+.atajos-tabla { width: 100%; border-collapse: collapse; font-size: var(--ed-font-md); }
+.atajos-tabla tr + tr > * { border-top: 1px solid var(--ed-border); }
+.atajos-tabla th, .atajos-tabla td { padding: var(--ed-sp-2) 0; text-align: left; vertical-align: baseline; }
+.atajos-tabla th { width: 44%; padding-right: var(--ed-sp-4); font-weight: var(--ed-peso-normal); }
+.atajos-tabla td { color: var(--ed-text-muted); }
+.atajo-alt { display: block; line-height: 1.9; }
+#shortcuts-title:focus { outline: none; } /* destino de foco programático (B2), no es un control */
+.atajo-nota { font-size: var(--ed-font-sm); color: var(--ed-text-muted); }
+.enlace { color: var(--ed-accent-strong); font-size: var(--ed-font-sm); text-underline-offset: 2px; }
+.enlace:hover { text-decoration-thickness: 2px; }
 
 /* ── Buscar y reemplazar (Ctrl/Cmd+H) ───────────────────────────────────── */
 .replace-bar {
@@ -744,45 +789,88 @@ dialog.compress-panel[open] { display: flex; }
   color: var(--ed-text);
 }
 .replace-bar[hidden] { display: none; }
-.replace-bar input[type="text"] {
-  height: 28px; box-sizing: border-box; min-width: 140px;
-  border: 1px solid var(--ed-control-border); border-radius: var(--ed-radius-sm);
-  background: var(--ed-surface-2); color: var(--ed-text); padding: 0 var(--ed-sp-2);
-  font-size: var(--ed-font-sm);
-}
-.replace-opt { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; }
-.replace-btn {
-  height: 28px; padding: 0 var(--ed-sp-3); cursor: pointer;
-  border: 1px solid var(--ed-control-border); border-radius: var(--ed-radius-sm);
-  background: var(--ed-surface-2); color: var(--ed-text); font-size: var(--ed-font-sm);
-}
-.replace-btn:hover:not(:disabled) { background: var(--ed-hover); }
-.replace-btn:disabled { opacity: .55; cursor: default; }
+/* Campo, opciones y acciones usan los componentes del sistema (.btn, .casilla, campo base); aquí solo el reparto. */
+.replace-bar { padding-block: var(--ed-sp-2); }
+.replace-etiqueta { color: var(--ed-text-muted); white-space: nowrap; }
+.replace-input { min-width: 160px; width: 200px; max-width: 100%; }
+.replace-bar .btn { min-height: var(--ed-control-h); }
+.replace-bar .replace-cerrar { min-height: var(--ed-control-h-sm); min-width: var(--ed-control-h-sm); }
+.replace-opt { padding: 0 var(--ed-sp-1); }
 .replace-result { color: var(--ed-text-muted); flex: 1 1 auto; min-width: 0; }
 
 /* Panel "Comentarios" (pestaña del panel lateral). */
 #comments-panel { flex: 1; overflow: auto; padding: var(--ed-sp-2); box-sizing: border-box; color: var(--ed-text); font-size: var(--ed-font-sm); }
+.comentarios-filtro-etiqueta { display: block; margin-bottom: var(--ed-sp-1); color: var(--ed-text-muted); font-size: var(--ed-font-xs); }
 .comentarios-filtro { width: 100%; box-sizing: border-box; margin-bottom: var(--ed-sp-2); }
 .comentarios-estado { margin: 0 0 var(--ed-sp-2); color: var(--ed-text-muted); }
 .comentarios-lista { list-style: none; margin: 0; padding: 0; }
-.comentarios-pagina { margin-top: var(--ed-sp-2); font-weight: 600; color: var(--ed-text-muted); }
-.comentario { display: flex; flex-wrap: wrap; gap: 4px; padding: 4px 0; border-bottom: 1px solid var(--ed-border); }
-.comentario-item { flex: 1 1 100%; display: flex; flex-direction: column; text-align: left; border: none; background: none; color: inherit; cursor: pointer; padding: 2px; }
+.comentarios-pagina { margin: var(--ed-sp-3) 0 var(--ed-sp-1); padding: 0 var(--ed-sp-1); font-weight: var(--ed-peso-fuerte); font-size: var(--ed-font-xs); color: var(--ed-text-muted); }
+/* Cada comentario es una tarjeta; sus acciones aparecen al pasar el ratón o con el foco dentro (en táctil, siempre). */
+.comentario {
+  margin-bottom: var(--ed-sp-2); padding: var(--ed-sp-2); box-sizing: border-box;
+  background: var(--ed-surface-2); border: 1px solid var(--ed-border); border-radius: var(--ed-radius-md); box-shadow: var(--ed-sombra-1);
+  transition: border-color var(--ed-dur-1) var(--ed-curva), box-shadow var(--ed-dur-1) var(--ed-curva);
+}
+.comentario:hover, .comentario:focus-within { border-color: var(--ed-border-strong); box-shadow: var(--ed-sombra-2); }
+.comentario-item {
+  display: flex; flex-direction: column; gap: var(--ed-sp-1); width: 100%; box-sizing: border-box; text-align: left;
+  border: none; background: none; color: inherit; cursor: pointer; padding: var(--ed-sp-05); font: inherit; border-radius: var(--ed-radius-sm);
+}
 .comentario-item:hover { background: var(--ed-hover); }
 .comentario-item:focus-visible, .comentario-accion:focus-visible { outline: 2px solid var(--ed-focus-ring); outline-offset: 2px; }
-.comentario-meta { font-size: 11px; color: var(--ed-text-muted); }
-.comentario-texto { overflow-wrap: anywhere; white-space: pre-line; }
-.comentario-marcado { overflow-wrap: anywhere; font-style: italic; }
+.comentario-meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--ed-sp-1) var(--ed-sp-2); font-size: var(--ed-font-xs); color: var(--ed-text-muted); }
+.comentario-tipo { padding: 0 var(--ed-sp-2); border-radius: var(--ed-radius-pill); background: var(--ed-accent-soft); color: var(--ed-accent-strong); font-weight: var(--ed-peso-medio); }
+.comentario-autor { color: var(--ed-text); font-weight: var(--ed-peso-medio); }
+.comentario-texto { overflow-wrap: anywhere; white-space: pre-line; line-height: 1.4; }
+.comentario-marcado { overflow-wrap: anywhere; font-style: italic; color: var(--ed-text-muted); line-height: 1.4; }
+.comentario-acciones { display: flex; flex-wrap: wrap; gap: var(--ed-sp-1); margin-top: var(--ed-sp-1); opacity: 0; transition: opacity var(--ed-dur-1) var(--ed-curva); }
+.comentario:hover .comentario-acciones, .comentario:focus-within .comentario-acciones { opacity: 1; }
+.comentario-accion { min-height: var(--ed-control-h-sm); padding: 0 var(--ed-sp-2); font-size: var(--ed-font-xs); }
+@media (hover: none) { .comentario-acciones { opacity: 1; } }
 .note-marker.activa { outline: 2px solid var(--ed-accent); background: var(--ed-anotacion-activa) !important; }
 
 /* Panel de marcadores editable: barra de acciones, selección y campo de título inline. */
 #outline-toolbar { flex: 0 0 auto; flex-wrap: wrap; gap: 2px; padding: var(--ed-sp-1, 4px); border-bottom: 1px solid var(--ed-border); }
-#outline-toolbar .outline-action { font-size: var(--ed-font-sm); padding: 2px 6px; border-radius: var(--ed-radius-sm); color: var(--ed-text); }
-#outline-toolbar .outline-action:disabled { opacity: 0.4; cursor: default; }
+#outline-toolbar .outline-action { min-height: var(--ed-control-h-sm); padding: 0 var(--ed-sp-2); font-size: var(--ed-font-xs); }
+/* Árbol: filas con sangría por nivel (inline, geometría), plegado con chevron, estado activo con el acento suave. */
+.outline-lista { list-style: none; margin: 0; padding: 0; }
+.outline-fila { display: flex; align-items: center; min-height: var(--ed-control-h-sm); border-radius: var(--ed-radius-sm); transition: background-color var(--ed-dur-1) var(--ed-curva); }
+.outline-fila:hover { background: var(--ed-hover); }
+.outline-toggle {
+  flex: 0 0 20px; width: 20px; padding: 0; border: none; background: none; cursor: pointer;
+  color: var(--ed-text-muted); font-size: var(--ed-font-sm); line-height: 1;
+}
+.outline-hueco { flex: 0 0 20px; width: 20px; }
+.outline-item {
+  flex: 1; min-width: 0; padding: var(--ed-sp-1) var(--ed-sp-1) var(--ed-sp-1) 0; border: none; background: none;
+  text-align: left; font: inherit; cursor: pointer; overflow-wrap: anywhere;
+}
+.outline-item--sin-destino { cursor: default; }
 #outline-panel [role="treeitem"] { outline: none; }
-#outline-panel [role="treeitem"].seleccionado > div { background: var(--ed-hover); }
-#outline-panel [role="treeitem"]:focus-visible > div { outline: 2px solid var(--ed-focus-ring); outline-offset: -2px; }
+#outline-panel [role="treeitem"].seleccionado > .outline-fila { background: var(--ed-accent-soft); color: var(--ed-accent-strong); font-weight: var(--ed-peso-medio); }
+#outline-panel [role="treeitem"].seleccionado > .outline-fila .outline-toggle { color: var(--ed-accent-strong); }
+#outline-panel [role="treeitem"]:focus-visible > .outline-fila { outline: 2px solid var(--ed-focus-ring); outline-offset: -2px; }
 #outline-panel input.outline-edit { font: inherit; color: var(--ed-text); background: var(--ed-surface, transparent); border: 1px solid var(--ed-accent); border-radius: var(--ed-radius-sm); padding: 1px 4px; }
+
+/* ── Avisos sobre la página (Viewer): discretos y con los tokens de aviso/peligro ──────────────────── */
+/* Página con tamaño absurdo (E-129): ocupa el hueco de la hoja, sin bitmap. */
+.pagina-invalida {
+  position: absolute; inset: 0; box-sizing: border-box;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--ed-sp-1);
+  padding: var(--ed-sp-4); text-align: center; font-size: var(--ed-font-md);
+  background: var(--ed-danger-soft); color: var(--ed-danger);
+  border: 1px dashed color-mix(in srgb, var(--ed-danger) 55%, transparent);
+}
+.pagina-invalida strong { font-size: var(--ed-font-lg); font-weight: var(--ed-peso-fuerte); }
+.pagina-invalida span { color: var(--ed-text); }
+/* Resolución reducida: píldora pegada arriba a la izquierda de la página mientras se recorre; margen negativo para no empujar el canvas. */
+.aviso-resolucion {
+  position: sticky; top: var(--ed-sp-2); left: var(--ed-sp-2); z-index: 5; box-sizing: border-box;
+  width: fit-content; height: 24px; margin: var(--ed-sp-2) 0 -32px var(--ed-sp-2); padding: 0 var(--ed-sp-3);
+  display: flex; align-items: center; font-size: var(--ed-font-xs); pointer-events: none;
+  background: var(--ed-warning-bg); color: var(--ed-warning-text);
+  border: 1px solid var(--ed-warning-border); border-radius: var(--ed-radius-pill); box-shadow: var(--ed-sombra-1);
+}
 
 /* ── Encabezado, pie y marca de agua ────────────────────────────────────── */
 /* Usa el diálogo del sistema (.dlg, tema.css §4.4). Anclado a la derecha para que la página
