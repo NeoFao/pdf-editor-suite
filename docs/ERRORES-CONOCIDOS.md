@@ -3608,6 +3608,20 @@ de código fiable.
 
 **Límites.** La casilla vale para la sesión y por host exacto (`a.test` no cubre `x.a.test`). El dominio mostrado de un mailto es el de la dirección. Nada de esto envía datos del documento a ningún sitio: solo se abre la URL que el usuario aprueba.
 
+### E-117 · Texto de derecha a izquierda: líneas en orden visual, copia desordenada y edición que escribía los glifos al revés
+
+**Síntoma.** En PDF con hebreo o árabe hechos por Chromium (`tests/fixtures/rtl/`): una línea árabe (un `Tj` por glifo) salía partida o con el texto en orden visual («يبرعص نذا هم…» en vez de «مرحبا بالعالم…»); una línea mixta («Hola שלום 123 fin») se copiaba como «Hola 123 שלום fin» y «שלום Hello 456 עולם» como «שלום 456 Hello עולם»; editar una palabra hebrea se rechazaba (`glyph-missing`) porque se escribía el texto lógico y el `Tj` guarda los glifos de izquierda a derecha; el editor DOM no tenía `dir`, y una línea RTL más corta o larga se anclaba por la izquierda.
+
+**Causa raíz.** Nada tenía en cuenta la dirección. `agruparLineasEditables` ordena por `uIni` (orden visual) y concatena. La text page de PDFium solo invierte tramos RTL puros: deja mal cifras y palabras latinas dentro de un tramo RTL y cambia de lado los blancos del borde de un objeto. `editTextRun` escribía el texto lógico tal cual.
+
+**Arreglo.** `src/texto/bidi.ts` (UAX #9 sin dependencias: W1-W7, N1-N2, I1-I2, L2) con la inversa verificada (`ordenLogicoDeVisual` devuelve `null` si el algoritmo directo no reproduce el orden visual; la lectura de una cifra entre latín y hebreo es ambigua y se elige la habitual: sigue a la palabra hebrea). `textoRealPorObjeto`/`textoRealDeObjeto` releen cada objeto por la posición de sus caracteres, solo en páginas con RTL. `LineaEditable` trae `direccion` y `text`/`tramos` en orden lógico (`runIds` sigue visual). `textoDeRango` reconstruye cada línea RTL desde las cajas. `editTextRun` escribe `aVisual(texto)`, relee el texto lógico y conserva el borde DERECHO (una línea RTL crece hacia la izquierda); `TextLayer` pone `dir`, ancla el editor a ese borde y NO abre las líneas con `aviso`.
+
+**Lo que no se hace (aviso `aproximado`).** Una línea con árabe (formas contextuales), con varios objetos y RTL, con el orden visual no verificable o RTL girada queda no editable en su sitio (`LineaEditable.aviso`, `data-aviso`, mensaje en el estado, `editLine` → `bidi-no-fiel`). Se puede seleccionar, copiar y buscar.
+
+**Cómo se detecta ahora.** `tests/unit/bidi.test.ts`, `tests/unit/texto-rtl.test.ts` (agrupado, copia y búsqueda sobre los tres PDF), `tests/unit/edicion-rtl.test.ts` (editar una palabra hebrea releyendo, borde derecho, rechazo de líneas con aviso) y `tests/e2e/next/texto-rtl.spec.ts` (Chromium real: editar y guardar, copiar la línea mixta, aviso árabe). Las pruebas unitarias vistas fallar antes del arreglo. Los PDF los genera `tests/fixtures/generar-fixtures-rtl.mjs` (fuentes del sistema de Windows) y se confirman ya generados: CI no los regenera. Sin regla guard.
+
+**Límites.** Sin N0 (paréntesis emparejados), sin espejado de glifos, sin marcas de control explícitas. La reescritura de un objeto hebreo con letras que su subconjunto no trae falla con `glyph-missing` como cualquier fuente subconjunto. Un objeto RTL con cifras o latín dentro de un mismo `Tj` se relee por posición; si no se puede verificar queda en el orden del motor.
+
 ### E-118 · Word → PDF: las columnas de sección (`w:cols`) se maquetaban a una sola columna con aviso, y el salto de columna era un salto de línea
 
 **Síntoma.** Un documento con texto en dos o tres columnas (boletines, artículos, cartas con cuadro lateral) salía con el texto a todo el ancho de la página, con un aviso `aproximado` («Se omitió la distribución en columnas»). Un `w:br w:type="column"` se convertía en un salto de línea y el separador entre columnas (`w:sep`) no se dibujaba. Una sección continua que pasaba de 1 a 2 columnas en la misma página no se distinguía de una sola columna.
@@ -3710,6 +3724,18 @@ desplazado y /Rotate 90): ninguna caja de la capa queda fuera de la página y el
 
 **Límites.** Una línea que solapa parcialmente la CropBox se sigue ofreciendo entera. Notas, sellos y firma no usan este camino (anotaciones/imágenes).
 **Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
+
+### E-124 · Conversores: un .md en UTF-16/cp1252 salía «convertido con éxito» con el contenido destruido, y una palabra más ancha que la línea se salía de la página (o pisaba la celda vecina)
+
+**Síntoma.** QA de conversores (`.orquestacion/qa-conversores-informe.md`, A1/A3/A5). (1) Un `.md` guardado en UTF-16LE con BOM (lo que escribe `>` en PowerShell 5.1) o en cp1252 se leía siempre como UTF-8 tolerante: `ÿ#`, `Tÿtulo`, `Aÿo`, y la UI decía «Convertido desde Markdown» sin ningún aviso. (2) En Word, una URL de 120 caracteres, una palabra larga con sangría o `Responsabilidad` en una celda de 50 pt se salían del margen o pisaban la celda vecina sin aviso (Markdown ya lo resolvía en E-119 con un `trocear` propio).
+
+**Causa raíz.** (1) `new TextDecoder('utf-8', { fatal: false })` convierte cualquier byte inválido en U+FFFD y un éxito silencioso con basura es indistinguible de un éxito real. (2) El motor de líneas común (`wrapAtoms`/`tomarLinea`) no parte palabras: una que no cabe ni en una línea vacía ocupa su línea y se sale; la solución de Markdown vivía en `markdown/layout.ts` y Word nunca la usó.
+
+**Arreglo.** `src/convert/decodificarEntrada.ts`: `decodificarTexto` (BOM UTF-8/16LE/16BE → UTF-16 sin BOM por NUL alternos → UTF-8 estricto `fatal: true` → windows-1252) con `supuesta` + aviso `aproximado` cuando hay que suponer; `decodificarXml` para las partes del .docx (UTF-8 o UTF-16 con BOM/declaración, como exige la especificación). `partirPalabrasLargas` en `flujo/layout.ts` (búsqueda exponencial+binaria, por puntos de código): lo usan `wrapAtoms` y `parrafoFlex` (por tanto párrafos, listas, tabulaciones y celdas de Word) y Markdown (que borra su copia). `.docm` se acepta, se convierte y avisa `omitido` de las macros (`vbaProject.bin`).
+
+**Cómo se detecta ahora.** `tests/unit/convert-decodificarEntrada.test.ts`, `flujo-partir-palabras.test.ts` y `conversores-qa-altos.test.ts` (motor real: UTF-16 con/sin BOM, cp1252, NUL, URL de 120 caracteres, código de 150, celdas de 50 pt con cajas de carácter dentro de su celda, XML en UTF-16, `.docm`). Vistos fallar antes del arreglo. Sin regla guard.
+
+**Límites.** La decodificación cp1252 es una suposición avisada, no una garantía. Pendiente del informe: M5 (falso positivo de zip-bomb con imagen muy compresible, toca la política de seguridad de `zip.ts`/E-042), M6/A4 (rendimiento, `applyPageOps`, otro PR).
 **Límites.** Ítems de lista de un solo texto (sin varios párrafos); imágenes solo `data:` PNG/JPEG como bloque propio de un párrafo; no se descargan imágenes externas; HTML nunca se interpreta; las tareas se pintan `[ ]`/`[x]`. El mismo truncado de emoji/CJK existe en el conversor Word (no tocado aquí).
 
 ### E-125 · Abrir un PDF inválido con otro abierto inutilizaba la app; el cambio de documento dejaba vivo el visor anterior (QA C-1, A-1, QA-01/02/03)
@@ -3746,3 +3772,31 @@ desplazado y /Rotate 90): ninguna caja de la capa queda fuera de la página y el
 **Arreglo.** El `rewrite` se sustituye por `redirects` `/legacy` → `/legacy/` con `permanent: true` (308). Solo toca el enrutado de `/legacy` (CSP y cabeceras intactas, dentro del cutover autorizado). `scripts/servir-despliegue.mjs` aplica ahora también los `redirects` de `vercel.json` para que el entorno local sea fiel. Sin bucle: el `source` se ancla estricto, `/legacy` no casa con `/legacy/`, y `/legacy/` se sirve por índice de directorio; `cleanUrls` solo reescribe `*.html`/`index` hacia su forma limpia y no añade ni quita barra final con `trailingSlash` sin definir (semántica de `redirects`, `cleanUrls` y `trailingSlash` en la documentación de Vercel, "Configuring projects with vercel.json"; no se ha podido contrastar contra el despliegue real aquí, se verifica en la preview del PR).
 
 **Cómo se detecta ahora.** `tests/e2e/deploy/humo.spec.ts` (`/legacy` acaba en `/legacy/`, cero 404, CSS aplicado, un PDF abre en la app vieja, cero violaciones de CSP; visto fallar antes) y `scripts/servir-despliegue.test.mjs` (`aplicarRedirects`, 308, sin bucle). Sin regla guard.
+
+### E-129 · Una página de 7200–14400 pt bloqueaba el hilo 4–23 s y un `MediaBox` de 1e9 dejaba la página en blanco sin aviso (A-2/A-3)
+
+**Síntoma.** Páginas válidas de 7200x7200 y 14400x14400 pt: 3,7 s y 15 s de apertura (hasta 23 s), y 0,4–4 s más por cada paso de zoom. Un
+`MediaBox [0 0 1e9 1e9]` lanzaba «Invalid typed array length: 4000000000000000000», la página quedaba en blanco y `#status` vacío.
+
+**Causa raíz (medida).** El bitmap por página no tenía tope ABSOLUTO. E-078 (`factorNitidez`) solo acotaba el factor de DPR y nunca baja de 1;
+el visor se construye a escala 1 y solo después `fitWidth` la corrige, así que el primer render de la página de 14400 pt pedía 207 Mpx
+(830 MB RGBA) y cada zoom otros ~13 Mpx. El motor (`PdfiumEngine.renderPage`) reservaba `width*height*4` sin comprobar nada: con 1e9 pt, un
+`Uint8ClampedArray` de 4e18 bytes. Con el bitmap acotado (2826²) la apertura de 14400 pt baja de 15 s a 1 s; el coste es proporcional a píxeles, no a
+la página (el motor tarda ~1 s en 3600²).
+
+**Arreglo.** `src/engine/limiteBitmap.ts` (función pura): `escalaAcotada(wPt, hPt, escala)` baja la escala para que el bitmap no pase de
+`MAX_PIXELES_BITMAP` = 8 Mpx (el mismo límite de E-078, ahora `MAX_PIXELES_PAGINA = MAX_PIXELES_BITMAP`) ni de `MAX_LADO_BITMAP` = 16384 px por
+lado (el menor soportado por navegadores). Lo aplica `PdfiumEngine.renderPage`, el punto único de visor, miniaturas y OCR, y devuelve
+`reducida: true`; el `Viewer` pinta el aviso `.aviso-resolucion` («Página muy grande, mostrada a resolución reducida»). El canvas sigue con su
+tamaño CSS exacto (`style.width/height`), así que `PageGeometry`, la capa de texto y la edición no cambian. `OcrPage` convierte px a pt con la
+escala efectiva. Tamaño absurdo (no finito, ≤ 0 o > 14400 pt × `/UserUnit`, `tamanoPaginaValido`): `EditSession` lo sustituye por un A4 y marca
+`PageModel.tamanoInvalido`; el visor pinta `.pagina-invalida` (rol `alert`) sin llamar al motor, la miniatura queda en blanco y el resto del
+documento sigue funcionando. El motor lanza un error claro si se le pide renderizar una página así.
+
+**Cómo se detecta ahora.** `tests/unit/limiteBitmap.test.ts` (7200, 14400, 1e9, NaN, 0; vistos fallar antes) y
+`tests/e2e/next/paginas-enormes.spec.ts` (canvas ≤ 8 Mpx con tinta alineada a la capa de texto ±1 px de bitmap, aviso visible; 1e9: marcador visible,
+sin `pageerror` y demás páginas pintadas). Mide trabajo, no tiempo (E-040). Sin regla guard.
+
+**Límites.** No hay render por zonas (tiles): una página enorme a zoom alto se ve a resolución reducida en vez de nítida. Propuesto, no hecho:
+pintar solo la zona visible. El primer render a escala 1 antes de `fitWidth` sigue existiendo (ahora acotado a 8 Mpx).
+---

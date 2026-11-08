@@ -312,7 +312,7 @@ export class App {
 
     const file = document.createElement('input');
     file.type = 'file';
-    file.accept = 'application/pdf,.md,.markdown,text/markdown,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword';
+    file.accept = 'application/pdf,.md,.markdown,text/markdown,.docx,.docm,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword';
     file.id = 'file-input';
     file.addEventListener('change', () => { const f = file.files?.[0]; if (f) void this.openFile(f); });
     file.style.display = 'none';
@@ -1315,6 +1315,7 @@ export class App {
     this.scale = 1;
     this.viewer = new Viewer(this.viewerEl, this.session, {
       onEdit: (req) => this.handleEdit(req),
+      onAviso: (mensaje) => this.setStatus(mensaje),
       onSelect: (pageIndex, runId) => {
         this.selection = { pageIndex, runId };
         this.appliedFontLabel = null;
@@ -1544,7 +1545,9 @@ export class App {
         ? 'Una línea no puede quedar vacía; selecciónala y usa Borrar para quitarla.'
         : cmd.razon === 'stale'
           ? 'La línea cambió mientras se editaba; vuelve a intentarlo.'
-          : 'No se puede editar ese elemento.');
+          : cmd.razon === 'bidi-no-fiel'
+            ? 'Esa línea de derecha a izquierda no se puede reescribir con fidelidad; edición no aplicada.'
+            : 'No se puede editar ese elemento.');
   }
 
   private async handleInsert(pageIndex: number, at: PtPoint): Promise<void> {
@@ -2551,6 +2554,7 @@ export class App {
     if (this.thumbRendered.has(i)) return;
     const s = this.session;
     if (!s) return;
+    if (s.model.pages[i]?.tamanoInvalido) { this.thumbRendered.add(i); this.thumbObserver?.unobserve(canvas); return; } // E-129: tamaño absurdo, la miniatura queda en blanco
     const scale = Number(canvas.dataset.scale);
     contarRenderPage();
     const { width, height, data } = s.engine.renderPage(s.doc, i, scale);

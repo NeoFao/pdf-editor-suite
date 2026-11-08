@@ -3,6 +3,7 @@ import type { PdfEngine, DocHandle, PageOp } from '../engine/PdfEngine';
 import { omitido, type Advertencia } from './advertencia';
 import { CodificadorTexto } from './codificacion';
 import { abrirZip } from './docx/zip';
+import { decodificarXml } from './decodificarEntrada';
 import { DocxError } from './docx/DocxError';
 import { construirModeloDocx } from './docx/modelo';
 import { leerRelaciones, rutaMediaDesdeWord } from './docx/rels';
@@ -47,7 +48,8 @@ import type { ImagenColocada } from './flujo/layout';
  * mismo puerto `ConversorDocumento`, ver ese fichero).
  */
 export class ConversorDocxNavegador implements ConversorDocumento {
-  readonly acepta = ['docx'] as const;
+  /** `docm` = el mismo paquete con macros: se convierte y se avisa de que las macros no se ejecutan ni se conservan (E-124). */
+  readonly acepta = ['docx', 'docm'] as const;
   readonly nombreFuente = 'Word';
 
   constructor(private readonly engine: PdfEngine) {}
@@ -58,7 +60,8 @@ export class ConversorDocxNavegador implements ConversorDocumento {
     if (!documentXmlBytes) {
       throw new DocxError('El archivo no es un documento de Word válido: falta word/document.xml.');
     }
-    const decodificador = new TextDecoder('utf-8', { fatal: false });
+    // Las partes XML son UTF-8 o UTF-16 (BOM o declaración) por especificación; `decodificarXml` respeta ambas (E-124).
+    const decodificador = { decode: decodificarXml };
     const documentXml = decodificador.decode(documentXmlBytes);
     const stylesBytes = await zip.leer('word/styles.xml');
     const stylesXml = stylesBytes ? decodificador.decode(stylesBytes) : null;
@@ -106,7 +109,9 @@ export class ConversorDocxNavegador implements ConversorDocumento {
 
     const trazos = codificador.prepararTrazos(trazosMaquetados);
     const { rgbaPorId, advertenciasImagenes } = await this.resolverImagenes(zip, imagenes);
-    const advertencias = [...modelo.advertencias, ...avisosMaquetacion, ...advertenciasImagenes];
+    const avisosMacros = zip.nombres().some((n) => /(^|\/)vbaProject\.bin$/i.test(n))
+      ? [omitido('El documento contiene macros (VBA): se ignoran y no se incluyen en el PDF.')] : [];
+    const advertencias = [...avisosMacros, ...modelo.advertencias, ...avisosMaquetacion, ...advertenciasImagenes];
 
     // Lote por página (E-037, docs/ERRORES-CONOCIDOS.md): ver el mismo
     // razonamiento en `ConversorMarkdownNavegador`. Orden de dibujo: fondos

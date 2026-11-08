@@ -64,6 +64,8 @@ export interface LineaParaEditar {
   runIds: readonly number[];
   tramos: readonly { runId: number; inicio: number; fin: number }[];
   text: string;
+  /** Presente si la línea no se puede reescribir con fidelidad (texto RTL, E-117): `editLine` la rechaza con `bidi-no-fiel`. */
+  aviso?: { tipo: string; mensaje: string };
 }
 
 /**
@@ -78,7 +80,7 @@ export interface LineaParaEditar {
 export type EditLineResult =
   | { ok: true; sinCambios: true }
   | { ok: true; lineaRunIdInicial: number; dxPt: number; fuenteEstandar?: string; objetosAnadidos?: number }
-  | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' | 'empty-text' | 'stale' };
+  | { ok: false; reason: 'glyph-missing' | 'not-a-text-run' | 'empty-text' | 'stale' | 'bidi-no-fiel' };
 
 /**
  * Resultado de `setLineProps` (N1 F4). `glyph-missing`: la fuente estándar no cubre algún carácter de algún objeto (no se
@@ -189,7 +191,13 @@ export interface FormField {
 }
 
 /** Bitmap RGBA listo para volcar en un canvas. */
-export interface RenderResult { width: number; height: number; data: Uint8ClampedArray }
+export interface RenderResult {
+  width: number;
+  height: number;
+  data: Uint8ClampedArray;
+  /** `true` si el motor bajó la escala pedida para no pasar del tope de píxeles del bitmap (E-129). El tamaño CSS no cambia. */
+  reducida?: boolean;
+}
 
 /** Píxeles RGBA de un objeto imagen, a su resolución NATIVA (no la de render en pantalla). */
 export interface ImagePixels { rgba: Uint8Array; width: number; height: number }

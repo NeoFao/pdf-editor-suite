@@ -3,6 +3,7 @@ import type { PdfEngine, DocHandle, TextRun, CharBox, RectPt } from '../engine/P
 import { DocumentModel } from './DocumentModel';
 import type { PageModel } from './types';
 import { contarGetPageText } from '../diagnostico';
+import { tamanoPaginaValido, TAMANO_PAGINA_SUSTITUTO } from '../engine/limiteBitmap';
 import { ordenLecturaCaracteres } from '../texto/seleccionTexto';
 import { cajaVisible } from '../texto/visibilidad';
 
@@ -51,14 +52,25 @@ export class EditSession {
     for (let i = 0; i < count; i++) {
       pages.push({
         index: i,
-        sizePt: engine.pageSize(doc, i),
+        ...EditSession.tamanoPagina(engine, doc, i),
         origenPt: engine.pageBox(doc, i).origenPt,
-        userUnit: engine.userUnit(doc, i),
         rotation: engine.pageRotation(doc, i),
         runs: []
       });
     }
     return pages;
+  }
+
+  /**
+   * `sizePt` + `userUnit` (+ `tamanoInvalido`) de una página. Un tamaño absurdo (E-129: NaN, ≤ 0, > 14400 pt × UserUnit)
+   * no se propaga a la maquetación ni al render: se sustituye por un A4 para poder pintar el marcador de error y que el
+   * resto del documento siga funcionando.
+   */
+  private static tamanoPagina(engine: PdfEngine, doc: DocHandle, i: number): Pick<PageModel, 'sizePt' | 'userUnit' | 'tamanoInvalido'> {
+    const sizePt = engine.pageSize(doc, i);
+    const userUnit = engine.userUnit(doc, i);
+    if (tamanoPaginaValido(sizePt.widthPt, sizePt.heightPt, userUnit)) return { sizePt, userUnit };
+    return { sizePt: { ...TAMANO_PAGINA_SUSTITUTO }, userUnit: 1, tamanoInvalido: true };
   }
 
   static async open(engine: PdfEngine, bytes: Uint8Array, password?: string): Promise<EditSession> {
@@ -100,6 +112,7 @@ export class EditSession {
    * Los `runId` no cambian (son el índice del objeto en la página), así que lo demás sigue direccionable igual.
    */
   private soloVisibles<T extends { boxPt: RectPt }>(pageIndex: number, items: T[]): T[] {
+    if (this.model.pages[pageIndex]?.tamanoInvalido) return items; // E-129: caja absurda (NaN/1e9), no hay recorte fiable
     const v = this.engine.pageBox(this.doc, pageIndex);
     return items.filter((it) => cajaVisible(it.boxPt, v));
   }
@@ -145,9 +158,8 @@ export class EditSession {
     if (pageIndex < 0 || pageIndex >= this.model.pages.length) return;
     const page: PageModel = {
       index: pageIndex,
-      sizePt: this.engine.pageSize(this.doc, pageIndex),
+      ...EditSession.tamanoPagina(this.engine, this.doc, pageIndex),
       origenPt: this.engine.pageBox(this.doc, pageIndex).origenPt,
-      userUnit: this.engine.userUnit(this.doc, pageIndex),
       rotation: this.engine.pageRotation(this.doc, pageIndex),
       runs: this.soloVisibles(pageIndex, this.engine.getPageText(this.doc, pageIndex))
     };
