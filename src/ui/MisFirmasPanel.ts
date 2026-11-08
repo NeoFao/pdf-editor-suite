@@ -1,4 +1,5 @@
 import { mostrarModal } from './dialogo';
+import { crearBoton, crearCabecera, crearCuerpo, crearPie } from './dlgPartes';
 import type { AlmacenFirmas, FirmaGuardada } from './firmasGuardadas';
 
 export const AVISO_PRIVACIDAD = 'Tus firmas se guardan solo en este navegador. Cualquiera con acceso a este equipo y navegador podría usarlas.';
@@ -12,34 +13,30 @@ export class MisFirmasPanel {
   static open(almacen: AlmacenFirmas, onInsertar: (f: FirmaGuardada) => void, onAviso: (m: string) => void): void {
     const panel = document.createElement('dialog');
     panel.id = 'mis-firmas-panel';
-    Object.assign(panel.style, { padding: '16px', borderRadius: '8px', font: '14px sans-serif', maxWidth: '460px' });
+    panel.classList.add('firmas-dialogo');
 
-    const titulo = document.createElement('h2');
-    titulo.id = 'mis-firmas-titulo'; titulo.textContent = 'Mis firmas';
-    Object.assign(titulo.style, { fontSize: '16px', margin: '0 0 8px' });
+    const { cabecera } = crearCabecera('mis-firmas-titulo', 'Mis firmas');
 
     const aviso = document.createElement('p');
     aviso.id = 'mis-firmas-privacidad'; aviso.textContent = AVISO_PRIVACIDAD;
-    Object.assign(aviso.style, { margin: '0 0 8px', fontSize: '13px' });
+    aviso.className = 'dlg-mensaje';
 
     const bloqueo = document.createElement('p');
     bloqueo.id = 'mis-firmas-bloqueado'; bloqueo.setAttribute('role', 'status');
+    bloqueo.className = 'dlg-aviso dlg-aviso--aviso';
     bloqueo.textContent = 'Este navegador no permite guardar firmas (almacenamiento bloqueado). Puedes seguir firmando sin guardarlas.';
     bloqueo.hidden = true;
 
     const vacio = document.createElement('p');
-    vacio.id = 'mis-firmas-vacio'; vacio.textContent = 'Aún no has guardado ninguna firma. Marca «Guardar esta firma para usarla después» al crear una.';
+    vacio.id = 'mis-firmas-vacio'; vacio.className = 'firmas-vacio';
+    vacio.textContent = 'Aún no has guardado ninguna firma. Marca «Guardar esta firma para usarla después» al crear una.';
 
     const lista = document.createElement('ul');
-    lista.id = 'mis-firmas-lista'; lista.setAttribute('aria-label', 'Firmas guardadas');
-    Object.assign(lista.style, { listStyle: 'none', padding: '0', margin: '0 0 8px', display: 'grid', gap: '6px' });
+    lista.id = 'mis-firmas-lista'; lista.className = 'firmas-lista'; lista.setAttribute('aria-label', 'Firmas guardadas');
 
-    const barra = document.createElement('div');
-    Object.assign(barra.style, { display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '8px' });
-    const btnTodas = document.createElement('button');
-    btnTodas.id = 'mis-firmas-borrar-todas'; btnTodas.textContent = 'Borrar todas mis firmas';
-    const btnCerrar = document.createElement('button');
-    btnCerrar.id = 'mis-firmas-cerrar'; btnCerrar.textContent = 'Cerrar';
+    const btnTodas = crearBoton('peligro', 'Borrar todas mis firmas', 'mis-firmas-borrar-todas');
+    btnTodas.classList.add('dlg-pie-izq');
+    const btnCerrar = crearBoton('primario', 'Cerrar', 'mis-firmas-cerrar');
     btnCerrar.addEventListener('click', () => panel.close());
 
     const pintar = (): void => {
@@ -50,22 +47,21 @@ export class MisFirmasPanel {
       btnTodas.disabled = firmas.length === 0;
       for (const f of firmas) {
         const li = document.createElement('li');
-        Object.assign(li.style, { display: 'flex', gap: '6px', alignItems: 'center' });
+        li.className = 'firma-item';
         const ins = document.createElement('button');
-        ins.className = 'mis-firmas-insertar';
+        ins.type = 'button';
+        ins.className = 'mis-firmas-insertar firma-item-insertar';
         ins.setAttribute('aria-label', `Insertar firma «${f.nombre}»`);
-        Object.assign(ins.style, { display: 'flex', gap: '8px', alignItems: 'center', flex: '1', textAlign: 'left' });
         const img = document.createElement('img');
         img.src = f.dataUrl; img.alt = '';
-        Object.assign(img.style, { height: '40px', maxWidth: '160px', background: '#fff', border: '1px solid #cbd5e1' });
+        img.className = 'firma-miniatura';
         const nombre = document.createElement('span');
         nombre.textContent = f.nombre;
         ins.append(img, nombre);
         ins.addEventListener('click', () => { panel.close(); onInsertar(f); });
-        const del = document.createElement('button');
-        del.className = 'mis-firmas-borrar';
+        const del = crearBoton('peligro', 'Borrar');
+        del.classList.add('mis-firmas-borrar');
         del.setAttribute('aria-label', `Borrar firma «${f.nombre}»`);
-        del.textContent = 'Borrar';
         del.addEventListener('click', () => {
           if (!window.confirm(`¿Borrar la firma «${f.nombre}»?`)) return;
           if (!almacen.borrar(f.id)) onAviso('No se pudo borrar la firma (almacenamiento bloqueado).');
@@ -81,8 +77,7 @@ export class MisFirmasPanel {
       pintar();
     });
 
-    barra.append(btnTodas, btnCerrar);
-    panel.append(titulo, aviso, bloqueo, vacio, lista, barra);
+    panel.append(cabecera, crearCuerpo(aviso, bloqueo, vacio, lista), crearPie(btnTodas, btnCerrar));
     pintar();
     mostrarModal(panel, { tituloId: 'mis-firmas-titulo' });
   }

@@ -240,7 +240,7 @@ button, input, select, textarea { font-family: inherit; }
 
 /* Campos sin clase dentro de la app y de los diálogos: aspecto base del sistema
    (especificidad 0 con :where, cualquier regla de componente gana). */
-:where(#app, dialog) :where(input[type="text"], input[type="search"], input[type="number"], input[type="url"], input:not([type]), select, textarea) {
+:where(#app, dialog) :where(input[type="text"], input[type="search"], input[type="number"], input[type="url"], input[type="password"], input:not([type]), select, textarea) {
   box-sizing: border-box;
   min-height: var(--ed-control-h-sm);
   padding: 0 var(--ed-sp-2);

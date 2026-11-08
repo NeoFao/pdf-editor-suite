@@ -1,4 +1,5 @@
 import { mostrarModal } from './dialogo';
+import { crearBoton, crearCabecera, crearCampo, crearCuerpo, crearPie } from './dlgPartes';
 import { PdfError } from '../engine/errores';
 
 /**
@@ -34,23 +35,16 @@ export function mostrarErrorApertura(titulo: string, mensaje: string): Promise<v
   return new Promise<void>((resolver) => {
     const dialog = document.createElement('dialog');
     dialog.id = 'apertura-error';
-    Object.assign(dialog.style, { width: 'min(28rem, 92vw)', boxSizing: 'border-box' });
-    const h = document.createElement('h2');
-    h.id = 'apertura-error-titulo';
-    h.textContent = titulo;
-    Object.assign(h.style, { fontSize: '1.1rem', margin: '0 0 8px' });
+    dialog.classList.add('apertura-dialogo', 'dlg--peligro');
+    const { cabecera } = crearCabecera('apertura-error-titulo', titulo);
     const p = document.createElement('p');
+    p.className = 'dlg-texto';
     p.textContent = mensaje;
-    const cerrar = document.createElement('button');
-    cerrar.type = 'button';
-    cerrar.textContent = 'Cerrar';
+    const cerrar = crearBoton('primario', 'Cerrar');
     cerrar.addEventListener('click', () => dialog.close());
-    const barra = document.createElement('div');
-    Object.assign(barra.style, { display: 'flex', justifyContent: 'flex-end', marginTop: '10px' });
-    barra.appendChild(cerrar);
-    dialog.append(h, p, barra);
+    dialog.append(cabecera, crearCuerpo(p), crearPie(cerrar));
     dialog.addEventListener('close', () => resolver());
-    mostrarModal(dialog, { tituloId: h.id });
+    mostrarModal(dialog, { tituloId: 'apertura-error-titulo' });
     cerrar.focus();
   });
 }
@@ -63,53 +57,45 @@ export function pedirContrasena(opciones: { nombre: string; incorrecta?: { inten
   return new Promise<string | null>((resolver) => {
     const dialog = document.createElement('dialog');
     dialog.id = 'apertura-contrasena';
-    Object.assign(dialog.style, { width: 'min(28rem, 92vw)', boxSizing: 'border-box' });
+    dialog.classList.add('apertura-dialogo');
+    // El formulario envuelve cabecera, cuerpo y pie para que Intro envíe desde el campo; en CSS es `display: contents`.
     const form = document.createElement('form');
     form.method = 'dialog';
+    form.className = 'dlg-form';
     form.addEventListener('submit', (e) => e.preventDefault());
-    const h = document.createElement('h2');
-    h.id = 'apertura-contrasena-titulo';
-    h.textContent = 'PDF protegido con contraseña';
-    Object.assign(h.style, { fontSize: '1.1rem', margin: '0 0 8px' });
+    const { cabecera } = crearCabecera('apertura-contrasena-titulo', 'PDF protegido con contraseña');
     const desc = document.createElement('p');
+    desc.className = 'dlg-texto';
     desc.textContent = `«${opciones.nombre}» está cifrado. Escribe la contraseña para abrirlo.`;
-    const etiqueta = document.createElement('label');
-    etiqueta.textContent = 'Contraseña';
-    etiqueta.htmlFor = 'apertura-contrasena-campo';
-    Object.assign(etiqueta.style, { display: 'block', marginBottom: '4px' });
     const campo = document.createElement('input');
     campo.type = 'password';
     campo.id = 'apertura-contrasena-campo';
     campo.autocomplete = 'off';
-    Object.assign(campo.style, { width: '100%', boxSizing: 'border-box' });
-    form.append(h, desc, etiqueta, campo);
+    const campos = document.createElement('div');
+    campos.className = 'campos';
+    campos.appendChild(crearCampo('Contraseña', campo, 'apertura-contrasena-campo'));
+    const cuerpo = crearCuerpo(desc, campos);
     if (opciones.incorrecta) {
       const aviso = document.createElement('p');
+      aviso.className = 'dlg-aviso dlg-aviso--peligro';
       aviso.setAttribute('role', 'alert');
       aviso.textContent = `Contraseña incorrecta (intento ${opciones.incorrecta.intento} de ${opciones.incorrecta.maximo}).`;
-      Object.assign(aviso.style, { color: 'var(--ed-danger)', margin: '8px 0 0' });
-      form.appendChild(aviso);
+      cuerpo.appendChild(aviso);
     }
     let resultado: string | null = null;
-    const abrir = document.createElement('button');
+    const abrir = crearBoton('primario', 'Abrir');
     abrir.type = 'submit';
-    abrir.textContent = 'Abrir';
     form.addEventListener('submit', () => {
       resultado = campo.value;
       campo.value = '';
       dialog.close();
     });
-    const cancelar = document.createElement('button');
-    cancelar.type = 'button';
-    cancelar.textContent = 'Cancelar';
+    const cancelar = crearBoton('secundario', 'Cancelar');
     cancelar.addEventListener('click', () => { campo.value = ''; dialog.close(); });
-    const barra = document.createElement('div');
-    Object.assign(barra.style, { display: 'flex', gap: '8px', justifyContent: 'flex-end', marginTop: '10px' });
-    barra.append(cancelar, abrir);
-    form.appendChild(barra);
+    form.append(cabecera, cuerpo, crearPie(cancelar, abrir));
     dialog.appendChild(form);
     dialog.addEventListener('close', () => { campo.value = ''; resolver(resultado); });
-    mostrarModal(dialog, { tituloId: h.id });
+    mostrarModal(dialog, { tituloId: 'apertura-contrasena-titulo' });
     campo.focus();
   });
 }
