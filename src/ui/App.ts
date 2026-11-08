@@ -111,13 +111,21 @@ function guardarPestanaActiva(id: PestanaId): void {
 
 /** Paleta de #swatches (#18 de la tabla de paridad): 8 colores fijos + el selector personalizado `#tool-color`. */
 const PALETTE: { color: string; label: string }[] = [
+  // guard-disable-next-line sin-color-literal-en-ui: color de anotación (dato del documento), no decoración de la interfaz
   { color: '#000000', label: 'Negro' },
+  // guard-disable-next-line sin-color-literal-en-ui: color de anotación (dato del documento), no decoración de la interfaz
   { color: '#dc1414', label: 'Rojo' },
+  // guard-disable-next-line sin-color-literal-en-ui: color de anotación (dato del documento), no decoración de la interfaz
   { color: '#2563eb', label: 'Azul' },
+  // guard-disable-next-line sin-color-literal-en-ui: color de anotación (dato del documento), no decoración de la interfaz
   { color: '#16a34a', label: 'Verde' },
-  { color: '#facc15', label: 'Amarillo' }, // mismo amarillo que ya usa el resaltado de búsqueda (Viewer.drawHighlights)
+  // guard-disable-next-line sin-color-literal-en-ui: color de anotación (dato del documento), no decoración de la interfaz
+  { color: '#facc15', label: 'Amarillo' },
+  // guard-disable-next-line sin-color-literal-en-ui: color de anotación (dato del documento), no decoración de la interfaz
   { color: '#f97316', label: 'Naranja' },
+  // guard-disable-next-line sin-color-literal-en-ui: color de anotación (dato del documento), no decoración de la interfaz
   { color: '#9333ea', label: 'Morado' },
+  // guard-disable-next-line sin-color-literal-en-ui: color de anotación (dato del documento), no decoración de la interfaz
   { color: '#6b7280', label: 'Gris' }
 ];
 
@@ -299,6 +307,8 @@ export class App {
    */
   private moreOpen = false;
   private readonly toolbarMoreEl: HTMLElement;
+  private readonly moreAsaEl: HTMLButtonElement;
+  private readonly moreVeloEl: HTMLElement;
   private readonly btnMore: HTMLButtonElement;
   /** Pestaña de herramientas activa (§1 del rediseño de interfaz) — único punto de verdad, ver `activarPestana`. */
   private tabActiva: PestanaId = 'editar';
@@ -316,7 +326,7 @@ export class App {
     file.accept = 'application/pdf,.md,.markdown,text/markdown,.docx,.docm,application/vnd.openxmlformats-officedocument.wordprocessingml.document,.doc,application/msword';
     file.id = 'file-input';
     file.addEventListener('change', () => { const f = file.files?.[0]; if (f) void this.openFile(f); });
-    file.style.display = 'none';
+    file.classList.add('oculto');
     this.fileInput = file;
 
     const btnNew = this.iconBoton('documento-nuevo', 'Nuevo', 'btn-new', () => void this.newBlank());
@@ -406,7 +416,6 @@ export class App {
     const swatchesEl = document.createElement('div');
     swatchesEl.id = 'swatches';
     swatchesEl.title = 'Color de la herramienta activa (o del resaltador)';
-    Object.assign(swatchesEl.style, { display: 'flex', gap: '3px', alignItems: 'center' });
     for (const { color, label } of PALETTE) {
       const swatch = document.createElement('button');
       swatch.type = 'button';
@@ -415,12 +424,9 @@ export class App {
       swatch.title = label;
       swatch.setAttribute('aria-label', label);
       swatch.setAttribute('aria-pressed', 'false'); // reflectSwatches() lo corrige justo debajo
-      Object.assign(swatch.style, {
-        // A-07 (WCAG 2.5.8): área clicable de 24x24 px CSS; el cuadro de color que se
-        // ve sigue siendo de 18x18 (24 - 2*3 de padding, `background-clip: content-box`).
-        width: '24px', height: '24px', padding: '3px', boxSizing: 'border-box', borderRadius: '3px', cursor: 'pointer',
-        background: color, backgroundClip: 'content-box', border: '0'
-      });
+      // A-07 (WCAG 2.5.8): área clicable de 24x24 px CSS; el cuadro de color que se ve sigue siendo de 18x18
+      // (ver `.swatch` en estilos.css). El color es un DATO: viaja como variable CSS, no como estilo de aspecto.
+      swatch.style.setProperty('--muestra', color);
       swatch.addEventListener('click', () => this.setToolColor(hexToRgb(color)));
       swatchesEl.appendChild(swatch);
       this.swatchButtons.push(swatch);
@@ -455,7 +461,7 @@ export class App {
     this.propSize.type = 'number'; this.propSize.id = 'prop-size';
     this.propSize.min = '1'; this.propSize.max = '400'; this.propSize.step = '0.5';
     this.propSize.title = 'Tamaño (pt) de la línea seleccionada';
-    this.propSize.style.width = '4.5em';
+    this.propSize.classList.add('prop-tam');
     this.propSize.addEventListener('change', () => void this.applyFontSize());
     sizeLabel.appendChild(this.propSize);
 
@@ -684,11 +690,20 @@ export class App {
     // es el mismo contenedor que revela `#btn-more`).
     this.toolbarMoreEl = document.createElement('div');
     this.toolbarMoreEl.id = 'toolbar-more';
-    this.toolbarMoreEl.append(this.tablistEl, barraEditar, barraComentar, barraOrganizar, barraFirmar, barraConvertir);
+    // Asa y velo de la hoja móvil (en escritorio están ocultos por CSS). El asa cierra la hoja y es el foco inicial.
+    this.moreAsaEl = document.createElement('button');
+    this.moreAsaEl.type = 'button';
+    this.moreAsaEl.className = 'hoja-asa';
+    this.moreAsaEl.setAttribute('aria-label', 'Cerrar herramientas');
+    this.moreAsaEl.addEventListener('click', () => this.closeMore());
+    this.moreVeloEl = document.createElement('div');
+    this.moreVeloEl.className = 'hoja-velo';
+    this.moreVeloEl.addEventListener('click', () => this.closeMore());
+    this.toolbarMoreEl.append(this.moreAsaEl, this.tablistEl, barraEditar, barraComentar, barraOrganizar, barraFirmar, barraConvertir);
 
     const toolbarWrap = document.createElement('div');
     toolbarWrap.id = 'toolbar';
-    toolbarWrap.append(topbar, this.replaceBar, this.toolbarMoreEl);
+    toolbarWrap.append(topbar, this.replaceBar, this.moreVeloEl, this.toolbarMoreEl);
     rootEl.appendChild(toolbarWrap);
 
     // Aviso de advertencias de conversión (§9 fila #4: "NO se pierde en
@@ -800,13 +815,13 @@ export class App {
 
     this.outlineEl = document.createElement('div');
     this.outlineEl.id = 'outline-panel';
-    this.outlineEl.style.display = 'none';
+    this.outlineEl.classList.add('oculto');
     this.outlineEl.setAttribute('role', 'tabpanel');
     this.outlineEl.setAttribute('aria-labelledby', 'tab-outline');
 
     this.commentsEl = document.createElement('div');
     this.commentsEl.id = 'comments-panel';
-    this.commentsEl.style.display = 'none';
+    this.commentsEl.classList.add('oculto');
     this.commentsEl.setAttribute('role', 'tabpanel');
     this.commentsEl.setAttribute('aria-labelledby', 'tab-comments');
     this.comentarios = new ComentariosPanel(this.commentsEl, {
@@ -822,7 +837,7 @@ export class App {
 
     this.outlineBarEl = document.createElement('div');
     this.outlineBarEl.id = 'outline-toolbar';
-    this.outlineBarEl.style.display = 'none';
+    this.outlineBarEl.classList.add('oculto');
     sidebar.append(tabs, this.outlineBarEl, this.thumbsEl, this.outlineEl, this.commentsEl);
 
     this.viewerEl = document.createElement('div');
@@ -1051,7 +1066,7 @@ export class App {
    * que lo dispara (§5 del encargo: "ningún input nativo visible").
    */
   private campoArchivo(input: HTMLInputElement, icono: NombreIcono, etiqueta: string, idBoton: string, opts?: { mostrarEtiqueta?: boolean }): HTMLButtonElement {
-    input.style.display = 'none';
+    input.classList.add('oculto');
     return this.iconBoton(icono, etiqueta, idBoton, () => input.click(), opts);
   }
 
@@ -1157,7 +1172,6 @@ export class App {
     for (const b of this.swatchButtons) {
       const activo = (b.dataset.color ?? '').toLowerCase() === hex.toLowerCase();
       b.setAttribute('aria-pressed', String(activo));
-      b.style.borderColor = activo ? 'var(--ed-text)' : 'transparent';
     }
     this.toolColorInput.value = hex;
   }
@@ -1904,15 +1918,22 @@ export class App {
 
   /** `#btn-more` (§9 #35): revela/oculta `#toolbar-more` en móvil. */
   private toggleMore(): void {
-    this.moreOpen = !this.moreOpen;
-    this.toolbarMoreEl.classList.toggle('open', this.moreOpen);
-    this.btnMore.setAttribute('aria-expanded', String(this.moreOpen));
+    if (this.moreOpen) { this.closeMore(); return; }
+    this.moreOpen = true;
+    this.toolbarMoreEl.classList.add('open');
+    this.moreVeloEl.classList.add('visible');
+    this.btnMore.setAttribute('aria-expanded', 'true');
+    // La hoja pasa a ser visible en este mismo fotograma; el asa es el primer destino de foco.
+    this.moreAsaEl.focus({ preventScroll: true });
   }
 
   private closeMore(): void {
+    const conFoco = this.toolbarMoreEl.contains(document.activeElement);
     this.moreOpen = false;
     this.toolbarMoreEl.classList.remove('open');
+    this.moreVeloEl.classList.remove('visible');
     this.btnMore.setAttribute('aria-expanded', 'false');
+    if (conFoco) this.btnMore.focus({ preventScroll: true });
   }
 
   /**
@@ -1967,8 +1988,8 @@ export class App {
    */
   private reflectPropsPanel(): void {
     const run = this.selectedRun();
-    if (!run) { this.propsPanel.style.display = 'none'; return; }
-    this.propsPanel.style.display = 'flex';
+    this.propsPanel.classList.toggle('visible', run !== null);
+    if (!run) return;
 
     this.propFont.textContent = '';
     const original = document.createElement('option');
@@ -2449,16 +2470,15 @@ export class App {
       t.classList.toggle('active', activa);
       if (activa) t.setAttribute('aria-current', 'page');
       else t.removeAttribute('aria-current');
-      t.style.outline = activa ? '2px solid var(--ed-accent)' : 'none';
     }
   }
 
   /** Alterna el panel lateral entre miniaturas de página y árbol de marcadores. */
   private showSidebarTab(which: 'pages' | 'outline' | 'comments'): void {
-    this.thumbsEl.style.display = which === 'pages' ? 'block' : 'none';
-    this.outlineEl.style.display = which === 'outline' ? 'block' : 'none';
-    this.outlineBarEl.style.display = which === 'outline' ? 'flex' : 'none';
-    this.commentsEl.style.display = which === 'comments' ? 'block' : 'none';
+    this.thumbsEl.classList.toggle('oculto', which !== 'pages');
+    this.outlineEl.classList.toggle('oculto', which !== 'outline');
+    this.outlineBarEl.classList.toggle('oculto', which !== 'outline');
+    this.commentsEl.classList.toggle('oculto', which !== 'comments');
     this.tabPages.setAttribute('aria-selected', String(which === 'pages'));
     this.tabOutline.setAttribute('aria-selected', String(which === 'outline'));
     this.tabComments.setAttribute('aria-selected', String(which === 'comments'));

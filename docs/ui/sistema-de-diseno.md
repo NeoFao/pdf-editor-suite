@@ -149,8 +149,20 @@ Ordenadas por impacto visible (lo que más se usa y peor se ve primero). Cada l�
 10. **Panel de comentarios** (`ComentariosPanel.ts`): filas como tarjetas `.vidrio` ligeras, filtro con etiqueta visible.
 11. **Panel de marcadores** (`PanelMarcadores.ts`, `#outline-toolbar`): acciones como `.btn--fantasma`, árbol con estados de `--ed-hover`/`--ed-accent-soft`.
 12. **Aviso de conversión** (`.conversion-warnings`): convertir en `.toast--aviso` anclado bajo la barra.
-13. **Hoja «Más» móvil** (`#toolbar-more.open`, ≤ 768 px) y **cajón lateral**: `.vidrio`, títulos de grupo sin mayúsculas.
-14. **Campos de formulario sobre la página** (`Viewer.ts`, ~l. 990–1050): borde `#94a3b8` y fondo casi opaco son literales; tokens nuevos de "campo sobre papel" (los dos temas iguales: la hoja es blanca).
+13. *(hecho, E-134)* **Hoja «Más» móvil** (`#toolbar-more.open`, ≤ 768 px) y **cajón lateral**: `.vidrio`, títulos de grupo sin mayúsculas.
+14. *(hecho, E-134)* **Campos de formulario sobre la página** (`Viewer.ts`, ~l. 990–1050): borde `#94a3b8` y fondo casi opaco son literales; tokens nuevos de "campo sobre papel" (los dos temas iguales: la hoja es blanca).
 15. **Avisos sobre la página** (`Viewer.ts`: `.pagina-invalida`, `.aviso-resolucion`, resaltados de búsqueda): pasar a clases con `--ed-danger-soft` / `--ed-warning-*`. El amarillo/naranja de búsqueda es dato de anotación (escape). Tope de Viewer 14.
-16. **Botones de herramienta y paleta en `App.ts`**: la paleta `PALETTE` es dato (8 escapes con razón); quitar los `style.*` restantes de miniatura activa y muestras pasando a clases.
+16. *(hecho, E-134)* **Botones de herramienta y paleta en `App.ts`**: la paleta `PALETTE` es dato (8 escapes con razón); quitar los `style.*` restantes de miniatura activa y muestras pasando a clases.
 17. **Diálogos de apertura/errores del motor** que lleguen desde `main` después de E-130 (p. ej. `AperturaDialogos.ts`): aplicar la anatomía `.dlg-*` al integrarlos.
+
+### Hoja «Más» móvil, cajón y campos de formulario (E-134)
+
+- **Hoja inferior** (`#toolbar-more.open`, ≤ 768 px): `position: fixed` abajo, vidrio, esquinas superiores de 16 px, asa de 44 px
+  (`.hoja-asa`, cierra y recibe el foco) y velo (`.hoja-velo`, toca fuera para cerrar). Cerrada está fuera de pantalla con
+  `visibility: hidden` (no tabulable); la entrada y la salida usan `--ed-dur-3`, y con `prefers-reduced-motion` duran 0. Todo control
+  mide ≥ 44 × 44 px (la muestra de color visible queda en 28 px dentro de su destino de 44).
+- **Cajón** (`#sidebar`): vidrio, esquinas redondeadas, pestañas de 44 px y velo con fundido.
+- **Campos sobre la página** (`.form-field`): tokens `--ed-campo-papel-*` (`tema.css`), iguales en los dos temas porque la hoja es blanca,
+  y `color-scheme: light`. La posición y el tamaño (px CSS de página) siguen en línea: son geometría.
+- **Utilidades**: `.oculto` (display none que no pisa un componente), `#props-panel.visible`. El color de cada muestra de la paleta es un
+  dato y viaja como `--muestra`. `App.ts` ya no tiene estilos en línea de aspecto ni colores literales fuera de los datos de la paleta.

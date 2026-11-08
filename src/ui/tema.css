@@ -63,6 +63,17 @@
   --ed-warning-border: #e2b443;
   --ed-anotacion-activa: rgba(250, 204, 21, 0.35);
 
+  /* Campos de formulario SOBRE LA PÁGINA: la hoja es blanca en los dos temas, así que estos valores no
+     cambian en oscuro (solo se definen aquí). Texto 16:1, borde 4,5:1 y foco 6,3:1 contra el papel. El fondo
+     es casi opaco para tapar el valor que el motor ya rasterizó debajo (Viewer.drawFormFields). */
+  --ed-campo-papel-fondo: rgba(238, 243, 255, 0.96);
+  --ed-campo-papel-fondo-hover: rgba(226, 235, 255, 0.98);
+  --ed-campo-papel-fondo-inactivo: rgba(236, 238, 242, 0.96);
+  --ed-campo-papel-texto: #161b26;
+  --ed-campo-papel-texto-inactivo: #4a5263;
+  --ed-campo-papel-borde: #6c7689;
+  --ed-campo-papel-foco: #2b55d0;
+
   /* Bordes. --ed-control-border cumple 3:1 (WCAG 1.4.11) contra --ed-surface-2. */
   --ed-border: #dadee5;
   --ed-border-strong: #b9bfc9;
@@ -230,6 +241,8 @@
   font-feature-settings: "cv11", "ss01";
 }
 body { background: var(--ed-bg); }
+/* Oculto para todos (equivale a `hidden` pero no lo anula un `display` de componente). */
+.oculto { display: none !important; }
 button, input, select, textarea { font-family: inherit; }
 
 /* Anillo de foco único para toda la app (WCAG 2.4.7). */

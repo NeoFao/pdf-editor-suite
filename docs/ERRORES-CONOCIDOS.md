@@ -3841,3 +3841,23 @@ migrar el resto de pantallas: `docs/ui/sistema-de-diseno.md`.
 foco y no dejar ids duplicados, y retrasarlo cambiaría ese contrato. Los demás paneles (compresión, texto, atajos, firma, enlaces
 externos, nota, mis firmas) solo heredan el aspecto base de `.dlg`; su migración completa es la fase 2 (lista ordenada en el doc).
 ---
+
+### E-134 · Campos de formulario ilegibles sobre la página en tema oscuro (texto y casilla claros sobre papel blanco)
+
+**Síntoma.** Con la app en tema oscuro, los campos de formulario superpuestos al PDF (`.form-field`) se veían mal: el valor de un campo
+de texto («Lima») y el texto de un combo o de una lista salían en gris casi blanco sobre el fondo blanco del papel, y la casilla y los
+radios se pintaban como cuadros y círculos oscuros sobre la hoja. En móvil, además, la regla genérica `select { min-height: 40px }`
+podía agrandar un combo más bajo que 40 px respecto a su caja en el PDF.
+
+**Causa raíz.** Los campos llevaban solo borde y fondo en línea (`#94a3b8`, `rgba(255,255,255,0.95)`): el color de texto y el esquema de
+color nativo se heredaban del tema de la app. La hoja es blanca en los dos temas, pero el campo no. Los mínimos táctiles del móvil
+(`min-height`/`min-width`) se aplicaban también a controles cuya caja es geometría del PDF.
+
+**Arreglo.** Clase `.form-field` en `src/ui/estilos.css` con tokens `--ed-campo-papel-*` (`src/ui/tema.css`, iguales en claro y oscuro):
+`color-scheme: light`, texto 16:1, borde ≥ 3:1, foco visible, estados hover/inactivo y mínimos anulados. `Viewer.drawFormFields` solo
+deja en línea la geometría y el tamaño de letra. Misma PR: hoja «Más» móvil de vidrio con asa y velo, cajón de vidrio, destinos de
+44 px y los `style.*` restantes de `App.ts` pasados a clases.
+
+**Cómo se detecta ahora.** `tests/e2e/next/movil-hoja-formularios.spec.ts` (Chromium real): caja de cada campo = caja del visor (±1 px, móvil
+y escritorio), texto/borde/esquema de color y foco en claro y oscuro, destinos de 44 px y contraste de la hoja y el cajón abiertos.
+Regla guard `sin-color-literal-en-ui` (tope de `App.ts` eliminado, `Viewer.ts` baja a 10).
