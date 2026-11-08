@@ -4,9 +4,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 // A-02 (WCAG 1.4.3 / 1.4.11): las ratios de contraste de los tokens de
-// `src/ui/estilos.css` no pueden volver a bajar. Lee el CSS real, no una copia.
+// `src/ui/tema.css` (sistema de diseño, E-130) no pueden volver a bajar. Lee el CSS real, no una copia.
 const AQUI = path.dirname(fileURLToPath(import.meta.url));
-const CSS = fs.readFileSync(path.resolve(AQUI, '../../src/ui/estilos.css'), 'utf8');
+const CSS = fs.readFileSync(path.resolve(AQUI, '../../src/ui/tema.css'), 'utf8');
 
 function tokens(selectorBloque: RegExp): Record<string, string> {
   const m = CSS.match(selectorBloque);
@@ -32,7 +32,7 @@ export function ratio(a: string, b: string): number {
 }
 
 const FONDOS = ['--ed-bg', '--ed-surface', '--ed-surface-2'];
-const TEXTOS = ['--ed-text', '--ed-text-muted', '--ed-text-faint'];
+const TEXTOS = ['--ed-text', '--ed-text-muted', '--ed-text-faint', '--ed-text-placeholder'];
 
 for (const [nombre, t] of [['claro', CLARO], ['oscuro', OSCURO], ['oscuro (auto)', OSCURO_AUTO]] as const) {
   test(`contraste ${nombre}: texto >= 4.5:1 sobre cada fondo`, () => {
@@ -41,6 +41,12 @@ for (const [nombre, t] of [['claro', CLARO], ['oscuro', OSCURO], ['oscuro (auto)
     }
     expect(ratio(t['--ed-accent-strong']!, t['--ed-accent-soft']!), 'accent-strong sobre accent-soft').toBeGreaterThanOrEqual(4.5);
     expect(ratio(t['--ed-accent-strong']!, t['--ed-surface']!), 'accent-strong sobre surface').toBeGreaterThanOrEqual(4.5);
+    // E-130: botón primario, peligro y avisos del sistema de diseño.
+    for (const [fg, bg] of [['--ed-text-on-accent', '--ed-accent'], ['--ed-text-on-accent', '--ed-accent-hover'],
+      ['--ed-danger', '--ed-surface-2'], ['--ed-danger', '--ed-danger-soft'], ['--ed-success', '--ed-surface-2'],
+      ['--ed-warning-text', '--ed-warning-bg'], ['--ed-text', '--ed-surface-3']] as const) {
+      expect(ratio(t[fg]!, t[bg]!), `${fg} sobre ${bg}`).toBeGreaterThanOrEqual(4.5);
+    }
   });
   test(`contraste ${nombre}: iconos y bordes de controles >= 3:1`, () => {
     for (const f of ['--ed-surface', '--ed-surface-2']) {

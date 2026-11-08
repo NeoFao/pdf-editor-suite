@@ -1,0 +1,568 @@
+/**
+ * Sistema de diseño de la app nueva (E-130) — ÚNICO sitio con colores literales.
+ * Guía y reglas de uso: docs/ui/sistema-de-diseno.md.
+ *
+ * Dirección visual "mesa de luz": el documento es papel apoyado en una mesa iluminada
+ * (el lienzo), y la interfaz es vidrio claro encima: superficies flotantes translúcidas
+ * con un canto de luz de 1 px, un solo acento (cobalto) reservado a lo activo y a la
+ * acción principal, y movimiento corto que responde a lo que hace la persona.
+ *
+ * Reglas duras:
+ *  - Ningún color hex/rgb fuera de este fichero en src/ui (regla guard `sin-color-literal-en-ui`).
+ *  - Todo texto cumple AA (≥ 4,5:1) en claro y oscuro: los pares están calculados en el doc
+ *    y lo comprueba tests/e2e/next/sistema-diseno.spec.ts con los colores computados.
+ *  - El vidrio tiene alternativa sólida (sin `backdrop-filter` o con
+ *    `prefers-reduced-transparency`), y el movimiento se anula con `prefers-reduced-motion`.
+ *  - Sin fuentes externas: pila de sistema.
+ *
+ * Unidades: todo en px CSS (nada aquí toca la geometría de las capas de página).
+ */
+
+/* ── 1. Tokens: tema claro (por defecto) ─────────────────────────────── */
+:root {
+  /* Superficies por niveles (de más hundido a más elevado). */
+  --ed-bg: #e3e7ed;              /* fondo de la app tras la carcasa */
+  --ed-stage: #dde2e9;           /* lienzo: la "mesa" alrededor del papel */
+  --ed-stage-luz: #eef1f5;       /* foco de luz superior del lienzo */
+  --ed-surface: #f6f7f9;         /* nivel 1: barras, panel lateral, barra de estado */
+  --ed-surface-2: #ffffff;       /* nivel 2: controles, campos, tarjetas */
+  --ed-surface-3: #eceef2;       /* hundido: pistas, grupos segmentados */
+  --ed-glass: rgba(250, 251, 253, 0.9);   /* vidrio de diálogos, menús, toasts */
+  --ed-glass-borde: rgba(255, 255, 255, 0.75); /* canto de luz interior de 1 px */
+  --ed-papel: #ffffff;           /* la hoja: siempre blanca, en ambos temas */
+  --ed-velo: rgba(22, 27, 38, 0.28);      /* ::backdrop de los modales */
+
+  /* Texto. Contraste sobre --ed-surface: 16,1 / 7,3 / 5,7. */
+  --ed-text: #161b26;
+  --ed-text-muted: #4a5263;
+  --ed-text-faint: #5a6274;
+  --ed-text-placeholder: #5a6274;
+  --ed-text-on-accent: #ffffff;
+
+  /* Acento (cobalto). Blanco sobre acento: 6,3. Acento fuerte sobre suave: 7,1. */
+  --ed-accent: #2b55d0;
+  --ed-accent-hover: #2349bd;
+  --ed-accent-strong: #1f43b0;
+  --ed-accent-soft: #e4ebfd;
+  --ed-sel: rgba(43, 85, 208, 0.3);       /* rectángulos de selección de texto */
+
+  /* Estados de interacción (capas que se suman a la superficie). */
+  --ed-hover: rgba(22, 27, 38, 0.055);
+  --ed-active: rgba(22, 27, 38, 0.1);
+  --ed-focus-ring: #2b55d0;
+  --ed-disabled-opacity: 0.45;
+
+  /* Semánticos. */
+  --ed-danger: #b42318;
+  --ed-danger-hover: #9a1d13;
+  --ed-danger-soft: #fdecea;
+  --ed-success: #1a7340;
+  --ed-success-soft: #e6f4ec;
+  --ed-warning-text: #6b4a00;
+  --ed-warning-bg: #fff4d6;
+  --ed-warning-border: #e2b443;
+  --ed-anotacion-activa: rgba(250, 204, 21, 0.35);
+
+  /* Bordes. --ed-control-border cumple 3:1 (WCAG 1.4.11) contra --ed-surface-2. */
+  --ed-border: #dadee5;
+  --ed-border-strong: #b9bfc9;
+  --ed-control-border: #7b8290;
+
+  /* Radios: jerarquía, no uno para todo. */
+  --ed-radius-xs: 3px;    /* muestras de color, chips diminutos */
+  --ed-radius-sm: 6px;    /* botones y campos */
+  --ed-radius-md: 8px;    /* grupos, tarjetas */
+  --ed-radius-lg: 12px;   /* menús, toasts */
+  --ed-radius-xl: 16px;   /* diálogos */
+  --ed-radius-pill: 999px;
+
+  /* Sombras por elevación (la luz viene de arriba). */
+  --ed-sombra-1: 0 1px 2px rgba(22, 27, 38, 0.08);
+  --ed-sombra-2: 0 2px 6px rgba(22, 27, 38, 0.08), 0 8px 24px rgba(22, 27, 38, 0.1);
+  --ed-sombra-3: 0 4px 12px rgba(22, 27, 38, 0.1), 0 24px 64px rgba(22, 27, 38, 0.2);
+  --ed-sombra-papel: 0 0 0 1px rgba(22, 27, 38, 0.06), 0 1px 2px rgba(22, 27, 38, 0.12), 0 10px 30px -6px rgba(22, 27, 38, 0.22);
+
+  /* Espaciado: escala de 4 px. */
+  --ed-sp-05: 2px;
+  --ed-sp-1: 4px;
+  --ed-sp-2: 8px;
+  --ed-sp-3: 12px;
+  --ed-sp-4: 16px;
+  --ed-sp-5: 20px;
+  --ed-sp-6: 24px;
+  --ed-sp-8: 32px;
+
+  /* Tipografía: pila de sistema, sin descargas. */
+  --ed-fuente: "Segoe UI Variable Text", "Segoe UI Variable", system-ui, -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", Inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --ed-font-xs: 11.5px;
+  --ed-font-sm: 12.5px;
+  --ed-font-md: 13.5px;
+  --ed-font-lg: 15px;
+  --ed-font-xl: 17px;
+  --ed-peso-normal: 400;
+  --ed-peso-medio: 500;
+  --ed-peso-fuerte: 600;
+
+  /* Alturas de control. */
+  --ed-control-h-sm: 28px;
+  --ed-control-h: 32px;
+  --ed-control-h-lg: 36px;
+
+  /* Movimiento: corto y con salida suave. */
+  --ed-dur-1: 120ms;
+  --ed-dur-2: 160ms;
+  --ed-dur-3: 200ms;
+  --ed-curva: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ed-curva-entrada: cubic-bezier(0.3, 0, 0.2, 1);
+
+  /* Vidrio. */
+  --ed-blur: blur(18px) saturate(1.5);
+
+  /* Dimensiones de la carcasa. */
+  --ed-topbar-h: 48px;
+  --ed-tablist-h: 36px;
+  --ed-contextbar-h: 44px;
+  --ed-statusbar-h: 28px;
+  --ed-sidebar-w: 208px; /* ancho de 3 pestañas (Páginas, Marcadores, Comentarios) sin recorte */
+
+  color-scheme: light;
+}
+
+/* ── 2. Tokens: tema oscuro (sistema, salvo que el usuario fije claro) ── */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ed-bg: #101216;
+    --ed-stage: #0e1014;
+    --ed-stage-luz: #1a1e25;
+    --ed-surface: #181b21;
+    --ed-surface-2: #21252d;
+    --ed-surface-3: #14171c;
+    --ed-glass: rgba(28, 31, 38, 0.9);
+    --ed-glass-borde: rgba(255, 255, 255, 0.09);
+    --ed-velo: rgba(0, 0, 0, 0.45);
+    --ed-text: #e9ecf2;
+    --ed-text-muted: #aeb5c2;
+    --ed-text-faint: #949cab;
+    --ed-text-placeholder: #949cab;
+    --ed-text-on-accent: #0c1428;
+    --ed-accent: #86a3ff;
+    --ed-accent-hover: #a0b7ff;
+    --ed-accent-strong: #b3c6ff;
+    --ed-accent-soft: #24305a;
+    --ed-sel: rgba(134, 163, 255, 0.35);
+    --ed-hover: rgba(255, 255, 255, 0.07);
+    --ed-active: rgba(255, 255, 255, 0.13);
+    --ed-focus-ring: #86a3ff;
+    --ed-danger: #ff8a80;
+    --ed-danger-hover: #ffa79f;
+    --ed-danger-soft: #3a1f1f;
+    --ed-success: #6fd39a;
+    --ed-success-soft: #173126;
+    --ed-warning-text: #ffd27a;
+    --ed-warning-bg: #2b2410;
+    --ed-warning-border: #7a5d14;
+    --ed-border: #2c3039;
+    --ed-border-strong: #3d424d;
+    --ed-control-border: #6f7684;
+    --ed-sombra-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --ed-sombra-2: 0 2px 6px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.4);
+    --ed-sombra-3: 0 4px 12px rgba(0, 0, 0, 0.4), 0 24px 64px rgba(0, 0, 0, 0.55);
+    --ed-sombra-papel: 0 0 0 1px rgba(0, 0, 0, 0.5), 0 2px 4px rgba(0, 0, 0, 0.4), 0 16px 40px -8px rgba(0, 0, 0, 0.7);
+    color-scheme: dark;
+  }
+}
+
+/* El conmutador manual (src/ui/tema.ts) fija data-theme en <html>: gana al sistema. */
+:root[data-theme="dark"] {
+  --ed-bg: #101216;
+  --ed-stage: #0e1014;
+  --ed-stage-luz: #1a1e25;
+  --ed-surface: #181b21;
+  --ed-surface-2: #21252d;
+  --ed-surface-3: #14171c;
+  --ed-glass: rgba(28, 31, 38, 0.9);
+  --ed-glass-borde: rgba(255, 255, 255, 0.09);
+  --ed-velo: rgba(0, 0, 0, 0.45);
+  --ed-text: #e9ecf2;
+  --ed-text-muted: #aeb5c2;
+  --ed-text-faint: #949cab;
+  --ed-text-placeholder: #949cab;
+  --ed-text-on-accent: #0c1428;
+  --ed-accent: #86a3ff;
+  --ed-accent-hover: #a0b7ff;
+  --ed-accent-strong: #b3c6ff;
+  --ed-accent-soft: #24305a;
+  --ed-sel: rgba(134, 163, 255, 0.35);
+  --ed-hover: rgba(255, 255, 255, 0.07);
+  --ed-active: rgba(255, 255, 255, 0.13);
+  --ed-focus-ring: #86a3ff;
+  --ed-danger: #ff8a80;
+  --ed-danger-hover: #ffa79f;
+  --ed-danger-soft: #3a1f1f;
+  --ed-success: #6fd39a;
+  --ed-success-soft: #173126;
+  --ed-warning-text: #ffd27a;
+  --ed-warning-bg: #2b2410;
+  --ed-warning-border: #7a5d14;
+  --ed-border: #2c3039;
+  --ed-border-strong: #3d424d;
+  --ed-control-border: #6f7684;
+  --ed-sombra-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --ed-sombra-2: 0 2px 6px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.4);
+  --ed-sombra-3: 0 4px 12px rgba(0, 0, 0, 0.4), 0 24px 64px rgba(0, 0, 0, 0.55);
+  --ed-sombra-papel: 0 0 0 1px rgba(0, 0, 0, 0.5), 0 2px 4px rgba(0, 0, 0, 0.4), 0 16px 40px -8px rgba(0, 0, 0, 0.7);
+  color-scheme: dark;
+}
+
+/* Sin vidrio: quien pide menos transparencia, o un navegador sin backdrop-filter, recibe superficies sólidas. */
+@media (prefers-reduced-transparency: reduce) {
+  :root, :root[data-theme] { --ed-glass: var(--ed-surface); --ed-blur: none; }
+}
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root, :root[data-theme] { --ed-glass: var(--ed-surface); }
+}
+
+/* ── 3. Base ─────────────────────────────────────────────────────────── */
+:where(#app, dialog) {
+  font-family: var(--ed-fuente);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv11", "ss01";
+}
+body { background: var(--ed-bg); }
+button, input, select, textarea { font-family: inherit; }
+
+/* Anillo de foco único para toda la app (WCAG 2.4.7). */
+:where(#app, dialog) :focus-visible {
+  outline: 2px solid var(--ed-focus-ring);
+  outline-offset: 2px;
+}
+
+/* Campos sin clase dentro de la app y de los diálogos: aspecto base del sistema
+   (especificidad 0 con :where, cualquier regla de componente gana). */
+:where(#app, dialog) :where(input[type="text"], input[type="search"], input[type="number"], input[type="url"], input:not([type]), select, textarea) {
+  box-sizing: border-box;
+  min-height: var(--ed-control-h-sm);
+  padding: 0 var(--ed-sp-2);
+  border: 1px solid var(--ed-control-border);
+  border-radius: var(--ed-radius-sm);
+  background: var(--ed-surface-2);
+  color: var(--ed-text);
+  font-size: var(--ed-font-sm);
+  transition: border-color var(--ed-dur-1) var(--ed-curva), box-shadow var(--ed-dur-1) var(--ed-curva);
+}
+:where(#app, dialog) :where(textarea) { padding: var(--ed-sp-2); line-height: 1.45; }
+:where(#app, dialog) :where(input, select, textarea):where(:hover:not(:disabled)) { border-color: var(--ed-text-faint); }
+:where(#app, dialog) :where(input, select, textarea):where(:focus-visible) {
+  outline: none;
+  border-color: var(--ed-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ed-accent) 28%, transparent);
+}
+:where(#app, dialog) :where(input, select, textarea):where(:disabled) { opacity: var(--ed-disabled-opacity); cursor: not-allowed; }
+:where(#app, dialog) ::placeholder { color: var(--ed-text-placeholder); opacity: 1; }
+:where(#app, dialog) :where(input[type="checkbox"], input[type="radio"], input[type="range"]) { accent-color: var(--ed-accent); }
+:where(#app, dialog) :where(input[type="color"]) {
+  box-sizing: border-box;
+  inline-size: 44px;
+  block-size: var(--ed-control-h-sm);
+  padding: 3px;
+  border: 1px solid var(--ed-control-border);
+  border-radius: var(--ed-radius-sm);
+  background: var(--ed-surface-2);
+  cursor: pointer;
+}
+:where(#app, dialog) :where(input[type="color"])::-webkit-color-swatch-wrapper { padding: 0; }
+:where(#app, dialog) :where(input[type="color"])::-webkit-color-swatch { border: none; border-radius: var(--ed-radius-xs); }
+
+/* Botones sin clase dentro de un diálogo: botón secundario (los paneles aún no migrados
+   dejan de verse como el botón gris del sistema). */
+:where(dialog) :where(button:not([class])) {
+  min-height: var(--ed-control-h);
+  padding: 0 var(--ed-sp-3);
+  border: 1px solid var(--ed-border-strong);
+  border-radius: var(--ed-radius-sm);
+  background: var(--ed-surface-2);
+  color: var(--ed-text);
+  font-size: var(--ed-font-sm);
+  font-weight: var(--ed-peso-medio);
+  cursor: pointer;
+  transition: background-color var(--ed-dur-1) var(--ed-curva), border-color var(--ed-dur-1) var(--ed-curva);
+}
+:where(dialog) :where(button:not([class])):where(:hover:not(:disabled)) { background: color-mix(in srgb, var(--ed-surface-2), var(--ed-text) 6%); }
+:where(dialog) :where(button:not([class])):where(:disabled) { opacity: var(--ed-disabled-opacity); cursor: not-allowed; }
+
+/* ── 4. Componentes ──────────────────────────────────────────────────── */
+
+/* 4.1 Botón: .btn + variante (.btn--primario | --secundario | --fantasma | --peligro) [+ .btn--icono]. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ed-sp-2);
+  box-sizing: border-box;
+  min-height: var(--ed-control-h);
+  padding: 0 var(--ed-sp-4);
+  border: 1px solid transparent;
+  border-radius: var(--ed-radius-sm);
+  font-size: var(--ed-font-sm);
+  font-weight: var(--ed-peso-medio);
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--ed-dur-1) var(--ed-curva), border-color var(--ed-dur-1) var(--ed-curva),
+    color var(--ed-dur-1) var(--ed-curva), box-shadow var(--ed-dur-1) var(--ed-curva), transform var(--ed-dur-1) var(--ed-curva);
+}
+.btn:active:not(:disabled) { transform: translateY(0.5px); }
+.btn:disabled { opacity: var(--ed-disabled-opacity); cursor: not-allowed; }
+.btn--lg { min-height: var(--ed-control-h-lg); padding: 0 var(--ed-sp-5); }
+.btn--primario {
+  background: var(--ed-accent);
+  color: var(--ed-text-on-accent);
+  box-shadow: var(--ed-sombra-1), inset 0 1px 0 rgba(255, 255, 255, 0.18);
+}
+.btn--primario:hover:not(:disabled) { background: var(--ed-accent-hover); }
+.btn--secundario {
+  background: var(--ed-surface-2);
+  border-color: var(--ed-border-strong);
+  color: var(--ed-text);
+  box-shadow: var(--ed-sombra-1);
+}
+.btn--secundario:hover:not(:disabled) { background: color-mix(in srgb, var(--ed-surface-2), var(--ed-text) 6%); }
+.btn--fantasma { background: transparent; color: var(--ed-text); }
+.btn--fantasma:hover:not(:disabled) { background: var(--ed-hover); }
+.btn--fantasma:active:not(:disabled) { background: var(--ed-active); }
+.btn--peligro { background: transparent; color: var(--ed-danger); }
+.btn--peligro:hover:not(:disabled) { background: var(--ed-danger-soft); }
+.btn--icono { min-width: var(--ed-control-h); padding: 0; }
+
+/* 4.2 Botón de barra de herramientas: .icon-btn (icono [+ .etiqueta]); aria-pressed = herramienta activa. */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: var(--ed-control-h);
+  min-width: var(--ed-control-h);
+  padding: 0 var(--ed-sp-2);
+  border: 1px solid transparent;
+  border-radius: var(--ed-radius-sm);
+  background: transparent;
+  color: var(--ed-text);
+  cursor: pointer;
+  line-height: 1;
+  transition: background-color var(--ed-dur-1) var(--ed-curva), color var(--ed-dur-1) var(--ed-curva),
+    border-color var(--ed-dur-1) var(--ed-curva);
+}
+.icon-btn .icono { flex: 0 0 auto; }
+.icon-btn .etiqueta { font-size: var(--ed-font-sm); white-space: nowrap; }
+.icon-btn:hover { background: var(--ed-hover); }
+.icon-btn:active { background: var(--ed-active); }
+.icon-btn[aria-pressed="true"] {
+  background: var(--ed-accent-soft);
+  border-color: color-mix(in srgb, var(--ed-accent) 45%, transparent);
+  color: var(--ed-accent-strong);
+}
+.icon-btn:disabled { opacity: var(--ed-disabled-opacity); cursor: not-allowed; background: transparent; }
+
+/* 4.3 Campos: rejilla etiqueta | control. `.campos` contiene filas `.campo` (label + control [+ .campo-extra]). */
+.campos {
+  display: grid;
+  grid-template-columns: minmax(7.5em, max-content) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--ed-sp-2) var(--ed-sp-4);
+  margin: 0;
+}
+.campo { display: contents; }
+.campo-etiqueta {
+  font-size: var(--ed-font-sm);
+  font-weight: var(--ed-peso-medio);
+  color: var(--ed-text-muted);
+}
+.campo-control { display: flex; align-items: center; gap: var(--ed-sp-2); min-width: 0; }
+.campo-control > :where(input:not([type="color"]):not([type="checkbox"]), select) { flex: 1 1 auto; min-width: 0; }
+.campo-extra { font-size: var(--ed-font-sm); color: var(--ed-text-muted); font-variant-numeric: tabular-nums; min-width: 3.5em; }
+.campo-ayuda { grid-column: 1 / -1; margin: 0; font-size: var(--ed-font-xs); color: var(--ed-text-muted); line-height: 1.5; }
+/* Control con apariencia del sistema de diseño (para controles fuera de #app/dialog o forzados). */
+.ctl { min-height: var(--ed-control-h); }
+.ctl--compacto { min-height: var(--ed-control-h-sm); }
+
+/* Grupo de campos con título (fieldset). */
+.grupo {
+  margin: 0;
+  padding: var(--ed-sp-3);
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius-md);
+  background: color-mix(in srgb, var(--ed-surface-2) 60%, transparent);
+}
+.grupo-titulo { padding: 0 var(--ed-sp-1); font-size: var(--ed-font-sm); font-weight: var(--ed-peso-fuerte); color: var(--ed-text); }
+
+/* Casilla con etiqueta a la derecha. */
+.casilla { display: inline-flex; align-items: center; gap: var(--ed-sp-2); min-height: 24px; font-size: var(--ed-font-sm); color: var(--ed-text); cursor: pointer; }
+
+/* 4.4 Diálogo: `mostrarModal` añade .dlg a todo <dialog>. Anatomía: .dlg-cabecera (.dlg-titulo [+ .dlg-cerrar]),
+   .dlg-cuerpo, .dlg-pie (acciones a la derecha, la primaria la última). */
+dialog.dlg {
+  box-sizing: border-box;
+  max-width: min(94vw, 560px);
+  max-height: 92vh;
+  padding: var(--ed-sp-5);
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius-xl);
+  background: var(--ed-glass);
+  -webkit-backdrop-filter: var(--ed-blur);
+  backdrop-filter: var(--ed-blur);
+  color: var(--ed-text);
+  font-size: var(--ed-font-md);
+  box-shadow: inset 0 1px 0 var(--ed-glass-borde), var(--ed-sombra-3);
+  opacity: 1;
+  transform: none;
+  transition: opacity var(--ed-dur-3) var(--ed-curva), transform var(--ed-dur-3) var(--ed-curva);
+}
+/* Con la anatomía completa, cada zona pone su propio relleno (el pie va a sangre). Sin ella (paneles aún no
+   migrados), el diálogo conserva un relleno uniforme. */
+dialog.dlg:has(> .dlg-cuerpo) { padding: 0; }
+@starting-style {
+  dialog.dlg[open] { opacity: 0; transform: translateY(6px) scale(0.97); }
+}
+dialog.dlg::backdrop {
+  background: var(--ed-velo);
+  transition: background-color var(--ed-dur-3) var(--ed-curva);
+}
+@starting-style {
+  dialog.dlg[open]::backdrop { background: transparent; }
+}
+.dlg-cabecera {
+  display: flex;
+  align-items: center;
+  gap: var(--ed-sp-3);
+  padding: var(--ed-sp-4) var(--ed-sp-5) var(--ed-sp-3);
+}
+.dlg-titulo { flex: 1 1 auto; margin: 0; font-size: var(--ed-font-lg); font-weight: var(--ed-peso-fuerte); letter-spacing: -0.005em; color: var(--ed-text); }
+.dlg-subtitulo { margin: 2px 0 0; font-size: var(--ed-font-sm); color: var(--ed-text-muted); font-weight: var(--ed-peso-normal); }
+.dlg-cerrar { color: var(--ed-text-muted); margin-right: calc(-1 * var(--ed-sp-2)); }
+.dlg-cuerpo { display: flex; flex-direction: column; gap: var(--ed-sp-4); padding: var(--ed-sp-1) var(--ed-sp-5) var(--ed-sp-4); overflow: auto; }
+.dlg-pie {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--ed-sp-2);
+  padding: var(--ed-sp-3) var(--ed-sp-5);
+  border-top: 1px solid var(--ed-border);
+  background: color-mix(in srgb, var(--ed-surface) 55%, transparent);
+  border-radius: 0 0 var(--ed-radius-xl) var(--ed-radius-xl);
+}
+.dlg-pie-izq { margin-right: auto; }
+.dlg-mensaje { min-height: 1.4em; margin: 0; font-size: var(--ed-font-sm); color: var(--ed-text-muted); }
+.dlg-mensaje:empty { min-height: 0; }
+
+/* 4.5 Pestañas segmentadas (dentro de diálogos y paneles): .pestanas[role=tablist] > .pestana[role=tab]. */
+.pestanas {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--ed-radius-md);
+  background: var(--ed-surface-3);
+  box-shadow: inset 0 0 0 1px var(--ed-border);
+}
+.pestana {
+  min-height: var(--ed-control-h-sm);
+  padding: 0 var(--ed-sp-3);
+  border: 0;
+  border-radius: calc(var(--ed-radius-md) - 3px);
+  background: transparent;
+  color: var(--ed-text-muted);
+  font-size: var(--ed-font-sm);
+  font-weight: var(--ed-peso-medio);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color var(--ed-dur-2) var(--ed-curva), color var(--ed-dur-2) var(--ed-curva), box-shadow var(--ed-dur-2) var(--ed-curva);
+}
+.pestana:hover { color: var(--ed-text); }
+.pestana[aria-selected="true"] { background: var(--ed-surface-2); color: var(--ed-text); box-shadow: var(--ed-sombra-1), 0 0 0 1px var(--ed-border); }
+
+/* 4.6 Tooltip: [data-tooltip] muestra su texto al pasar o enfocar (además del title nativo si lo hay). */
+[data-tooltip] { position: relative; }
+[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  left: 50%;
+  top: calc(100% + 6px);
+  z-index: 60;
+  padding: 4px 8px;
+  border-radius: var(--ed-radius-sm);
+  background: var(--ed-text);
+  color: var(--ed-surface);
+  font-size: var(--ed-font-xs);
+  font-weight: var(--ed-peso-medio);
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-50%, -2px);
+  transition: opacity var(--ed-dur-1) var(--ed-curva), transform var(--ed-dur-1) var(--ed-curva);
+}
+[data-tooltip]:hover::after, [data-tooltip]:focus-visible::after { opacity: 1; transform: translate(-50%, 0); transition-delay: 400ms; }
+
+/* 4.7 Toast / aviso flotante: .toast [+ --exito | --peligro | --aviso]. */
+.toast {
+  display: flex;
+  align-items: center;
+  gap: var(--ed-sp-3);
+  padding: var(--ed-sp-2) var(--ed-sp-4);
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius-lg);
+  background: var(--ed-glass);
+  -webkit-backdrop-filter: var(--ed-blur);
+  backdrop-filter: var(--ed-blur);
+  box-shadow: inset 0 1px 0 var(--ed-glass-borde), var(--ed-sombra-2);
+  color: var(--ed-text);
+  font-size: var(--ed-font-sm);
+}
+.toast--exito { border-color: color-mix(in srgb, var(--ed-success) 40%, var(--ed-border)); }
+.toast--peligro { border-color: color-mix(in srgb, var(--ed-danger) 40%, var(--ed-border)); }
+.toast--aviso { background: var(--ed-warning-bg); color: var(--ed-warning-text); border-color: var(--ed-warning-border); }
+
+/* 4.8 Panel lateral: .panel-lateral (superficie nivel 1 con borde de separación). */
+.panel-lateral { background: var(--ed-surface); border-right: 1px solid var(--ed-border); color: var(--ed-text); }
+
+/* 4.9 Superficie flotante genérica (menús, popovers, hojas móviles): .vidrio. */
+.vidrio {
+  background: var(--ed-glass);
+  -webkit-backdrop-filter: var(--ed-blur);
+  backdrop-filter: var(--ed-blur);
+  border: 1px solid var(--ed-border);
+  box-shadow: inset 0 1px 0 var(--ed-glass-borde), var(--ed-sombra-2);
+}
+
+/* Código y teclas en textos de ayuda. */
+.codigo, kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--ed-border);
+  border-radius: var(--ed-radius-xs);
+  background: var(--ed-surface-3);
+  color: var(--ed-text);
+  font-family: ui-monospace, "Cascadia Mono", "SF Mono", Consolas, monospace;
+  font-size: 0.92em;
+}
+
+/* ── 5. Accesibilidad del sistema ────────────────────────────────────── */
+/* B-05 / E-130: menos movimiento = duración computada 0, sin excepciones. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after, ::backdrop {
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    animation-duration: 0s !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Alto contraste: el vidrio y las sombras desaparecen, los bordes y el foco usan colores del sistema. */
+@media (forced-colors: active) {
+  dialog.dlg, .toast, .vidrio { backdrop-filter: none; border: 1px solid CanvasText; }
+  .btn, .icon-btn, .pestana { border: 1px solid ButtonText; }
+  .btn--primario { forced-color-adjust: none; background: Highlight; color: HighlightText; border-color: Highlight; }
+  .icon-btn[aria-pressed="true"], .pestana[aria-selected="true"] { border-color: Highlight; outline: 2px solid Highlight; outline-offset: -2px; }
+  :where(#app, dialog) :focus-visible { outline-color: Highlight; }
+}

@@ -12,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarPuertosAMano,analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen, analizarAvanceNaturalEnAgrupacion, analizarPromptNativo, analizarDialogoCasero, esperasFijasEn, TOPE_ESPERAS_FIJAS } from './reglas.mjs';
+import { TODAS, analizarRegistroErrores, analizarPuertosE2E, analizarPuertosAMano,analizarRotacionEnCapaTexto, analizarSetText, analizarGlyphPath, analizarSetIsActive, analizarBusquedaPorLinea, analizarGeometriaSinOrigen, analizarAvanceNaturalEnAgrupacion, analizarPromptNativo, analizarDialogoCasero, esperasFijasEn, TOPE_ESPERAS_FIJAS, coloresLiteralesEn, TOPE_COLORES_LITERALES, FICHERO_TEMA } from './reglas.mjs';
 import { lineasExentas, ESCAPE } from './lib.mjs';
 
 /** Ejecuta el detector de una regla sobre texto suelto, sin tocar el repo. */
@@ -1087,6 +1087,48 @@ describe('sin-espera-fija-en-next', () => {
     for (const f of ['firma-visible.spec.ts', 'nitidez-pagina.spec.ts', 'miniaturas-nitidas.spec.ts']) {
       assert.equal(TOPE_ESPERAS_FIJAS[f], undefined);
     }
+  });
+
+  test('sobre el repo real no encuentra nada', () => {
+    assert.deepEqual(regla.ejecutar(), []);
+  });
+});
+
+describe('sin-color-literal-en-ui', () => {
+  const regla = detectarEn('sin-color-literal-en-ui');
+
+  test('detecta hex, rgb/rgba y hsl literales en TS y CSS (E-130)', () => {
+    const ts = ["el.style.background = '#fff';", "Object.assign(s, { color: 'rgba(0, 0, 0, .4)' });", 'a { color: hsl(10 50% 50%); }'].join('\n');
+    assert.deepEqual(coloresLiteralesEn(ts), [1, 2, 3]);
+  });
+
+  test('cuenta cada color de una línea y no confunde ids, tokens ni colores calculados', () => {
+    assert.deepEqual(coloresLiteralesEn('border: 1px solid #ccc; color: #333;'), [1, 1]);
+    const bueno = [
+      "document.querySelector('#btn-tema');",
+      "el.style.background = 'var(--ed-papel)';",
+      'span.style.color = `rgb(${r}, ${g}, ${b})`;',
+      '.x { color: var(--ed-text); }'
+    ].join('\n');
+    assert.deepEqual(coloresLiteralesEn(bueno), []);
+  });
+
+  test('ignora comentarios y respeta el escape con razón', () => {
+    const cuerpo = [
+      '// antes era #6366f1',
+      "const a = '#000'; // negro: #000",
+      '// guard-disable-next-line sin-color-literal-en-ui: color por defecto del dato type=color',
+      "input.value = '#cc0000';",
+      '// guard-disable-next-line sin-color-literal-en-ui: ok',
+      "input.value = '#00cc00';"
+    ].join('\n');
+    assert.deepEqual(coloresLiteralesEn(cuerpo), [2, 6]);
+  });
+
+  test('el tema es el único fichero exento, estilos.css ya no tiene tope y los topes solo cubren src/ui', () => {
+    assert.equal(FICHERO_TEMA, 'src/ui/tema.css');
+    assert.equal(TOPE_COLORES_LITERALES['src/ui/estilos.css'], undefined);
+    for (const f of Object.keys(TOPE_COLORES_LITERALES)) assert.match(f, /^src\/ui\//);
   });
 
   test('sobre el repo real no encuentra nada', () => {

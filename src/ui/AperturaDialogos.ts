@@ -87,7 +87,7 @@ export function pedirContrasena(opciones: { nombre: string; incorrecta?: { inten
       const aviso = document.createElement('p');
       aviso.setAttribute('role', 'alert');
       aviso.textContent = `Contraseña incorrecta (intento ${opciones.incorrecta.intento} de ${opciones.incorrecta.maximo}).`;
-      Object.assign(aviso.style, { color: '#b00020', margin: '8px 0 0' });
+      Object.assign(aviso.style, { color: 'var(--ed-danger)', margin: '8px 0 0' });
       form.appendChild(aviso);
     }
     let resultado: string | null = null;

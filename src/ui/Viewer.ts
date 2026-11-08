@@ -1231,8 +1231,8 @@ export class Viewer {
       Object.assign(w.style, {
         position: 'relative',
         margin: `0 auto ${GAP}px`,
-        background: '#fff',
-        boxShadow: '0 1px 6px rgba(0,0,0,.25)',
+        background: 'var(--ed-papel)',
+        boxShadow: 'var(--ed-sombra-papel)',
         width: `${page.sizePt.widthPt * this.escalaPagina(page.index)}px`,
         height: `${page.sizePt.heightPt * this.escalaPagina(page.index)}px`
       });

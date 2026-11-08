@@ -10,94 +10,13 @@
  * (E-002/E-029/E-030, ver los comentarios de ese fichero), sin mezclarlos con
  * el maquetado de la interfaz.
  *
- * Retícula de espaciado en múltiplos de 4px. Un único color de acento
- * (índigo) — el mismo que ya usaba el resto de la app para selección de
- * runs/imágenes/miniaturas antes de este PR (`#6366f1`), para que el rediseño
- * no introduzca un segundo acento que compita visualmente con el existente.
+ * Retícula de espaciado en múltiplos de 4px y un único color de acento
+ * (`--ed-accent`, cobalto desde E-130) para selección, foco y lo activo.
  */
 
-:root {
-  --ed-bg: #dfe2e6;
-  --ed-surface: #f6f7f8;
-  --ed-surface-2: #ffffff;
-  --ed-border: #d3d7dc;
-  --ed-border-strong: #b7bcc4;
-  --ed-control-border: #7b8290;
-  --ed-text: #20242c;
-  --ed-text-muted: #4a5260;
-  --ed-text-faint: #596170;
-  --ed-accent: #6366f1;
-  --ed-accent-strong: #4338ca;
-  --ed-accent-soft: #e6e6fd;
-  --ed-hover: rgba(15, 23, 42, 0.06);
-  --ed-active: rgba(15, 23, 42, 0.11);
-  --ed-danger: #dc2626;
-  --ed-stage: #4b4f56;
-  --ed-focus-ring: #2563eb;
-
-  --ed-radius-sm: 4px;
-  --ed-radius-md: 6px;
-  --ed-radius-lg: 10px;
-
-  --ed-sp-1: 4px;
-  --ed-sp-2: 8px;
-  --ed-sp-3: 12px;
-  --ed-sp-4: 16px;
-
-  --ed-font-xs: 11.5px;
-  --ed-font-sm: 12.5px;
-  --ed-font-md: 13.5px;
-
-  --ed-topbar-h: 48px;
-  --ed-tablist-h: 36px;
-  --ed-contextbar-h: 44px;
-  --ed-statusbar-h: 28px;
-  --ed-sidebar-w: 208px; /* ancho de 3 pestañas (Páginas, Marcadores, Comentarios) sin recorte */
-
-  color-scheme: light;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
-    --ed-bg: #16181d;
-    --ed-surface: #1f2228;
-    --ed-surface-2: #24272e;
-    --ed-border: #34383f;
-    --ed-border-strong: #454a53;
-    --ed-control-border: #6f7684;
-    --ed-focus-ring: #60a5fa;
-    --ed-text: #e7e9ee;
-    --ed-text-muted: #a7adb8;
-    --ed-text-faint: #8d93a0;
-    --ed-accent: #818cf8;
-    --ed-accent-strong: #a5b4fc;
-    --ed-accent-soft: #302f5e;
-    --ed-hover: rgba(255, 255, 255, 0.08);
-    --ed-active: rgba(255, 255, 255, 0.14);
-    --ed-stage: #202226;
-    color-scheme: dark;
-  }
-}
-
-:root[data-theme="dark"] {
-  --ed-bg: #16181d;
-  --ed-surface: #1f2228;
-  --ed-surface-2: #24272e;
-  --ed-border: #34383f;
-  --ed-border-strong: #454a53;
-  --ed-control-border: #6f7684;
-  --ed-focus-ring: #60a5fa;
-  --ed-text: #e7e9ee;
-  --ed-text-muted: #a7adb8;
-  --ed-text-faint: #8d93a0;
-  --ed-accent: #818cf8;
-  --ed-accent-strong: #a5b4fc;
-  --ed-accent-soft: #302f5e;
-  --ed-hover: rgba(255, 255, 255, 0.08);
-  --ed-active: rgba(255, 255, 255, 0.14);
-  --ed-stage: #202226;
-  color-scheme: dark;
-}
+/* Los tokens (colores, radios, sombras, tipografía, movimiento) y los componentes base viven en
+   tema.css (E-130), importado ANTES que este fichero. Aquí solo hay maquetación de la carcasa y
+   estados de capa; ningún color literal (regla guard `sin-color-literal-en-ui`). */
 
 /*
  * Revisión de PR #63 (captura 12-movil-cajon): sin `overflow: hidden` aquí,
@@ -115,7 +34,7 @@ html, body { height: 100%; margin: 0; overflow: hidden; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--ed-fuente);
   font-size: var(--ed-font-md);
   color: var(--ed-text);
   background: var(--ed-bg);
@@ -160,7 +79,6 @@ button { font-family: inherit; }
   padding: 0 var(--ed-sp-2);
   gap: var(--ed-sp-1);
   background: var(--ed-surface);
-  border-bottom: 1px solid var(--ed-border);
   box-sizing: border-box;
 }
 /* La fila que de verdad desplaza en móvil (ver el comentario de App.ts junto
@@ -169,10 +87,11 @@ button { font-family: inherit; }
 .topbar-scroll { display: flex; align-items: center; gap: var(--ed-sp-1); flex: 1; min-width: 0; }
 .topbar-group { display: flex; align-items: center; gap: 2px; }
 .topbar-spacer { flex: 1 1 auto; min-width: var(--ed-sp-2); }
-.topbar-sep { width: 1px; align-self: stretch; margin: var(--ed-sp-2) var(--ed-sp-1); background: var(--ed-border); flex: 0 0 auto; }
+.topbar-sep { width: 1px; align-self: stretch; margin: var(--ed-sp-3) var(--ed-sp-1); background: var(--ed-border); flex: 0 0 auto; }
 .doc-name {
-  font-weight: 600;
+  font-weight: var(--ed-peso-fuerte);
   font-size: var(--ed-font-md);
+  letter-spacing: -0.005em;
   color: var(--ed-text);
   max-width: 240px;
   overflow: hidden;
@@ -184,6 +103,7 @@ button { font-family: inherit; }
   min-width: 3.4em;
   text-align: center;
   font-size: var(--ed-font-sm);
+  font-variant-numeric: tabular-nums;
   color: var(--ed-text-muted);
   padding: 0 2px;
 }
@@ -194,13 +114,19 @@ button { font-family: inherit; }
   background: var(--ed-surface-2);
   border: 1px solid var(--ed-control-border);
   border-radius: var(--ed-radius-md);
-  padding: 0 var(--ed-sp-2);
-  height: 30px;
+  padding: 0 var(--ed-sp-1) 0 var(--ed-sp-2);
+  height: var(--ed-control-h);
+  box-sizing: border-box;
   color: var(--ed-text-faint);
+  transition: border-color var(--ed-dur-1) var(--ed-curva), box-shadow var(--ed-dur-1) var(--ed-curva);
 }
-.search-box input {
+.search-box input,
+.search-box input:focus-visible {
   border: none;
   outline: none;
+  box-shadow: none;
+  min-height: 0;
+  padding: 0;
   background: transparent;
   color: var(--ed-text);
   font-size: var(--ed-font-sm);
@@ -215,52 +141,26 @@ button { font-family: inherit; }
 .search-nav-btn { width: 24px; height: 24px; }
 .search-nav-btn svg { transform: rotate(90deg); }
 .search-nav-btn:disabled { opacity: .4; cursor: default; }
-.search-box:focus-within { border-color: var(--ed-accent); color: var(--ed-accent); }
-
-/* ── Botones de icono (comunes a barra superior y contextual) ───────────── */
-.icon-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 32px;
-  min-width: 32px;
-  padding: 0 var(--ed-sp-2);
-  border: 1px solid transparent;
-  border-radius: var(--ed-radius-sm);
-  background: transparent;
-  color: var(--ed-text);
-  cursor: pointer;
-  line-height: 1;
-}
-.icon-btn .icono { flex: 0 0 auto; }
-.icon-btn .etiqueta { font-size: var(--ed-font-sm); white-space: nowrap; }
-.icon-btn:hover { background: var(--ed-hover); }
-.icon-btn:active { background: var(--ed-active); }
-.icon-btn[aria-pressed="true"] {
-  background: var(--ed-accent-soft);
+.search-box:focus-within {
   border-color: var(--ed-accent);
-  color: var(--ed-accent-strong);
+  color: var(--ed-accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ed-accent) 28%, transparent);
 }
-.icon-btn:disabled { opacity: .4; cursor: not-allowed; background: transparent; }
-.icon-btn:focus-visible,
-.tab:focus-visible,
-input:focus-visible,
-select:focus-visible,
-button:focus-visible {
-  outline: 2px solid var(--ed-focus-ring);
-  outline-offset: 2px;
-}
+
+/* El botón de barra (.icon-btn) y el anillo de foco son componentes del sistema: tema.css §4.2 y §3. */
 
 /* Botón grande de la barra contextual: icono encima, etiqueta debajo (estilo ribbon de Acrobat). */
 .context-bar .icon-btn {
   flex-direction: column;
   height: 100%;
   min-height: 40px;
-  gap: 2px;
+  min-width: 52px;
+  gap: 3px;
   padding: 4px var(--ed-sp-2);
+  border-radius: var(--ed-radius-md);
 }
-.context-bar .icon-btn .etiqueta { font-size: 10.5px; color: var(--ed-text-muted); }
+.context-bar .icon-btn .etiqueta { font-size: 11px; color: var(--ed-text-muted); transition: color var(--ed-dur-1) var(--ed-curva); }
+.context-bar .icon-btn:hover .etiqueta { color: var(--ed-text); }
 .context-bar .icon-btn[aria-pressed="true"] .etiqueta { color: var(--ed-accent-strong); }
 
 /* ── Pestañas de herramientas ────────────────────────────────────────── */
@@ -270,24 +170,41 @@ button:focus-visible {
   flex: 0 0 auto;
   height: var(--ed-tablist-h);
   padding: 0 var(--ed-sp-2);
-  gap: 2px;
+  gap: var(--ed-sp-1);
   background: var(--ed-surface);
   border-bottom: 1px solid var(--ed-border);
   overflow-x: auto;
 }
+/* Pestaña de herramientas: subrayado de acento que crece desde el centro al activarse. */
 .tab {
+  position: relative;
   border: none;
+  border-radius: var(--ed-radius-sm) var(--ed-radius-sm) 0 0;
   background: transparent;
   color: var(--ed-text-muted);
   font-size: var(--ed-font-sm);
-  font-weight: 600;
+  font-weight: var(--ed-peso-medio);
   padding: 0 var(--ed-sp-3);
-  border-bottom: 2px solid transparent;
   cursor: pointer;
   white-space: nowrap;
+  transition: color var(--ed-dur-2) var(--ed-curva), background-color var(--ed-dur-1) var(--ed-curva);
+}
+.tab::after {
+  content: "";
+  position: absolute;
+  left: var(--ed-sp-2);
+  right: var(--ed-sp-2);
+  bottom: 0;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
+  background: var(--ed-accent);
+  transform: scaleX(0);
+  transition: transform var(--ed-dur-2) var(--ed-curva);
 }
 .tab:hover { color: var(--ed-text); background: var(--ed-hover); }
-.tab[aria-selected="true"] { color: var(--ed-accent-strong); border-bottom-color: var(--ed-accent); }
+.tab[aria-selected="true"] { color: var(--ed-accent-strong); font-weight: var(--ed-peso-fuerte); }
+.tab[aria-selected="true"]::after { transform: scaleX(1); }
+.tab:focus-visible { outline-offset: -2px; }
 
 /* ── Pestañas + barra contextual ──────────────────────────────────────── */
 /*
@@ -297,7 +214,14 @@ button:focus-visible {
  * ≤768px vuelve a cumplir el mismo papel: contenedor que `#btn-more`
  * revela/oculta entero (ver el bloque de medios más abajo).
  */
-#toolbar-more { display: flex; flex-direction: column; flex: 0 0 auto; background: var(--ed-surface-2); border-bottom: 1px solid var(--ed-border); }
+#toolbar-more {
+  display: flex; flex-direction: column; flex: 0 0 auto;
+  background: var(--ed-surface-2);
+  border-bottom: 1px solid var(--ed-border);
+  box-shadow: var(--ed-sombra-1);
+  position: relative;
+  z-index: 2;
+}
 .context-bar {
   display: none;
   align-items: stretch;
@@ -309,21 +233,17 @@ button:focus-visible {
 .context-bar.activa { display: flex; }
 /* Encabezado de grupo del panel «Más» móvil (E-069): oculto en escritorio, donde la pestaña ya nombra el grupo. */
 .context-titulo { display: none; }
-.context-sep { width: 1px; margin: var(--ed-sp-1) var(--ed-sp-2); background: var(--ed-border); flex: 0 0 auto; }
+.context-sep { width: 1px; margin: var(--ed-sp-2) var(--ed-sp-2); background: var(--ed-border); flex: 0 0 auto; }
 
 #props-panel { display: none; align-items: center; gap: var(--ed-sp-2); padding: 0 var(--ed-sp-2); }
 #props-panel label { display: flex; align-items: center; gap: 4px; font-size: var(--ed-font-xs); color: var(--ed-text-muted); }
-#props-panel select, #props-panel input[type="number"] {
-  font-size: var(--ed-font-sm);
-  border: 1px solid var(--ed-control-border);
-  border-radius: var(--ed-radius-sm);
-  background: var(--ed-surface-2);
-  color: var(--ed-text);
-  padding: 3px 4px;
-}
+#props-panel label { font-weight: var(--ed-peso-medio); }
+/* Rango de páginas de «Dividir» (#btn-range): campo del sistema, centrado en la barra. */
+.context-bar #btn-range { align-self: center; width: 7.5em; min-height: var(--ed-control-h); }
 
 #swatches { display: flex; align-items: center; gap: 4px; }
-#swatches .swatch { border-radius: 3px; cursor: pointer; }
+#swatches .swatch { border-radius: var(--ed-radius-xs); cursor: pointer; transition: transform var(--ed-dur-1) var(--ed-curva); }
+#swatches .swatch:hover { transform: scale(1.1); }
 #swatches .swatch[aria-pressed="true"] { outline: 2px solid var(--ed-text); outline-offset: 1px; }
 
 select, input[type="text"], input[type="search"], input[type="number"] {
@@ -346,28 +266,41 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   border-right: 1px solid var(--ed-border);
   box-sizing: border-box;
 }
-.sidebar-tabs { display: flex; flex: 0 0 auto; border-bottom: 1px solid var(--ed-border); }
-.sidebar-tabs .tab { flex: 1 1 auto; min-width: 0; white-space: nowrap; padding: var(--ed-sp-2) 2px; border-bottom: 2px solid transparent; color: var(--ed-text-muted); }
-.sidebar-tabs .tab[aria-selected="true"] { color: var(--ed-accent-strong); border-bottom-color: var(--ed-accent); background: var(--ed-hover); }
+.sidebar-tabs { display: flex; flex: 0 0 auto; gap: 2px; padding: 0 var(--ed-sp-1); border-bottom: 1px solid var(--ed-border); }
+.sidebar-tabs .tab { flex: 1 1 auto; min-width: 0; white-space: nowrap; padding: var(--ed-sp-2) 2px; color: var(--ed-text-muted); }
+.sidebar-tabs .tab::after { left: var(--ed-sp-1); right: var(--ed-sp-1); }
 
 #thumbs, #outline-panel { flex: 1; overflow: auto; padding: var(--ed-sp-2); box-sizing: border-box; }
-#thumbs canvas.thumb { border-radius: var(--ed-radius-sm); }
+/* Miniatura: papel pequeño con sombra de contacto; la activa lleva el contorno de acento (App.setActiveThumb). */
+#thumbs { padding: var(--ed-sp-3); }
+#thumbs canvas.thumb {
+  border-radius: var(--ed-radius-xs);
+  box-shadow: var(--ed-sombra-papel);
+  outline-offset: 3px;
+  transition: box-shadow var(--ed-dur-1) var(--ed-curva);
+}
+#thumbs canvas.thumb:hover { box-shadow: var(--ed-sombra-papel), 0 0 0 3px var(--ed-hover); }
 #outline-panel { color: var(--ed-text); font-size: var(--ed-font-sm); }
 .outline-item, .outline-toggle { color: inherit; }
 
+/* Lienzo "mesa de luz" (E-130): un foco de luz suave arriba y la hoja con sombra de papel
+   (--ed-sombra-papel, puesta por Viewer.layout). Solo pinta el fondo: la geometría de la página
+   y sus capas no cambia. */
 #viewer {
   flex: 1;
   overflow: auto;
-  background: var(--ed-stage);
+  background:
+    radial-gradient(120% 60% at 50% 0%, var(--ed-stage-luz), transparent 70%) fixed,
+    var(--ed-stage);
   padding: var(--ed-sp-4);
 }
 
 /* ── Aviso de advertencias de conversión (§9 fila #4) ───────────────────── */
 .conversion-warnings {
   flex: 0 0 auto;
-  background: var(--ed-warning-bg, #fff7e6);
-  border-bottom: 1px solid var(--ed-warning-border, #e8b93f);
-  color: var(--ed-warning-text, #6b4c00);
+  background: var(--ed-warning-bg);
+  border-bottom: 1px solid var(--ed-warning-border);
+  color: var(--ed-warning-text);
   font-size: var(--ed-font-sm);
   padding: var(--ed-sp-2) var(--ed-sp-3);
 }
@@ -392,10 +325,12 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   border-top: 1px solid var(--ed-border);
   color: var(--ed-text-muted);
   font-size: var(--ed-font-xs);
+  gap: var(--ed-sp-3);
 }
+#status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .page-nav { display: flex; align-items: center; gap: 2px; }
 .page-nav .icon-btn { height: 22px; min-width: 22px; }
-#page-indicator { min-width: 4.5em; text-align: center; }
+#page-indicator { min-width: 4.5em; text-align: center; font-variant-numeric: tabular-nums; color: var(--ed-text); }
 
 /*
  * Capa de texto vivo (E-029): estados por CSS, no por JS inline.
@@ -420,7 +355,7 @@ select, input[type="text"], input[type="search"], input[type="number"] {
  * (.run) no deben dejar que el navegador pinte su propia selección nativa al arrastrar.
  */
 .sel-rect {
-  background: rgba(37, 99, 235, 0.3);
+  background: var(--ed-sel);
   border-radius: 1px;
 }
 .run {
@@ -458,7 +393,7 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   outline-offset: 1px;
 }
 .run.editing {
-  background: #fff;
+  background: var(--ed-papel);
   outline: 1px solid var(--ed-accent);
   z-index: 1;
 }
@@ -468,12 +403,12 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   box-sizing: border-box;
 }
 .run-mask.active {
-  background: #fff;
+  background: var(--ed-papel);
 }
 .run-drag {
   border-radius: 50%;
   background: var(--ed-accent);
-  border: 2px solid #fff;
+  border: 2px solid var(--ed-papel);
   cursor: move;
   opacity: 0;
   pointer-events: none;
@@ -509,7 +444,7 @@ select, input[type="text"], input[type="search"], input[type="number"] {
   width: 10px;
   height: 10px;
   background: var(--ed-accent);
-  border: 2px solid #fff;
+  border: 2px solid var(--ed-papel);
   border-radius: 2px;
   opacity: 0;
   pointer-events: none;
@@ -691,17 +626,17 @@ select, input[type="text"], input[type="search"], input[type="number"] {
     max-width: 320px;
     z-index: 50;
     transform: translateX(-100%);
-    transition: transform .2s ease;
-    box-shadow: 2px 0 12px rgba(0, 0, 0, .35);
+    transition: transform var(--ed-dur-3) var(--ed-curva);
+    /* Sin sombra mientras está cerrado: fuera de pantalla, su difuminado se derramaría sobre la página. */
   }
-  #sidebar.abierto { transform: translateX(0); }
+  #sidebar.abierto { transform: translateX(0); box-shadow: var(--ed-sombra-3); }
   #sidebar button { min-height: 40px; }
 
   #drawer-backdrop.visible {
     display: block;
     position: absolute;
     inset: 0;
-    background: rgba(0, 0, 0, .4);
+    background: var(--ed-velo);
     z-index: 40;
   }
 }
@@ -752,7 +687,7 @@ dialog.compress-panel[open] { display: flex; }
 .comentario-meta { font-size: 11px; color: var(--ed-text-muted); }
 .comentario-texto { overflow-wrap: anywhere; white-space: pre-line; }
 .comentario-marcado { overflow-wrap: anywhere; font-style: italic; }
-.note-marker.activa { outline: 2px solid var(--ed-accent); background: rgba(250, 204, 21, .35) !important; }
+.note-marker.activa { outline: 2px solid var(--ed-accent); background: var(--ed-anotacion-activa) !important; }
 
 /* Panel de marcadores editable: barra de acciones, selección y campo de título inline. */
 #outline-toolbar { flex: 0 0 auto; flex-wrap: wrap; gap: 2px; padding: var(--ed-sp-1, 4px); border-bottom: 1px solid var(--ed-border); }
@@ -764,26 +699,24 @@ dialog.compress-panel[open] { display: flex; }
 #outline-panel input.outline-edit { font: inherit; color: var(--ed-text); background: var(--ed-surface, transparent); border: 1px solid var(--ed-accent); border-radius: var(--ed-radius-sm); padding: 1px 4px; }
 
 /* ── Encabezado, pie y marca de agua ────────────────────────────────────── */
-/* Diálogo anclado a la derecha para que la página (vista previa en vivo) quede visible a su izquierda. */
+/* Usa el diálogo del sistema (.dlg, tema.css §4.4). Anclado a la derecha para que la página
+   (vista previa en vivo) quede visible a su izquierda; velo más ligero por la misma razón. */
 dialog.encabezado-panel[open] {
-  display: flex; flex-direction: column; gap: var(--ed-sp-2);
-  margin: 0 var(--ed-sp-3) 0 auto; max-height: 96vh; overflow: auto;
-  width: 28em; max-width: 94vw; padding: var(--ed-sp-3);
-  background: #fff; color: #000; border: 1px solid var(--ed-border); border-radius: 8px; font: 14px sans-serif;
+  display: flex;
+  flex-direction: column;
+  margin: auto var(--ed-sp-4) auto auto;
+  width: 30rem;
+  max-width: 94vw;
+  max-height: 92vh;
 }
-dialog.encabezado-panel::backdrop { background: rgba(0, 0, 0, .12); }
-.eh-titulo { font-weight: bold; }
-.eh-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--ed-border); }
-.eh-tabs button { white-space: nowrap; border: 0; background: none; padding: 6px 10px; cursor: pointer; border-bottom: 2px solid transparent; }
-.eh-tabs button[aria-selected="true"] { border-bottom-color: currentColor; font-weight: bold; }
-.eh-rejilla { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
-.eh-rejilla input { min-width: 0; }
-.eh-fila { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
-.eh-campo { flex: 0 1 9em; overflow-wrap: anywhere; }
-.eh-fila input[type="text"], .eh-fila input[type="number"], .eh-fila select { flex: 1; min-width: 0; }
-.eh-ayuda { font-size: 12px; color: #555; margin-top: 6px; }
-.eh-mensaje { min-height: 1.2em; font-size: 13px; }
-.eh-barra { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+dialog.encabezado-panel::backdrop { background: color-mix(in srgb, var(--ed-velo) 40%, transparent); }
+.eh-panel { display: flex; flex-direction: column; gap: var(--ed-sp-3); }
+.eh-cajas { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--ed-sp-2); }
+.eh-caja { display: flex; flex-direction: column; gap: var(--ed-sp-1); min-width: 0; }
+.eh-caja-etiqueta { font-size: var(--ed-font-xs); font-weight: var(--ed-peso-medio); color: var(--ed-text-muted); }
+.eh-caja input { width: 100%; min-height: var(--ed-control-h); }
+.eh-panel .campos input:not([type="color"]):not([type="range"]), .eh-panel .campos select { min-height: var(--ed-control-h); }
+.eh-ayuda { margin: 0; }
 .encabezado-panel [hidden] { display: none !important; }
 
 /* Anotación (resaltado, subrayado, tachado, nota) seleccionada con un clic (T14): contorno visible, sin tapar el texto. */
@@ -791,7 +724,7 @@ dialog.encabezado-panel::backdrop { background: rgba(0, 0, 0, .12); }
   box-sizing: border-box;
   border: 2px solid var(--ed-focus-ring);
   border-radius: 2px;
-  box-shadow: 0 0 0 1px #fff;
+  box-shadow: 0 0 0 1px var(--ed-papel);
 }
 
 /* Texto solo para lectores de pantalla (B-04). */
@@ -807,15 +740,7 @@ dialog.encabezado-panel::backdrop { background: rgba(0, 0, 0, .12); }
   border: 0;
 }
 
-/* B-05 (WCAG 2.3.3): quien pide menos movimiento no ve transiciones ni animaciones. */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    transition-duration: 0.01ms !important;
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    scroll-behavior: auto !important;
-  }
-}
+/* B-05 (WCAG 2.3.3) / E-130: «menos movimiento» se resuelve en tema.css (duración computada 0). */
 
 /* Enlaces internos del PDF (Viewer.drawLinks): cajas invisibles sobre el enlace; solo se ven al enfocarlas con el teclado. */
 .link-box:focus-visible {

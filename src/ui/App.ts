@@ -77,6 +77,7 @@ import { textoMarcadoDeAnotacion } from '../texto/textoMarcado';
 import { SetNoteTextCmd } from '../commands/SetNoteText';
 import { RemoveNoteCmd } from '../commands/RemoveNote';
 import { crearIcono, type NombreIcono } from './iconos';
+import { alternarTema, temaEfectivo } from './tema';
 import { contarRenderPage } from '../diagnostico';
 
 /**
@@ -539,6 +540,9 @@ export class App {
     btnShortcuts.title = 'Atajos de teclado';
     btnShortcuts.setAttribute('aria-label', 'Mostrar los atajos de teclado');
     btnShortcuts.addEventListener('click', () => AtajosPanel.open());
+    // Conmutador de tema (E-130): sin elegir, la app sigue al sistema; al pulsar fija el contrario y lo recuerda.
+    const btnTema = this.iconBoton('tema', 'Cambiar tema', 'btn-tema', () => { alternarTema(); this.reflejarTema(btnTema); });
+    this.reflejarTema(btnTema);
 
     // Cajón móvil (§9 #35): abre/cierra `#sidebar` en ≤768px. Oculto por
     // completo en escritorio (CSS), donde el panel lateral ya es siempre
@@ -606,7 +610,7 @@ export class App {
       Object.assign(document.createElement('div'), { className: 'topbar-spacer' }),
       grupoZoom, this.separador('topbar-sep'),
       searchBox, this.btnReplaceToggle, this.separador('topbar-sep'),
-      btnShortcuts
+      btnTema, btnShortcuts
     );
     topbar.append(this.btnDrawer, topbarScroll, this.btnMore);
 
@@ -1065,6 +1069,7 @@ export class App {
    * la elección en `localStorage` (envuelto en try/catch, `guardarPestanaActiva`).
    */
   private activarPestana(id: PestanaId): void {
+    const cambia = id !== this.tabActiva;
     this.tabActiva = id;
     for (const p of PESTANAS) {
       const activa = p.id === id;
@@ -1074,6 +1079,24 @@ export class App {
       this.contextBars[p.id].classList.toggle('activa', activa);
     }
     guardarPestanaActiva(id);
+    // E-130: la barra de estado habla de la pestaña que se ve. Un aviso de otra pestaña
+    // («Selecciona una línea para subrayarla.» al pasar a Organizar) se sustituye por el
+    // estado de reposo; una operación larga en curso conserva su progreso.
+    if (cambia && !this.operacion) this.setStatus(this.estadoReposo());
+  }
+
+  /** Texto de la barra de estado sin aviso pendiente: la herramienta activa o el nº de páginas. */
+  private estadoReposo(): string {
+    if (this.tool !== 'none') return TOOL_STATUS[this.tool];
+    return this.session ? `${this.session.model.pages.length} página(s)` : '';
+  }
+
+  /** Nombre accesible y estado del conmutador de tema según el tema que se ve. */
+  private reflejarTema(btn: HTMLButtonElement): void {
+    const oscuro = temaEfectivo() === 'dark';
+    const etiqueta = oscuro ? 'Cambiar a tema claro' : 'Cambiar a tema oscuro';
+    btn.title = etiqueta;
+    btn.setAttribute('aria-label', etiqueta);
   }
 
   /**
@@ -1091,7 +1114,6 @@ export class App {
     for (const [nombre, btn] of Object.entries(this.toolButtons()) as [Exclude<ToolMode, 'none'>, HTMLButtonElement][]) {
       const activo = tool === nombre;
       btn.setAttribute('aria-pressed', String(activo));
-      btn.style.background = activo ? '#c7d2fe' : '';
     }
     this.viewer?.setTool(tool);
     // La vista previa de pluma/rectángulo en el visor usa un único color a
@@ -1135,7 +1157,7 @@ export class App {
     for (const b of this.swatchButtons) {
       const activo = (b.dataset.color ?? '').toLowerCase() === hex.toLowerCase();
       b.setAttribute('aria-pressed', String(activo));
-      b.style.borderColor = activo ? '#111827' : 'transparent';
+      b.style.borderColor = activo ? 'var(--ed-text)' : 'transparent';
     }
     this.toolColorInput.value = hex;
   }
@@ -2427,7 +2449,7 @@ export class App {
       t.classList.toggle('active', activa);
       if (activa) t.setAttribute('aria-current', 'page');
       else t.removeAttribute('aria-current');
-      t.style.outline = activa ? '2px solid #6366f1' : 'none';
+      t.style.outline = activa ? '2px solid var(--ed-accent)' : 'none';
     }
   }
 
@@ -2504,7 +2526,7 @@ export class App {
       canvas.dataset.page = String(page.index);
       canvas.dataset.scale = String(scale);
       canvas.className = 'thumb';
-      Object.assign(canvas.style, { display: 'block', width: '100%', height: 'auto', marginBottom: '8px', cursor: 'pointer', background: '#fff', boxSizing: 'border-box' });
+      Object.assign(canvas.style, { display: 'block', width: '100%', height: 'auto', marginBottom: '8px', cursor: 'pointer', background: 'var(--ed-papel)', boxSizing: 'border-box' });
 
       // Un clic SIN arrastre navega (comportamiento de siempre); un arrastre
       // que supere el umbral reordena y no debe además disparar el 'click'
