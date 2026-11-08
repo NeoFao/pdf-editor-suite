@@ -44,6 +44,9 @@ const DIBUJOS: Record<string, Trazo> = {
   'ajustar-ancho': () => [R(6, 4, 8, 12, 1.2), P('M2.5 10 h2.2'), P('M2.5 10 l2 -1.8 M2.5 10 l2 1.8'), P('M17.5 10 h-2.2'), P('M17.5 10 l-2 -1.8 M17.5 10 l-2 1.8')],
   buscar: () => [C(8.7, 8.7, 5.2), L(12.6, 12.6, 17, 17)],
   menu: () => [L(3, 5.5, 17, 5.5), L(3, 10, 17, 10), L(3, 14.5, 17, 14.5)],
+  // Tema claro/oscuro (E-130): círculo con la mitad derecha rellena.
+  tema: () => [C(10, 10, 6.5), el('path', { d: 'M10 3.5 a6.5 6.5 0 0 1 0 13 Z', fill: 'currentColor', stroke: 'none' })],
+  cerrar: () => [L(5.5, 5.5, 14.5, 14.5), L(14.5, 5.5, 5.5, 14.5)],
   'mas-opciones': () => [PUNTO(4.5, 10, 1.15), PUNTO(10, 10, 1.15), PUNTO(15.5, 10, 1.15)],
   'insertar-texto': () => [L(5, 4.5, 15, 4.5), L(10, 4.5, 10, 15.5), L(7, 15.5, 13, 15.5)],
   // Revisión de PR #63: el rectángulo con las dos diagonales se leía como un

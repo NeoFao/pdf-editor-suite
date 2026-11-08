@@ -11,6 +11,7 @@
  * Unidades: la geometría va en pt; a CSS se pasa multiplicando por `escala` (px CSS por pt).
  */
 import { mostrarModal } from './dialogo';
+import { crearIcono } from './iconos';
 import { parseRange } from './pageRange';
 import { cssFontFor } from './cssFontFor';
 import { STANDARD_FONTS } from '../engine/standardFontFor';
@@ -45,13 +46,14 @@ const FUENTES = STANDARD_FONTS.filter((f) => f !== 'Symbol' && f !== 'ZapfDingba
 /** Fracción del cuerpo desde el borde superior de la caja de línea (line-height: 1) hasta la línea base, Helvetica. */
 const BASE_EN_LINEA = 0.7555;
 
-const CAJAS: { zona: Zona; alineacion: Alineacion; id: string; etiqueta: string }[] = [
-  { zona: 'arriba', alineacion: 'izq', id: 'eh-arriba-izq', etiqueta: 'Arriba, izquierda' },
-  { zona: 'arriba', alineacion: 'centro', id: 'eh-arriba-centro', etiqueta: 'Arriba, centro' },
-  { zona: 'arriba', alineacion: 'der', id: 'eh-arriba-der', etiqueta: 'Arriba, derecha' },
-  { zona: 'abajo', alineacion: 'izq', id: 'eh-abajo-izq', etiqueta: 'Abajo, izquierda' },
-  { zona: 'abajo', alineacion: 'centro', id: 'eh-abajo-centro', etiqueta: 'Abajo, centro' },
-  { zona: 'abajo', alineacion: 'der', id: 'eh-abajo-der', etiqueta: 'Abajo, derecha' }
+/** `columna` es la etiqueta VISIBLE (el nombre accesible completo, `etiqueta`, la contiene: WCAG 2.5.3). */
+const CAJAS: { zona: Zona; alineacion: Alineacion; id: string; etiqueta: string; columna: string }[] = [
+  { zona: 'arriba', alineacion: 'izq', id: 'eh-arriba-izq', etiqueta: 'Arriba, izquierda', columna: 'Izquierda' },
+  { zona: 'arriba', alineacion: 'centro', id: 'eh-arriba-centro', etiqueta: 'Arriba, centro', columna: 'Centro' },
+  { zona: 'arriba', alineacion: 'der', id: 'eh-arriba-der', etiqueta: 'Arriba, derecha', columna: 'Derecha' },
+  { zona: 'abajo', alineacion: 'izq', id: 'eh-abajo-izq', etiqueta: 'Abajo, izquierda', columna: 'Izquierda' },
+  { zona: 'abajo', alineacion: 'centro', id: 'eh-abajo-centro', etiqueta: 'Abajo, centro', columna: 'Centro' },
+  { zona: 'abajo', alineacion: 'der', id: 'eh-abajo-der', etiqueta: 'Abajo, derecha', columna: 'Derecha' }
 ];
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLElementTagNameMap[K]> & { id?: string } = {}, ...hijos: (Node | string)[]): HTMLElementTagNameMap[K] {
@@ -61,13 +63,30 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, props: Partial<HTMLEl
   return e;
 }
 
-function campo(etiqueta: string, control: HTMLElement, id: string): HTMLElement {
+/** Fila de la rejilla `.campos` (sistema de diseño, E-130): etiqueta visible a la izquierda, control a la derecha. */
+function campo(etiqueta: string, control: HTMLElement, id: string, ...extra: HTMLElement[]): HTMLElement {
   const l = el('label', { htmlFor: id }, etiqueta);
-  l.className = 'eh-campo';
+  l.className = 'campo-etiqueta';
+  const c = el('div');
+  c.className = 'campo-control';
+  c.append(control, ...extra);
   const f = el('div');
-  f.className = 'eh-fila';
-  f.append(l, control);
+  f.className = 'campo';
+  f.append(l, c);
   return f;
+}
+
+/** Contenedor con clase (evita repetir `className` en cada nodo de maquetación). */
+function caja<K extends keyof HTMLElementTagNameMap>(tag: K, clase: string, ...hijos: (Node | string)[]): HTMLElementTagNameMap[K] {
+  const e = el(tag, {}, ...hijos);
+  e.className = clase;
+  return e;
+}
+
+function boton(id: string, clase: string, texto: string): HTMLButtonElement {
+  const b = el('button', { id, type: 'button' }, texto);
+  b.className = clase;
+  return b;
 }
 
 function numero(id: string, valor: number, min: number, max: number, paso = 1): HTMLInputElement {
@@ -86,28 +105,49 @@ export class EncabezadoPanel {
   static abrir(o: OpcionesPanelEncabezado): void {
     const dialog = el('dialog', { id: 'encabezado-panel' });
     dialog.className = 'encabezado-panel';
-    const titulo = el('div', { id: 'encabezado-panel-titulo' }, 'Encabezado, pie y marca de agua');
-    titulo.className = 'eh-titulo';
+    const titulo = caja('h2', 'dlg-titulo', 'Encabezado, pie y marca de agua');
+    titulo.id = 'encabezado-panel-titulo';
+    const btnCerrar = el('button', { type: 'button', title: 'Cerrar' });
+    btnCerrar.className = 'btn btn--fantasma btn--icono dlg-cerrar';
+    btnCerrar.setAttribute('aria-label', 'Cerrar');
+    btnCerrar.appendChild(crearIcono('cerrar'));
+    const cabecera = caja('div', 'dlg-cabecera', titulo, btnCerrar);
 
-    // ── Pestañas ──
+    // ── Pestañas (segmentadas, sistema de diseño §4.5) ──
     const tablist = el('div', { role: 'tablist' });
-    tablist.className = 'eh-tabs';
+    tablist.className = 'pestanas';
+    tablist.setAttribute('aria-label', 'Tipo de añadido');
     const tabEnc = el('button', { id: 'eh-tab-encabezado', type: 'button', role: 'tab' }, 'Encabezado y pie');
     const tabMarca = el('button', { id: 'eh-tab-marca', type: 'button', role: 'tab' }, 'Marca de agua');
+    tabEnc.className = tabMarca.className = 'pestana';
     tablist.append(tabEnc, tabMarca);
 
     // ── Panel 1: encabezado y pie ──
+    // Dos grupos (Encabezado / Pie de página) con tres cajas cada uno, cada caja con su etiqueta
+    // visible: antes eran seis inputs sueltos con el placeholder como única pista (E-130).
     const cajas = new Map<string, HTMLInputElement>();
-    const rejilla = el('div');
-    rejilla.className = 'eh-rejilla';
-    for (const c of CAJAS) {
-      const input = el('input', { id: c.id, type: 'text', placeholder: c.etiqueta });
-      input.setAttribute('aria-label', c.etiqueta);
-      cajas.set(c.id, input);
-      rejilla.appendChild(input);
-    }
-    const ayuda = el('div', {}, 'Macros: <<n>> número de página, <<total>> total de páginas, <<fecha>> fecha de hoy (dd/mm/aaaa).');
-    ayuda.className = 'eh-ayuda';
+    const grupoZona = (zona: Zona, leyenda: string): HTMLFieldSetElement => {
+      const fs = caja('fieldset', 'grupo eh-zona', caja('legend', 'grupo-titulo', leyenda));
+      const fila = caja('div', 'eh-cajas');
+      for (const c of CAJAS.filter((x) => x.zona === zona)) {
+        const input = el('input', { id: c.id, type: 'text' });
+        input.setAttribute('aria-label', c.etiqueta);
+        cajas.set(c.id, input);
+        const l = el('label', { htmlFor: c.id }, c.columna);
+        l.className = 'eh-caja-etiqueta';
+        fila.appendChild(caja('div', 'eh-caja', l, input));
+      }
+      fs.appendChild(fila);
+      return fs;
+    };
+    const zonaArriba = grupoZona('arriba', 'Encabezado');
+    const zonaAbajo = grupoZona('abajo', 'Pie de página');
+    // Foco inicial en el primer campo (showModal respeta `autofocus`), no en la pestaña.
+    cajas.get('eh-arriba-izq')!.autofocus = true;
+    const ayuda = caja('p', 'campo-ayuda eh-ayuda',
+      'Macros: ', caja('code', 'codigo', '<<n>>'), ' número de página, ',
+      caja('code', 'codigo', '<<total>>'), ' total de páginas, ',
+      caja('code', 'codigo', '<<fecha>>'), ' fecha de hoy (dd/mm/aaaa).');
     const ehInicio = numero('eh-inicio', 1, 0, 99999);
     const ehRango = el('input', { id: 'eh-rango', type: 'text', placeholder: 'Todas (ej.: 1-3, 5)' });
     const ehFuente = selectorFuente('eh-fuente', 'Helvetica');
@@ -116,8 +156,11 @@ export class EncabezadoPanel {
     const ehMargenH = numero('eh-margen-h', 36, 0, 300);
     const ehMargenV = numero('eh-margen-v', 28, 0, 300);
     const panelEnc = el('div', { id: 'eh-panel-encabezado', role: 'tabpanel' });
-    panelEnc.append(
-      rejilla, ayuda,
+    panelEnc.className = 'eh-panel';
+    panelEnc.setAttribute('aria-labelledby', 'eh-tab-encabezado');
+    const camposEnc = caja('div', 'campos');
+    panelEnc.append(zonaArriba, zonaAbajo, ayuda, camposEnc);
+    camposEnc.append(
       campo('Número inicial', ehInicio, 'eh-inicio'),
       campo('Páginas', ehRango, 'eh-rango'),
       campo('Fuente', ehFuente, 'eh-fuente'),
@@ -135,14 +178,18 @@ export class EncabezadoPanel {
     const maOpacidad = el('input', { id: 'ma-opacidad', type: 'range', value: '30' });
     maOpacidad.min = '0'; maOpacidad.max = '100';
     const maOpacidadValor = el('span', { id: 'ma-opacidad-valor' }, '30 %');
-    const filaOpacidad = campo('Opacidad', maOpacidad, 'ma-opacidad');
-    filaOpacidad.appendChild(maOpacidadValor);
+    maOpacidadValor.className = 'campo-extra';
+    const filaOpacidad = campo('Opacidad', maOpacidad, 'ma-opacidad', maOpacidadValor);
     const maRotacion = numero('ma-rotacion', 45, -180, 180);
     const maCapa = el('select', { id: 'ma-capa' });
     maCapa.append(el('option', { value: 'delante' }, 'Delante del contenido'), el('option', { value: 'detras' }, 'Detrás del contenido'));
     const maRango = el('input', { id: 'ma-rango', type: 'text', placeholder: 'Todas (ej.: 1-3, 5)' });
     const panelMarca = el('div', { id: 'eh-panel-marca', role: 'tabpanel' });
-    panelMarca.append(
+    panelMarca.className = 'eh-panel';
+    panelMarca.setAttribute('aria-labelledby', 'eh-tab-marca');
+    const camposMarca = caja('div', 'campos');
+    panelMarca.appendChild(camposMarca);
+    camposMarca.append(
       campo('Texto', maTexto, 'ma-texto'),
       campo('Fuente', maFuente, 'ma-fuente'),
       campo('Tamaño (pt)', maSize, 'ma-size'),
@@ -152,22 +199,20 @@ export class EncabezadoPanel {
       campo('Posición', maCapa, 'ma-capa'),
       campo('Páginas', maRango, 'ma-rango')
     );
-    const posicion = el('div', {}, 'Centrada en la página.');
-    posicion.className = 'eh-ayuda';
-    panelMarca.appendChild(posicion);
+    camposMarca.appendChild(caja('p', 'campo-ayuda eh-ayuda', 'La marca se coloca centrada en la página.'));
 
     // ── Pie del diálogo ──
-    const mensaje = el('div', { id: 'eh-mensaje' });
-    mensaje.className = 'eh-mensaje';
+    const mensaje = el('p', { id: 'eh-mensaje' });
+    mensaje.className = 'dlg-mensaje';
     mensaje.setAttribute('role', 'status');
-    const btnQuitar = el('button', { id: 'eh-quitar', type: 'button' }, 'Quitar los añadidos por este editor');
-    const btnCancelar = el('button', { id: 'eh-cancelar', type: 'button' }, 'Cancelar');
-    const btnAplicar = el('button', { id: 'eh-aplicar', type: 'button' }, 'Aplicar');
-    const barra = el('div');
-    barra.className = 'eh-barra';
-    barra.append(btnQuitar, btnCancelar, btnAplicar);
+    // Jerarquía: la acción destructiva a la izquierda y discreta; la primaria, la última y destacada.
+    const btnQuitar = boton('eh-quitar', 'btn btn--peligro dlg-pie-izq', 'Quitar los añadidos por este editor');
+    const btnCancelar = boton('eh-cancelar', 'btn btn--secundario', 'Cancelar');
+    const btnAplicar = boton('eh-aplicar', 'btn btn--primario', 'Aplicar');
+    const pie = caja('div', 'dlg-pie', btnQuitar, btnCancelar, btnAplicar);
+    const cuerpo = caja('div', 'dlg-cuerpo', tablist, panelEnc, panelMarca, mensaje);
 
-    dialog.append(titulo, tablist, panelEnc, panelMarca, mensaje, barra);
+    dialog.append(cabecera, cuerpo, pie);
 
     // ── Estado ──
     let pestana: 'encabezado' | 'marca' = 'encabezado';
@@ -264,9 +309,10 @@ export class EncabezadoPanel {
     dialog.addEventListener('change', actualizarVista);
 
     const progreso = (hechas: number, total: number): void => { mensaje.textContent = `Procesando… ${hechas} de ${total} páginas`; };
-    const bloquear = (v: boolean): void => { ocupado = v; btnAplicar.disabled = btnQuitar.disabled = btnCancelar.disabled = v; };
+    const bloquear = (v: boolean): void => { ocupado = v; btnAplicar.disabled = btnQuitar.disabled = btnCancelar.disabled = btnCerrar.disabled = v; };
 
     btnCancelar.addEventListener('click', () => dialog.close());
+    btnCerrar.addEventListener('click', () => dialog.close());
     btnAplicar.addEventListener('click', () => {
       let op: { encabezado: OpcionesEncabezado } | { marca: OpcionesMarcaAgua };
       if (pestana === 'encabezado') {

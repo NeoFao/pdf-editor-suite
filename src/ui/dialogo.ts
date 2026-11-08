@@ -20,6 +20,9 @@ export interface OpcionesModal {
 
 export function mostrarModal(dialog: HTMLDialogElement, opciones: OpcionesModal): void {
   const disparador = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  // E-130: todo diálogo modal recibe el aspecto base del sistema de diseño (vidrio, radio, sombra,
+  // entrada con escala y opacidad). Ver tema.css §4.4 y docs/ui/sistema-de-diseno.md.
+  dialog.classList.add('dlg');
   dialog.setAttribute('aria-modal', 'true');
   dialog.setAttribute('aria-labelledby', opciones.tituloId);
 

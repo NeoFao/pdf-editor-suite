@@ -3800,3 +3800,44 @@ sin `pageerror` y demás páginas pintadas). Mide trabajo, no tiempo (E-040). Si
 **Límites.** No hay render por zonas (tiles): una página enorme a zoom alto se ve a resolución reducida en vez de nítida. Propuesto, no hecho:
 pintar solo la zona visible. El primer render a escala 1 antes de `fitWidth` sigue existiendo (ahora acotado a 8 Mpx).
 ---
+
+### E-130 · La interfaz nueva sin sistema de diseño: diálogo blanco con pestañas invisibles en tema oscuro, estado de otra pestaña y colores sueltos
+
+**Síntoma.** (Captura del dueño, pestaña Organizar, diálogo «Encabezado, pie y marca de agua».) En tema oscuro el diálogo era blanco
+sobre una app oscura y bajo el título se veía una franja vacía con aspecto de campo huérfano: eran las dos pestañas del diálogo, botones
+sin color propio que heredaban el `ButtonText` claro del esquema oscuro sobre fondo blanco (contraste ≈ 1:1, invisibles). Los seis
+campos de encabezado/pie no tenían etiqueta visible (solo placeholder de bajo contraste), el resto de campos no estaban alineados, los
+botones eran grises planos sin jerarquía (Aplicar igual que Cancelar), el campo «1-3,5» de la cinta parecía deshabilitado, y la barra de
+estado seguía mostrando «Selecciona una línea para subrayarla.» después de pasar a Organizar. Con `prefers-reduced-motion` las
+transiciones duraban 0,01 ms, no 0.
+
+**Causa raíz.** No había sistema de diseño: los tokens `--ed-*` cubrían solo la carcasa y cada panel (`EncabezadoPanel`, `CompressPanel`,
+`TextPanel`, `AtajosPanel`, `enlaceExterno`…) ponía colores literales a mano (`background: #fff`, `color: #000`, `#555`), que no cambian
+con el tema; los controles nativos sin estilo heredaban los colores del esquema del sistema. La barra de estado solo se escribía por
+eventos (`setStatus`) y cambiar de pestaña no la tocaba. Nada vigilaba los colores sueltos.
+
+**Arreglo.** `src/ui/tema.css` (importado antes que `estilos.css`) es el único sitio con colores: tokens de superficies por niveles,
+texto (3 niveles), acento cobalto, estados, semánticos, bordes, radios, sombras por elevación, espaciado de 4 px, tipografía de sistema,
+alturas de control y movimiento, para claro y oscuro (con `data-theme` manual y `prefers-color-scheme`), vidrio con alternativa sólida
+(`prefers-reduced-transparency`, `@supports`), y componentes base (`.btn` y variantes, `.icon-btn`, `.campos`/`.campo`, `.grupo`,
+`.dlg` con cabecera/cuerpo/pie y entrada con escala y opacidad, `.pestanas`, `[data-tooltip]`, `.toast`, `.panel-lateral`, `.vidrio`).
+`mostrarModal` añade `.dlg` a todo diálogo. El diálogo de encabezado es el ejemplo completo: grupos Encabezado / Pie de página con
+etiqueta visible por caja, rejilla de dos columnas, foco inicial en el primer campo (`autofocus`), pie con la acción destructiva a la
+izquierda y Cancelar/Aplicar a la derecha (Aplicar primario). `App.activarPestana` repone el estado de reposo al cambiar de pestaña
+(la indicación de la herramienta activa o el nº de páginas; una operación larga conserva su progreso). Conmutador `#btn-tema`
+(`src/ui/tema.ts`, recordado en `localStorage` con try/catch). Menos movimiento: duración computada 0. Papel y sombra de la página,
+miniatura activa y botones de herramienta pasan a tokens. Sin tocar geometría, coordenadas ni lógica de edición.
+
+**Cómo se detecta ahora.** `tests/e2e/next/sistema-diseno.spec.ts` (Chromium real, estilos computados; 8 de 10 vistos fallar antes):
+estado por pestaña, sin campo huérfano y foco inicial en el primer campo con etiqueta, jerarquía del pie, duración 0 con
+`reducedMotion: 'reduce'` en TODOS los elementos y pseudoelementos, contraste ≥ 4,5 de todo texto de la carcasa (5 pestañas) y del
+diálogo (2 pestañas) y de los placeholders en claro y oscuro (componiendo fondos translúcidos y, sobre vidrio, el peor caso sobre
+negro y blanco), `forced-colors` y el conmutador de tema. Regla guard `sin-color-literal-en-ui`: ningún color hex/rgb/hsl literal en
+`src/ui/**/*.ts` ni en el CSS de `src/` fuera de `src/ui/tema.css`; los ficheros antiguos tienen un tope por fichero que solo baja
+(`TOPE_COLORES_LITERALES`, mismo patrón que `sin-espera-fija-en-next`), con su test en `reglas.test.mjs`. Guía y checklist para
+migrar el resto de pantallas: `docs/ui/sistema-de-diseno.md`.
+
+**Límites.** El cierre de los diálogos no se anima: `mostrarModal` retira el `<dialog>` del DOM en el evento `close` para devolver el
+foco y no dejar ids duplicados, y retrasarlo cambiaría ese contrato. Los demás paneles (compresión, texto, atajos, firma, enlaces
+externos, nota, mis firmas) solo heredan el aspecto base de `.dlg`; su migración completa es la fase 2 (lista ordenada en el doc).
+---

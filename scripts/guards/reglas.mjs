@@ -1624,6 +1624,70 @@ export const sinPuertoE2eAMano = {
   }
 };
 
+/* ── E-130 · colores literales en la interfaz fuera del sistema de diseño ──── */
+/** Único fichero que puede declarar colores: los tokens del sistema de diseño. */
+export const FICHERO_TEMA = 'src/ui/tema.css';
+
+/**
+ * Tope por fichero de colores literales heredados antes de E-130. Solo puede BAJAR: un fichero nuevo tiene 0
+ * y subir un número aquí es la violación que la regla existe para evitar (AGENTS.md §3). Lo que queda son
+ * paneles de la fase 2 (docs/ui/sistema-de-diseno.md) y colores que son DATOS (paleta de anotación, color
+ * por defecto de un campo `type=color`), no decoración.
+ */
+export const TOPE_COLORES_LITERALES = {
+  'src/ui/App.ts': 8, 'src/ui/AtajosPanel.ts': 2, 'src/ui/CompressPanel.ts': 4, 'src/ui/EncabezadoPanel.ts': 2,
+  'src/ui/MisFirmasPanel.ts': 2, 'src/ui/SignaturePad.ts': 3, 'src/ui/TextPanel.ts': 2, 'src/ui/Viewer.ts': 14,
+  'src/ui/enlaceExterno.ts': 4
+};
+
+const COLOR_LITERAL = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?)\(\s*[\d.]/g;
+
+/** Pura: una entrada (nº de línea) por cada color literal fuera de comentarios y de líneas exentas con razón. */
+export function coloresLiteralesEn(contenido, idRegla = 'sin-color-literal-en-ui') {
+  const exentas = lineasExentas(contenido, idRegla);
+  const lineas = [];
+  contenido.split(/\r?\n/).forEach((linea, i) => {
+    if (/^\s*(\/\/|\/\*|\*)/.test(linea) || exentas.has(i + 1)) return;
+    const sinComentarioFinal = linea.replace(/\/\/.*$|\/\*.*?\*\//g, '');
+    const n = sinComentarioFinal.match(COLOR_LITERAL)?.length ?? 0;
+    for (let k = 0; k < n; k++) lineas.push(i + 1);
+  });
+  return lineas;
+}
+
+export const sinColorLiteralEnUi = {
+  id: 'sin-color-literal-en-ui',
+  titulo: 'src/ui y el CSS de la app nueva no escriben colores hex/rgb/hsl: usan los tokens de src/ui/tema.css',
+  comoArreglar:
+    'Usa un token del sistema de diseño (var(--ed-text), var(--ed-accent), var(--ed-surface-2)…) o, si falta, ' +
+    'añádelo en src/ui/tema.css para los DOS temas con su contraste calculado (docs/ui/sistema-de-diseno.md). ' +
+    'Un color suelto no cambia con el tema oscuro y rompe el contraste (E-130: diálogo blanco con pestañas ' +
+    'invisibles en la app oscura). Si el color es un DATO (el color de una anotación, el valor por defecto de ' +
+    'un input type=color), usa el escape con esa razón. Los ficheros antiguos tienen un tope que solo baja.',
+  ejecutar() {
+    const hallazgos = [];
+    const revisar = (rel) => {
+      if (rel === FICHERO_TEMA || tieneDeuda(rel, this.id)) return;
+      const lineas = coloresLiteralesEn(leer(rel), this.id);
+      const tope = TOPE_COLORES_LITERALES[rel] ?? 0;
+      if (lineas.length > tope) {
+        hallazgos.push(hallazgo(rel, lineas[tope], `${lineas.length} colores literales frente a un tope de ${tope}: usa tokens de ${FICHERO_TEMA}`));
+      }
+    };
+    const recorrer = (dir, acepta) => {
+      if (!fs.existsSync(dir)) return;
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) { recorrer(full, acepta); continue; }
+        const rel = path.relative(RAIZ, full).replace(/\\/g, '/');
+        if (acepta(rel)) revisar(rel);
+      }
+    };
+    recorrer(path.join(RAIZ, 'src'), (rel) => rel.endsWith('.css') || (rel.startsWith('src/ui/') && rel.endsWith('.ts')));
+    return hallazgos;
+  }
+};
+
 export const TODAS = [
   sinInnerHtmlInterpolado,
   sinMiembrosDuplicados,
@@ -1665,5 +1729,6 @@ export const TODAS = [
   sinPuertoE2eAMano,
   sinPromptNativo,
   sinDialogoCasero,
-  sinEsperaFijaEnE2e
+  sinEsperaFijaEnE2e,
+  sinColorLiteralEnUi
 ];
