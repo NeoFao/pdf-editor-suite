@@ -1635,8 +1635,8 @@ export const FICHERO_TEMA = 'src/ui/tema.css';
  * por defecto de un campo `type=color`), no decoración.
  */
 export const TOPE_COLORES_LITERALES = {
-  'src/ui/App.ts': 8, 'src/ui/AtajosPanel.ts': 2, 'src/ui/CompressPanel.ts': 4, 'src/ui/EncabezadoPanel.ts': 2,
-  'src/ui/MisFirmasPanel.ts': 2, 'src/ui/SignaturePad.ts': 3, 'src/ui/TextPanel.ts': 2, 'src/ui/Viewer.ts': 14,
+  'src/ui/App.ts': 8, 'src/ui/EncabezadoPanel.ts': 2,
+  'src/ui/MisFirmasPanel.ts': 2, 'src/ui/SignaturePad.ts': 3, 'src/ui/Viewer.ts': 14,
   'src/ui/enlaceExterno.ts': 4
 };
 

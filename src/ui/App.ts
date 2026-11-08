@@ -406,7 +406,6 @@ export class App {
     const swatchesEl = document.createElement('div');
     swatchesEl.id = 'swatches';
     swatchesEl.title = 'Color de la herramienta activa (o del resaltador)';
-    Object.assign(swatchesEl.style, { display: 'flex', gap: '3px', alignItems: 'center' });
     for (const { color, label } of PALETTE) {
       const swatch = document.createElement('button');
       swatch.type = 'button';
@@ -415,12 +414,9 @@ export class App {
       swatch.title = label;
       swatch.setAttribute('aria-label', label);
       swatch.setAttribute('aria-pressed', 'false'); // reflectSwatches() lo corrige justo debajo
-      Object.assign(swatch.style, {
-        // A-07 (WCAG 2.5.8): área clicable de 24x24 px CSS; el cuadro de color que se
-        // ve sigue siendo de 18x18 (24 - 2*3 de padding, `background-clip: content-box`).
-        width: '24px', height: '24px', padding: '3px', boxSizing: 'border-box', borderRadius: '3px', cursor: 'pointer',
-        background: color, backgroundClip: 'content-box', border: '0'
-      });
+      // A-07: tamaño, padding y relleno en `#swatches .swatch` (estilos.css); aquí solo el color (dato).
+      swatch.style.background = color;
+      swatch.style.backgroundClip = 'content-box';
       swatch.addEventListener('click', () => this.setToolColor(hexToRgb(color)));
       swatchesEl.appendChild(swatch);
       this.swatchButtons.push(swatch);
@@ -455,7 +451,6 @@ export class App {
     this.propSize.type = 'number'; this.propSize.id = 'prop-size';
     this.propSize.min = '1'; this.propSize.max = '400'; this.propSize.step = '0.5';
     this.propSize.title = 'Tamaño (pt) de la línea seleccionada';
-    this.propSize.style.width = '4.5em';
     this.propSize.addEventListener('change', () => void this.applyFontSize());
     sizeLabel.appendChild(this.propSize);
 
