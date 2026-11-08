@@ -66,7 +66,7 @@ export class PanelMarcadores {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.id = id;
-      btn.className = 'outline-action';
+      btn.className = k === 'borrar' ? 'btn btn--peligro outline-action' : 'btn btn--fantasma outline-action';
       btn.textContent = texto;
       btn.title = ayuda;
       btn.setAttribute('aria-label', ayuda);
@@ -255,7 +255,7 @@ export class PanelMarcadores {
   private construirLista(items: OutlineItem[], base: Ruta, raiz: boolean): HTMLUListElement {
     const ul = document.createElement('ul');
     if (!raiz) ul.setAttribute('role', 'group');
-    Object.assign(ul.style, { listStyle: 'none', margin: '0', padding: '0' });
+    ul.className = 'outline-lista';
     items.forEach((item, i) => {
       const ruta = [...base, i];
       const li = document.createElement('li');
@@ -274,7 +274,9 @@ export class PanelMarcadores {
       li.addEventListener('focus', (e) => { if (e.target === li) this.seleccionar(ruta); });
 
       const fila = document.createElement('div');
-      Object.assign(fila.style, { display: 'flex', alignItems: 'center', paddingLeft: `${base.length * 14}px` });
+      fila.className = 'outline-fila';
+      // Sangría por nivel (px CSS): geometría calculada, único estilo inline de la fila.
+      fila.style.paddingLeft = `${base.length * 14}px`;
 
       if (tieneHijos) {
         const toggle = document.createElement('button');
@@ -284,12 +286,11 @@ export class PanelMarcadores {
         toggle.title = 'Desplegar/plegar';
         toggle.tabIndex = -1;
         toggle.setAttribute('aria-hidden', 'true'); // el estado lo expone el treeitem (aria-expanded)
-        Object.assign(toggle.style, { border: 'none', background: 'none', cursor: 'pointer', width: '16px', flex: '0 0 16px', padding: '0' });
         toggle.addEventListener('click', () => this.alternar(ruta));
         fila.appendChild(toggle);
       } else {
         const sp = document.createElement('span');
-        Object.assign(sp.style, { width: '16px', flex: '0 0 16px', display: 'inline-block' });
+        sp.className = 'outline-hueco';
         fila.appendChild(sp);
       }
 
@@ -302,7 +303,7 @@ export class PanelMarcadores {
         btn.tabIndex = -1;
         btn.textContent = item.title;
         btn.title = item.pageIndex === null ? 'Sin destino' : `Página ${item.pageIndex + 1} — doble clic para renombrar`;
-        Object.assign(btn.style, { border: 'none', background: 'none', textAlign: 'left', flex: '1', padding: '2px 0', cursor: item.pageIndex !== null ? 'pointer' : 'default' });
+        if (item.pageIndex === null) btn.classList.add('outline-item--sin-destino');
         btn.addEventListener('click', () => {
           this.seleccionar(ruta);
           li.focus();
@@ -330,7 +331,6 @@ export class PanelMarcadores {
     inp.value = inicial;
     inp.setAttribute('aria-label', 'Título del marcador');
     inp.maxLength = 500;
-    Object.assign(inp.style, { flex: '1', minWidth: '0' });
     let cerrado = false;
     inp.addEventListener('keydown', (e) => {
       e.stopPropagation();

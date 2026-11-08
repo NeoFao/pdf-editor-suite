@@ -57,9 +57,13 @@ export class ComentariosPanel {
   constructor(host: HTMLElement, private readonly hooks: ComentariosHooks) {
     this.filtroEl = document.createElement('input');
     this.filtroEl.type = 'search';
+    this.filtroEl.id = 'comentarios-filtro';
     this.filtroEl.className = 'comentarios-filtro';
-    this.filtroEl.placeholder = 'Filtrar comentarios';
-    this.filtroEl.setAttribute('aria-label', 'Filtrar comentarios');
+    this.filtroEl.placeholder = 'Texto, autor o tipo';
+    const etiquetaFiltro = document.createElement('label');
+    etiquetaFiltro.className = 'comentarios-filtro-etiqueta';
+    etiquetaFiltro.htmlFor = 'comentarios-filtro';
+    etiquetaFiltro.textContent = 'Filtrar comentarios';
     this.filtroEl.addEventListener('input', () => { this.filtro = this.filtroEl.value.trim().toLowerCase(); this.pintar(); });
     this.estadoEl = document.createElement('p');
     this.estadoEl.className = 'comentarios-estado';
@@ -68,7 +72,7 @@ export class ComentariosPanel {
     this.listaEl.className = 'comentarios-lista';
     this.listaEl.setAttribute('aria-label', 'Comentarios del documento');
     this.listaEl.addEventListener('keydown', (e) => this.teclado(e));
-    host.append(this.filtroEl, this.estadoEl, this.listaEl);
+    host.append(etiquetaFiltro, this.filtroEl, this.estadoEl, this.listaEl);
   }
 
   /** La pestaña se muestra/oculta. Al mostrarse con datos viejos, (re)lee. */
@@ -197,9 +201,23 @@ export class ComentariosPanel {
     if (marcado) partes.push(citado ? `texto marcado ${citado}` : 'sin texto marcado');
     partes.push(marcado ? (extracto ? `comentario: ${extracto}` : 'sin comentario') : (extracto || 'sin texto'));
     abrir.setAttribute('aria-label', partes.join('. '));
+    // Cabecera de la tarjeta: tipo (chip) + autor + página. El texto sigue siendo uno solo para lectores de pantalla (aria-label del botón).
     const meta = document.createElement('span');
     meta.className = 'comentario-meta';
-    meta.textContent = `${ETIQUETA[c.kind]} · Página ${pagina}${c.author ? ` · ${c.author}` : ''}`;
+    const tipo = document.createElement('span');
+    tipo.className = 'comentario-tipo';
+    tipo.textContent = ETIQUETA[c.kind];
+    meta.append(tipo);
+    if (c.author) {
+      const autor = document.createElement('span');
+      autor.className = 'comentario-autor';
+      autor.textContent = c.author;
+      meta.append(autor);
+    }
+    const pag = document.createElement('span');
+    pag.className = 'comentario-pag';
+    pag.textContent = `Página ${pagina}`;
+    meta.append(pag);
     abrir.append(meta);
     if (marcado) {
       const cita = document.createElement('span');
@@ -224,19 +242,24 @@ export class ComentariosPanel {
       ? this.btn('Añadir comentario', `Añadir comentario al marcado de la página ${pagina}`, () => this.hooks.editar(c.pageIndex, c.index, c.text))
       : this.btn(marcado ? 'Editar comentario' : 'Editar', `Editar comentario de la página ${pagina}`, () => this.hooks.editar(c.pageIndex, c.index, c.text));
     const borrar = this.btn('Borrar', `Borrar comentario de la página ${pagina}`, () => this.hooks.borrar(c.pageIndex, c.index));
+    borrar.classList.replace('btn--fantasma', 'btn--peligro');
+    // Las acciones salen al pasar el ratón o con el foco dentro de la tarjeta (CSS); en táctil se ven siempre.
+    const acciones = document.createElement('div');
+    acciones.className = 'comentario-acciones';
     if (marcado && !anadir) {
       const quitar = this.btn('Quitar comentario', `Quitar comentario del marcado de la página ${pagina}`, () => this.hooks.quitarComentario(c.pageIndex, c.index));
-      li.append(abrir, editar, quitar, borrar);
+      acciones.append(editar, quitar, borrar);
     } else {
-      li.append(abrir, editar, borrar);
+      acciones.append(editar, borrar);
     }
+    li.append(abrir, acciones);
     return li;
   }
 
   private btn(texto: string, aria: string, onClick: () => void): HTMLButtonElement {
     const b = document.createElement('button');
     b.type = 'button';
-    b.className = 'comentario-accion';
+    b.className = 'btn btn--fantasma comentario-accion';
     b.textContent = texto;
     b.setAttribute('aria-label', aria);
     b.addEventListener('click', onClick);

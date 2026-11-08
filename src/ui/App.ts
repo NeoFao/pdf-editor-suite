@@ -232,7 +232,7 @@ export class App {
   /** Aviso visible (no solo `#status`/consola) con las advertencias de una conversión Word/Markdown -> PDF (§9 fila #4: "no se pierde en silencio"). Oculto (`hidden`) cuando no hay advertencias pendientes. */
   private readonly avisoConversionEl: HTMLElement;
   /** Dos grupos (T13): `omitido` (no está en el PDF) y `aproximado` (está, pero distinto). Cada uno con su encabezado y lista; un grupo vacío se oculta. */
-  private readonly avisoGrupos: Record<TipoAdvertencia, { seccion: HTMLElement; lista: HTMLElement }>;
+  private readonly avisoGrupos: Record<TipoAdvertencia, { seccion: HTMLElement; lista: HTMLElement; cuenta: HTMLElement }>;
   private readonly pageIndicator: HTMLElement;
   private readonly btnInsert: HTMLButtonElement;
   private readonly btnPen: HTMLButtonElement;
@@ -709,13 +709,13 @@ export class App {
     const avisoCerrar = document.createElement('button');
     avisoCerrar.type = 'button';
     avisoCerrar.id = 'conversion-warnings-close';
-    avisoCerrar.className = 'conversion-warnings-close';
-    avisoCerrar.textContent = '×';
+    avisoCerrar.className = 'btn btn--fantasma btn--icono conversion-warnings-close';
+    avisoCerrar.appendChild(crearIcono('cerrar'));
     avisoCerrar.title = 'Cerrar aviso';
     avisoCerrar.setAttribute('aria-label', 'Cerrar aviso de advertencias de conversión');
     avisoCerrar.addEventListener('click', () => { this.avisoConversionEl.hidden = true; });
     avisoCabecera.append(avisoTitulo, avisoCerrar);
-    const grupo = (tipo: TipoAdvertencia, titulo: string): { seccion: HTMLElement; lista: HTMLElement } => {
+    const grupo = (tipo: TipoAdvertencia, titulo: string): { seccion: HTMLElement; lista: HTMLElement; cuenta: HTMLElement } => {
       const seccion = document.createElement('section');
       seccion.className = 'conversion-warnings-group';
       seccion.dataset.tipo = tipo;
@@ -723,10 +723,15 @@ export class App {
       const tituloEl = document.createElement('strong');
       tituloEl.className = 'conversion-warnings-group-title';
       tituloEl.textContent = titulo;
+      const cuenta = document.createElement('span');
+      cuenta.className = 'conversion-warnings-n';
+      const cab = document.createElement('div');
+      cab.className = 'conversion-warnings-grupo-cab';
+      cab.append(tituloEl, cuenta);
       const lista = document.createElement('ul');
       lista.className = 'conversion-warnings-list';
-      seccion.append(tituloEl, lista);
-      return { seccion, lista };
+      seccion.append(cab, lista);
+      return { seccion, lista, cuenta };
     };
     this.avisoGrupos = {
       omitido: grupo('omitido', 'No se pudo incluir:'),
@@ -1228,8 +1233,9 @@ export class App {
   private mostrarAvisoConversion(advertencias: Advertencia[]): void {
     const { omitidas, aproximadas } = agruparAdvertencias(advertencias);
     const rellenar = (tipo: TipoAdvertencia, items: Advertencia[]): void => {
-      const { seccion, lista } = this.avisoGrupos[tipo];
+      const { seccion, lista, cuenta } = this.avisoGrupos[tipo];
       lista.textContent = '';
+      cuenta.textContent = String(items.length);
       for (const a of items) {
         const li = document.createElement('li');
         li.textContent = a.mensaje;
@@ -2872,8 +2878,12 @@ export class App {
     this.replaceInput = document.createElement('input');
     this.replaceInput.type = 'text';
     this.replaceInput.id = 'replace-input';
-    this.replaceInput.placeholder = 'Reemplazar con…';
-    this.replaceInput.setAttribute('aria-label', 'Reemplazar con');
+    this.replaceInput.placeholder = 'Texto nuevo';
+    this.replaceInput.className = 'replace-input';
+    const lblReemplazo = document.createElement('label');
+    lblReemplazo.className = 'replace-etiqueta';
+    lblReemplazo.htmlFor = 'replace-input';
+    lblReemplazo.textContent = 'Reemplazar con';
     this.replaceInput.autocomplete = 'off';
     this.replaceInput.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); void this.reemplazarActual(); }
@@ -2881,7 +2891,7 @@ export class App {
 
     const casilla = (id: string, etiqueta: string): [HTMLLabelElement, HTMLInputElement] => {
       const l = document.createElement('label');
-      l.className = 'replace-opt';
+      l.className = 'casilla replace-opt';
       const i = document.createElement('input');
       i.type = 'checkbox'; i.id = id;
       i.addEventListener('change', () => { this.cursorReemplazo = null; void this.search(); });
@@ -2893,17 +2903,17 @@ export class App {
     this.optCase = optCase; this.optWord = optWord;
 
     this.btnReplace = document.createElement('button');
-    this.btnReplace.type = 'button'; this.btnReplace.id = 'btn-replace'; this.btnReplace.className = 'replace-btn';
+    this.btnReplace.type = 'button'; this.btnReplace.id = 'btn-replace'; this.btnReplace.className = 'btn btn--secundario';
     this.btnReplace.textContent = 'Reemplazar';
     this.btnReplace.addEventListener('click', () => void this.reemplazarActual());
     this.btnReplaceAll = document.createElement('button');
-    this.btnReplaceAll.type = 'button'; this.btnReplaceAll.id = 'btn-replace-all'; this.btnReplaceAll.className = 'replace-btn';
+    this.btnReplaceAll.type = 'button'; this.btnReplaceAll.id = 'btn-replace-all'; this.btnReplaceAll.className = 'btn btn--secundario';
     this.btnReplaceAll.textContent = 'Reemplazar todo';
     this.btnReplaceAll.addEventListener('click', () => void this.reemplazarTodo());
 
     const cerrar = document.createElement('button');
-    cerrar.type = 'button'; cerrar.id = 'btn-replace-close'; cerrar.className = 'replace-btn';
-    cerrar.textContent = '×';
+    cerrar.type = 'button'; cerrar.id = 'btn-replace-close'; cerrar.className = 'btn btn--fantasma btn--icono replace-cerrar';
+    cerrar.appendChild(crearIcono('cerrar'));
     cerrar.title = 'Cerrar buscar y reemplazar';
     cerrar.setAttribute('aria-label', 'Cerrar buscar y reemplazar');
     cerrar.addEventListener('click', () => this.cerrarReemplazo());
@@ -2915,7 +2925,7 @@ export class App {
     this.replaceResult.setAttribute('aria-live', 'polite');
 
     bar.addEventListener('keydown', (e) => { if (e.key === 'Escape') { e.preventDefault(); this.cerrarReemplazo(); } });
-    bar.append(this.replaceInput, lblCase, lblWord, this.btnReplace, this.btnReplaceAll, this.replaceResult, cerrar);
+    bar.append(lblReemplazo, this.replaceInput, lblCase, lblWord, this.btnReplace, this.btnReplaceAll, this.replaceResult, cerrar);
   }
 
   /** Ctrl/Cmd+H o el botón: muestra la barra y deja el foco donde falta algo (consulta vacía -> buscar; si no -> reemplazo). */

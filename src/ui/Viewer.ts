@@ -1346,14 +1346,14 @@ export class Viewer {
   /** Marcador de error de una página con tamaño absurdo (E-129): sin bitmap ni capas; el resto del documento sigue igual. */
   private pintarPaginaInvalida(wrapper: HTMLElement): void {
     wrapper.textContent = '';
-    const m =document.createElement('div');
+    const m = document.createElement('div');
     m.className = 'pagina-invalida';
     m.setAttribute('role', 'alert');
-    m.textContent = 'El tamaño de esta página no es válido y no se puede mostrar. El resto del documento no se ve afectado.';
-    Object.assign(m.style, {
-      position: 'absolute', inset: '0', display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center',
-      padding: '16px', font: '14px sans-serif', color: '#842029', background: '#f8d7da', border: '2px dashed #dc3545', boxSizing: 'border-box'
-    });
+    const t = document.createElement('strong');
+    t.textContent = 'No se puede mostrar esta página';
+    const d = document.createElement('span');
+    d.textContent = 'Su tamaño no es válido. El resto del documento no se ve afectado.';
+    m.append(t, d);
     wrapper.appendChild(m);
   }
 
@@ -1395,11 +1395,6 @@ export class Viewer {
       aviso.className = 'aviso-resolucion';
       aviso.setAttribute('role', 'note');
       aviso.textContent = 'Página muy grande, mostrada a resolución reducida';
-      Object.assign(aviso.style, {
-        position: 'sticky', top: '4px', left: '4px', zIndex: '5', width: 'fit-content', height: '22px', marginBottom: '-22px',
-        padding: '0 8px', lineHeight: '22px', font: '12px/22px sans-serif', background: '#fff3cd', color: '#664d03',
-        border: '1px solid #ffda6a', borderRadius: '4px', pointerEvents: 'none', boxSizing: 'border-box'
-      });
       wrapper.appendChild(aviso);
     }
     wrapper.appendChild(canvas);
