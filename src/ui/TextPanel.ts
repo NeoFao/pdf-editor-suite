@@ -21,35 +21,53 @@
  */
 import { descargarArchivo } from './descargarArchivo';
 import { mostrarModal } from './dialogo';
+import { crearIcono } from './iconos';
 
 export class TextPanel {
   static open(texto: string, nombreBase: string): void {
     const dialog = document.createElement('dialog');
     dialog.id = 'text-dialog';
-    Object.assign(dialog.style, { padding: '16px', borderRadius: '8px', border: '1px solid #ccc', maxWidth: '640px', width: '90vw' });
+    dialog.className = 'text-dialog';
 
-    const titulo = document.createElement('div');
+    // Anatomía del sistema de diseño (E-130): cabecera con cierre, cuerpo, pie con la primaria (Copiar) la última.
+    const titulo = document.createElement('h2');
     titulo.id = 'text-dialog-titulo';
+    titulo.className = 'dlg-titulo';
     titulo.textContent = 'Texto del documento';
-    titulo.style.fontWeight = 'bold';
-    titulo.style.marginBottom = '8px';
+    const btnX = document.createElement('button');
+    btnX.type = 'button';
+    btnX.className = 'btn btn--fantasma btn--icono dlg-cerrar';
+    btnX.title = 'Cerrar';
+    btnX.setAttribute('aria-label', 'Cerrar');
+    btnX.appendChild(crearIcono('cerrar'));
+    btnX.addEventListener('click', () => dialog.close());
+    const cabecera = document.createElement('div');
+    cabecera.className = 'dlg-cabecera';
+    cabecera.append(titulo, btnX);
 
     const textarea = document.createElement('textarea');
     textarea.id = 'text-output';
+    textarea.className = 'texto-salida';
     textarea.readOnly = true;
     textarea.value = texto;
-    Object.assign(textarea.style, { width: '100%', height: '320px', boxSizing: 'border-box', font: '12px monospace', resize: 'vertical' });
+    textarea.setAttribute('aria-labelledby', 'text-dialog-titulo'); // el título hace de etiqueta visible
+    textarea.autofocus = true; // foco inicial en el texto: Ctrl+C directo
+    const cuerpo = document.createElement('div');
+    cuerpo.className = 'dlg-cuerpo';
+    cuerpo.appendChild(textarea);
 
     const aviso = document.createElement('span');
     aviso.id = 'text-copy-aviso';
-    Object.assign(aviso.style, { marginLeft: '8px', fontSize: '12px', color: '#555' });
+    aviso.className = 'dlg-mensaje dlg-pie-izq';
+    aviso.setAttribute('role', 'status');
 
     const barra = document.createElement('div');
-    Object.assign(barra.style, { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '10px' });
+    barra.className = 'dlg-pie';
 
     const btnCopiar = document.createElement('button');
     btnCopiar.id = 'btn-copy-text';
     btnCopiar.type = 'button';
+    btnCopiar.className = 'btn btn--primario';
     btnCopiar.textContent = 'Copiar';
     btnCopiar.addEventListener('click', () => {
       void copiarAlPortapapeles(textarea).then((ok) => {
@@ -60,6 +78,7 @@ export class TextPanel {
     const btnDescargar = document.createElement('button');
     btnDescargar.id = 'btn-download-txt';
     btnDescargar.type = 'button';
+    btnDescargar.className = 'btn btn--secundario';
     btnDescargar.textContent = 'Descargar .txt';
     // BOM UTF-8 al principio: sin él, Notepad (el editor de texto por
     // defecto en Windows) puede abrir el .txt con la codificación ANSI del
@@ -69,11 +88,12 @@ export class TextPanel {
     const btnCerrar = document.createElement('button');
     btnCerrar.id = 'btn-close-text-dialog';
     btnCerrar.type = 'button';
+    btnCerrar.className = 'btn btn--secundario';
     btnCerrar.textContent = 'Cerrar';
     btnCerrar.addEventListener('click', () => dialog.close());
 
-    barra.append(btnCopiar, btnDescargar, btnCerrar, aviso);
-    dialog.append(titulo, textarea, barra);
+    barra.append(aviso, btnCerrar, btnDescargar, btnCopiar);
+    dialog.append(cabecera, cuerpo, barra);
 
     mostrarModal(dialog, { tituloId: 'text-dialog-titulo' });
   }
