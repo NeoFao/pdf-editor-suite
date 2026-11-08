@@ -1,5 +1,6 @@
 import './ui/tema.css';
 import './ui/estilos.css';
+import './ui/dialogos.css';
 import { aplicarTemaGuardado } from './ui/tema';
 import { App } from './ui/App';
 import { activarDiagnosticoSiCorresponde } from './diagnostico';

@@ -166,3 +166,5 @@ Ordenadas por impacto visible (lo que más se usa y peor se ve primero). Cada l�
   y `color-scheme: light`. La posición y el tamaño (px CSS de página) siguen en línea: son geometría.
 - **Utilidades**: `.oculto` (display none que no pisa un componente), `#props-panel.visible`. El color de cada muestra de la paleta es un
   dato y viaja como `--muestra`. `App.ts` ya no tiene estilos en línea de aspecto ni colores literales fuera de los datos de la paleta.
+
+**Hecho en la fase 2 (dialogos):** NotaDialogo, SignaturePad (con Deshacer), MisFirmasPanel, enlaceExterno y AperturaDialogos (error y contrasena) usan la anatomia .dlg-* con las piezas de src/ui/dlgPartes.ts y los estilos de src/ui/dialogos.css; spec en tests/e2e/next/dialogos-fase2.spec.ts. Un diálogo nuevo reutiliza dlgPartes.ts y .dlg-aviso (peligro/aviso) en lugar de estilos en linea.
