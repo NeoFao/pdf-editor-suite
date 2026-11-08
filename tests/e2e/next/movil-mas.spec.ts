@@ -73,6 +73,8 @@ test.describe('Panel «Más» en móvil', () => {
   });
 
   test('sin scroll horizontal de la página ni del panel; el panel tiene scroll vertical propio', async ({ page }) => {
+    // La hoja entra deslizándose desde abajo (E-134): se mide cuando ha terminado de entrar.
+    await expect.poll(() => page.evaluate(() => document.querySelector('#toolbar-more')!.getBoundingClientRect().bottom)).toBeLessThanOrEqual(845);
     const m = await page.evaluate(() => {
       const p = document.querySelector('#toolbar-more')!;
       return {

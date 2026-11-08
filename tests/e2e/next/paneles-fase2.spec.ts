@@ -154,7 +154,7 @@ test('paleta de color y propiedades de línea son grupos compactos con borde; la
       borde: g.borderTopWidth, radio: g.borderTopLeftRadius,
       activas: activas.length, sombraActiva: activas[0] ? getComputedStyle(activas[0]).boxShadow : 'none',
       sombraInactiva: getComputedStyle(sw.find((b) => b.getAttribute('aria-pressed') !== 'true')!).boxShadow,
-      ancho: caja.width, alto: caja.height, fondoInline: sw[0]!.style.background !== ''
+      ancho: caja.width, alto: caja.height, fondoInline: sw[0]!.style.getPropertyValue('--muestra') !== ''
     };
   });
   expect(r.borde).toBe('1px');
