@@ -154,3 +154,5 @@ Ordenadas por impacto visible (lo que más se usa y peor se ve primero). Cada l�
 15. **Avisos sobre la página** (`Viewer.ts`: `.pagina-invalida`, `.aviso-resolucion`, resaltados de búsqueda): pasar a clases con `--ed-danger-soft` / `--ed-warning-*`. El amarillo/naranja de búsqueda es dato de anotación (escape). Tope de Viewer 14.
 16. **Botones de herramienta y paleta en `App.ts`**: la paleta `PALETTE` es dato (8 escapes con razón); quitar los `style.*` restantes de miniatura activa y muestras pasando a clases.
 17. **Diálogos de apertura/errores del motor** que lleguen desde `main` después de E-130 (p. ej. `AperturaDialogos.ts`): aplicar la anatomía `.dlg-*` al integrarlos.
+
+**Hecho en la fase 2 (dialogos):** NotaDialogo, SignaturePad (con Deshacer), MisFirmasPanel, enlaceExterno y AperturaDialogos (error y contrasena) usan la anatomia .dlg-* con las piezas de src/ui/dlgPartes.ts y los estilos de src/ui/dialogos.css; spec en tests/e2e/next/dialogos-fase2.spec.ts. Un diálogo nuevo reutiliza dlgPartes.ts y .dlg-aviso (peligro/aviso) en lugar de estilos en linea.
