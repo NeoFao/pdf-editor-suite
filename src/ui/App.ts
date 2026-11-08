@@ -1,6 +1,8 @@
 import { agruparAdvertencias, type Advertencia, type TipoAdvertencia } from '../convert/advertencia';
 import { PdfiumEngine } from '../engine/pdfium/PdfiumEngine';
 import { EditSession } from '../model/EditSession';
+import { PdfError } from '../engine/errores';
+import { MAX_INTENTOS_CONTRASENA, mensajeDeError, mostrarErrorApertura, pedirContrasena } from './AperturaDialogos';
 import { CommandBus } from '../commands/Command';
 import { EditTextRunCmd } from '../commands/EditTextRun';
 import { EditarLineaCmd } from '../commands/EditarLinea';
@@ -1004,8 +1006,7 @@ export class App {
     if (!this.confirmarDescarte()) return;
     const engine = await this.ensureEngine();
     const bytes = engine.createBlank(595, 842);
-    await this.openBytes(bytes, 'documento.pdf');
-    this.setStatus('Documento en blanco creado.');
+    if (await this.openBytes(bytes, 'documento.pdf')) this.setStatus('Documento en blanco creado.');
   }
 
   private button(label: string, id: string, onClick: () => void): HTMLButtonElement {
@@ -1192,7 +1193,7 @@ export class App {
         return;
       }
       const pdfName = file.name.replace(/\.[^./\\]+$/, '') + '.pdf';
-      await this.openBytes(resultado.pdf, pdfName);
+      if (!(await this.openBytes(resultado.pdf, pdfName))) return;
       const n = this.session ? engine.pageCount(this.session.doc) : 0;
       this.setStatus(`Convertido desde ${conversor.nombreFuente} (${n} páginas).`);
       if (resultado.advertencias.length > 0) this.mostrarAvisoConversion(resultado.advertencias);
@@ -1236,11 +1237,53 @@ export class App {
     const engine = await this.ensureEngine();
     const { rgba, width, height } = await this.decodeImage(file);
     const bytes = engine.imageToPdf(rgba, width, height);
-    await this.openBytes(bytes, (file.name || 'imagen').replace(/\.[^.]+$/, '') + '.pdf');
-    this.setStatus('Imagen abierta como PDF.');
+    if (await this.openBytes(bytes, (file.name || 'imagen').replace(/\.[^.]+$/, '') + '.pdf')) this.setStatus('Imagen abierta como PDF.');
   }
 
-  private async openBytes(bytes: Uint8Array, name: string): Promise<void> {
+  /**
+   * Abre `bytes` como sesión nueva SIN tocar la actual (E-125). Un PDF cifrado pide la contraseña en un diálogo
+   * (hasta `MAX_INTENTOS_CONTRASENA` intentos); la contraseña solo vive en esta función y se descarta al salir.
+   * Devuelve `null` tras avisar al usuario (error, intentos agotados o cancelación) y dejar `#status` coherente.
+   */
+  private async abrirSesionNueva(engine: PdfiumEngine, bytes: Uint8Array, name: string): Promise<EditSession | null> {
+    let contrasena: string | undefined;
+    let fallidas = 0;
+    try {
+      for (;;) {
+        try {
+          return await EditSession.open(engine, bytes, contrasena);
+        } catch (err) {
+          if (err instanceof PdfError && err.codigo === 'PASSWORD') {
+            if (contrasena !== undefined) fallidas++;
+            if (fallidas >= MAX_INTENTOS_CONTRASENA) {
+              await this.avisarErrorApertura(err);
+              return null;
+            }
+            const intento = contrasena !== undefined ? { intento: fallidas, maximo: MAX_INTENTOS_CONTRASENA } : undefined;
+            contrasena = undefined;
+            const escrita = await pedirContrasena({ nombre: name, incorrecta: intento });
+            if (escrita === null) { this.setStatus('Apertura cancelada.'); return null; }
+            contrasena = escrita;
+            continue;
+          }
+          await this.avisarErrorApertura(err);
+          return null;
+        }
+      }
+    } finally {
+      contrasena = undefined;
+    }
+  }
+
+  /** Deja `#status` con el motivo y muestra el aviso modal; nunca queda «Cargando…». */
+  private async avisarErrorApertura(err: unknown): Promise<void> {
+    const mensaje = mensajeDeError(err);
+    this.setStatus(mensaje);
+    await mostrarErrorApertura('No se pudo abrir el PDF', mensaje);
+  }
+
+  /** Devuelve `true` si el documento se abrió; `false` si falló o se canceló (el anterior sigue intacto). */
+  private async openBytes(bytes: Uint8Array, name: string): Promise<boolean> {
     this.setStatus('Cargando…');
     // Cualquier carga de documento nueva empieza sin el aviso de la
     // conversión anterior visible; `openFile` lo vuelve a mostrar justo
@@ -1248,9 +1291,19 @@ export class App {
     // advertencias.
     this.avisoConversionEl.hidden = true;
     const engine = await this.ensureEngine();
-    if (this.session) engine.close(this.session.doc);
+    // E-125: apertura TRANSACCIONAL. El documento nuevo se abre y valida primero; el anterior sigue intacto (y con su
+    // estado sin guardar) hasta que el nuevo está listo. Si falla, se avisa y no cambia nada.
+    const nueva = await this.abrirSesionNueva(engine, bytes, name);
+    if (!nueva) return false;
+    // Éxito: desmontaje completo del documento anterior ANTES de cerrarlo en el motor (visor, observers, miniaturas),
+    // para que nada vivo pueda llamar al motor con un handle cerrado.
+    const anterior = this.session;
+    this.viewer?.destroy();
+    this.viewer = null;
+    this.thumbObserver?.disconnect();
+    if (anterior) engine.close(anterior.doc);
     this.docName = name;
-    this.session = await EditSession.open(engine, bytes);
+    this.session = nueva;
     this.bus = new CommandBus(this.session, () => this.marcarSucio(true));
     this.bus.onBloqueado = () => { this.bloqueado(); };
     this.marcarSucio(false);
@@ -1388,6 +1441,7 @@ export class App {
     this.showSidebarTab('pages');
     this.updateIndicator();
     this.setStatus(`${this.session.model.pages.length} página(s)`);
+    return true;
   }
 
   /**

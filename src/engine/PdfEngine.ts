@@ -313,7 +313,8 @@ export type PageOpResult =
   | { type: 'addLink'; ok: boolean };
 
 export interface PdfEngine {
-  open(bytes: Uint8Array): Promise<DocHandle>;
+  /** Abre un PDF; lanza `PdfError` tipado si no se puede (E-125). `password` solo para documentos cifrados. */
+  open(bytes: Uint8Array, password?: string): Promise<DocHandle>;
   pageCount(doc: DocHandle): number;
   pageSize(doc: DocHandle, pageIndex: number): SizePt;
   /**
